@@ -1,0 +1,110 @@
+name: SketchCam
+options:
+  bundleIdPrefix: io.github.languel
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "26.0"
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+    DEVELOPMENT_TEAM: FAG3XX5RL8
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+targets:
+  SketchCamShared:
+    type: framework.static
+    platform: macOS
+    sources:
+      - path: SketchCamShared/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.shared
+
+  SketchCamCore:
+    type: framework.static
+    platform: macOS
+    sources:
+      - path: SketchCamCore/Sources
+    dependencies:
+      - target: SketchCamShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.core
+
+  SketchCamCameraExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: SketchCamCameraExtension
+        excludes:
+          - Info.plist
+          - SketchCamCameraExtension.entitlements
+    dependencies:
+      - target: SketchCamShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.camera-extension
+        PRODUCT_NAME: SketchCamCameraExtension
+        INFOPLIST_FILE: SketchCamCameraExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SketchCamCameraExtension/SketchCamCameraExtension.entitlements
+        CODE_SIGN_IDENTITY: Apple Development
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: FAG3XX5RL8
+        REGISTER_APP_GROUPS: YES
+
+  SketchCam:
+    type: application
+    platform: macOS
+    sources:
+      - path: SketchCam
+        excludes:
+          - Resources/Info.plist
+          - Resources/SketchCam.entitlements
+    dependencies:
+      - target: SketchCamCore
+      - target: SketchCamShared
+      - target: SketchCamCameraExtension
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam
+        PRODUCT_NAME: SketchCam
+        INFOPLIST_FILE: SketchCam/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SketchCam/Resources/SketchCam.entitlements
+        CODE_SIGN_IDENTITY: Apple Development
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: FAG3XX5RL8
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: NO
+        REGISTER_APP_GROUPS: YES
+
+  SketchCamCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/SketchCamCoreTests
+    dependencies:
+      - target: SketchCamCore
+      - target: SketchCamShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.tests
+
+schemes:
+  SketchCam:
+    build:
+      targets:
+        SketchCam: all
+        SketchCamCameraExtension: all
+        SketchCamCoreTests: [test]
+    test:
+      targets:
+        - SketchCamCoreTests
+    run:
+      config: Debug

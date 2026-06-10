@@ -1,0 +1,12 @@
+.DS_Store
+DerivedData/
+build/
+dist/
+*.xcresult
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+xcuserdata/
+.swiftpm/
+.worktrees/
+

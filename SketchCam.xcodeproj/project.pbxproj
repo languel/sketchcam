@@ -1,0 +1,983 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */; };
+		117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */; };
+		1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */; };
+		1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A62B38FB62959937129F6F /* ProcessingSettings.swift */; };
+		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
+		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
+		3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */; };
+		4BDCEC52901FF67A5655DEA1 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
+		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
+		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
+		705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */; };
+		76B1CE7ED4A8056EE6C67CB6 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
+		7A46446167656D52AAD61F91 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
+		7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */; };
+		869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */; };
+		88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
+		8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */; };
+		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
+		AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */; };
+		B32E553B221584589B18FF01 /* CameraPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */; };
+		B7717997B7A7D676037BAB33 /* FallbackTestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */; };
+		C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */; };
+		C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
+		C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */; };
+		D4573A47D80FD6C10D3FA006 /* SketchCamCameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */; };
+		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
+		DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */; };
+		E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69372C0E7B99EADDD8731E11 /* SketchCamState.swift */; };
+		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
+		F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEAB9229D624BE20FB261892 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0696991DE1F8949EB4DB41EB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 05E8622872884ACE7C27B244;
+			remoteInfo = SketchCamCore;
+		};
+		0B089EFDD675085864772122 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 160C29A59DAB08E3DBAB4A8B;
+			remoteInfo = SketchCamShared;
+		};
+		405C443300951CBBE7A19596 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0C5624BC2B2BC198CF988C97;
+			remoteInfo = SketchCamCameraExtension;
+		};
+		42D6DDDF28D2753A2F95DF21 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 160C29A59DAB08E3DBAB4A8B;
+			remoteInfo = SketchCamShared;
+		};
+		42FBD67ACE1EB66F36572CCF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 160C29A59DAB08E3DBAB4A8B;
+			remoteInfo = SketchCamShared;
+		};
+		65ECC519EB25BFFA2A454DB6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 160C29A59DAB08E3DBAB4A8B;
+			remoteInfo = SketchCamShared;
+		};
+		7FC63A2AADF883BAA49591BE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57B275359B5F97A02D1A5150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 05E8622872884ACE7C27B244;
+			remoteInfo = SketchCamCore;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3682091CED2EBB65190E1253 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(SYSTEM_EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				D4573A47D80FD6C10D3FA006 /* SketchCamCameraExtension.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		013A76E6492A58B8DFFD7542 /* SketchCamCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SketchCamCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreImageFrameProcessorTests.swift; sourceTree = "<group>"; };
+		0C7E204A325423D92D191A3B /* SketchCamShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = SketchCamCameraExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamViewModel.swift; sourceTree = "<group>"; };
+		1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreImageFrameProcessor.swift; sourceTree = "<group>"; };
+		1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamApp.swift; sourceTree = "<group>"; };
+		250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferUtils.swift; sourceTree = "<group>"; };
+		33A62B38FB62959937129F6F /* ProcessingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingSettings.swift; sourceTree = "<group>"; };
+		34C077C1A613941A722E856D /* FrameFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormat.swift; sourceTree = "<group>"; };
+		43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
+		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
+		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
+		63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraExtensionProvider.swift; sourceTree = "<group>"; };
+		69372C0E7B99EADDD8731E11 /* SketchCamState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamState.swift; sourceTree = "<group>"; };
+		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
+		899FA7D13C6CB19A855B1642 /* SketchCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SketchCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
+		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
+		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
+		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
+		C63392630883E5E55B589354 /* SketchCamCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionActivationManager.swift; sourceTree = "<group>"; };
+		CEAB9229D624BE20FB261892 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackTestPatternGenerator.swift; sourceTree = "<group>"; };
+		E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCameraFramePublisher.swift; sourceTree = "<group>"; };
+		EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugStats.swift; sourceTree = "<group>"; };
+		F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestFrameStore.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2AF23B9508E26687F41D17F5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BDCEC52901FF67A5655DEA1 /* SketchCamShared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA006E6D98D9723A3EDB887D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */,
+				76B1CE7ED4A8056EE6C67CB6 /* SketchCamShared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C06F94C87D5CBAF19E44E4FF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */,
+				7A46446167656D52AAD61F91 /* SketchCamShared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0E332C77645CE3D351493FA8 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				CEAB9229D624BE20FB261892 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		191D3BCDD2D5D58B70D7D600 /* SketchCamShared */ = {
+			isa = PBXGroup;
+			children = (
+				3716D20BC7CC02671041454F /* Sources */,
+			);
+			path = SketchCamShared;
+			sourceTree = "<group>";
+		};
+		1D9E9E8D644CA7187C62BEDA /* SketchCamCore */ = {
+			isa = PBXGroup;
+			children = (
+				FC8904B8801C317767B20C47 /* Sources */,
+			);
+			path = SketchCamCore;
+			sourceTree = "<group>";
+		};
+		33DD89C4CB4C7A3268879FDA = {
+			isa = PBXGroup;
+			children = (
+				786ED41370EB74DFB1969451 /* SketchCam */,
+				663338E0A9440DCC0C39F7E7 /* SketchCamCameraExtension */,
+				1D9E9E8D644CA7187C62BEDA /* SketchCamCore */,
+				191D3BCDD2D5D58B70D7D600 /* SketchCamShared */,
+				C7E4865A21694D6D126994FA /* Tests */,
+				B66A83F120060B592BB6A87C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		3716D20BC7CC02671041454F /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				34C077C1A613941A722E856D /* FrameFormat.swift */,
+				250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		430DD99EC47AFCC16849D52D /* App */ = {
+			isa = PBXGroup;
+			children = (
+				96EBEE96DC987956AD1E458A /* ContentView.swift */,
+				1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */,
+				168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		43EBB7984D99D48928D716A0 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */,
+			);
+			path = Debug;
+			sourceTree = "<group>";
+		};
+		50676D07EAB270878D130BAD /* SketchCamCoreTests */ = {
+			isa = PBXGroup;
+			children = (
+				01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */,
+				61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */,
+				50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */,
+			);
+			path = SketchCamCoreTests;
+			sourceTree = "<group>";
+		};
+		663338E0A9440DCC0C39F7E7 /* SketchCamCameraExtension */ = {
+			isa = PBXGroup;
+			children = (
+				63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */,
+				D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */,
+				F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */,
+				774FD946761DCD2975E64F1B /* main.swift */,
+			);
+			path = SketchCamCameraExtension;
+			sourceTree = "<group>";
+		};
+		76AE06D218CFA9453EC92B71 /* Preview */ = {
+			isa = PBXGroup;
+			children = (
+				43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */,
+			);
+			path = Preview;
+			sourceTree = "<group>";
+		};
+		786ED41370EB74DFB1969451 /* SketchCam */ = {
+			isa = PBXGroup;
+			children = (
+				430DD99EC47AFCC16849D52D /* App */,
+				8AD5A1987311DAB66C1D26CA /* Camera */,
+				43EBB7984D99D48928D716A0 /* Debug */,
+				76AE06D218CFA9453EC92B71 /* Preview */,
+				0E332C77645CE3D351493FA8 /* Resources */,
+				F1F23FD48ADC73BC4FA7E170 /* VirtualCamera */,
+			);
+			path = SketchCam;
+			sourceTree = "<group>";
+		};
+		8AD5A1987311DAB66C1D26CA /* Camera */ = {
+			isa = PBXGroup;
+			children = (
+				AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */,
+				B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */,
+				9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */,
+			);
+			path = Camera;
+			sourceTree = "<group>";
+		};
+		B66A83F120060B592BB6A87C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				899FA7D13C6CB19A855B1642 /* SketchCam.app */,
+				145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */,
+				C63392630883E5E55B589354 /* SketchCamCore.framework */,
+				013A76E6492A58B8DFFD7542 /* SketchCamCoreTests.xctest */,
+				0C7E204A325423D92D191A3B /* SketchCamShared.framework */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C7E4865A21694D6D126994FA /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				50676D07EAB270878D130BAD /* SketchCamCoreTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		F1F23FD48ADC73BC4FA7E170 /* VirtualCamera */ = {
+			isa = PBXGroup;
+			children = (
+				C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */,
+				E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */,
+			);
+			path = VirtualCamera;
+			sourceTree = "<group>";
+		};
+		FC8904B8801C317767B20C47 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
+				7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */,
+				33A62B38FB62959937129F6F /* ProcessingSettings.swift */,
+				69372C0E7B99EADDD8731E11 /* SketchCamState.swift */,
+				B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		05E8622872884ACE7C27B244 /* SketchCamCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0E160482339753807B7B7DCF /* Build configuration list for PBXNativeTarget "SketchCamCore" */;
+			buildPhases = (
+				AAC53BED1ABA42745CF38BBC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A04F3B4EA3A0244D1C9A22B8 /* PBXTargetDependency */,
+			);
+			name = SketchCamCore;
+			packageProductDependencies = (
+			);
+			productName = SketchCamCore;
+			productReference = C63392630883E5E55B589354 /* SketchCamCore.framework */;
+			productType = "com.apple.product-type.framework.static";
+		};
+		0C5624BC2B2BC198CF988C97 /* SketchCamCameraExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B401E3F96EE157D9EFCCB003 /* Build configuration list for PBXNativeTarget "SketchCamCameraExtension" */;
+			buildPhases = (
+				1A69995EB356D7C31388D071 /* Sources */,
+				2AF23B9508E26687F41D17F5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8D8C4E74793A1EA77E012A35 /* PBXTargetDependency */,
+			);
+			name = SketchCamCameraExtension;
+			packageProductDependencies = (
+			);
+			productName = SketchCamCameraExtension;
+			productReference = 145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
+		160C29A59DAB08E3DBAB4A8B /* SketchCamShared */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3CFF7D5F862F09E9AE20474B /* Build configuration list for PBXNativeTarget "SketchCamShared" */;
+			buildPhases = (
+				58F7A9EA21784628451E777C /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SketchCamShared;
+			packageProductDependencies = (
+			);
+			productName = SketchCamShared;
+			productReference = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */;
+			productType = "com.apple.product-type.framework.static";
+		};
+		8D5B2EDD461E5A5C7B32C497 /* SketchCam */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 41D200FF2264692F0D707CB7 /* Build configuration list for PBXNativeTarget "SketchCam" */;
+			buildPhases = (
+				7A7A9EA85AF348AA27C707F3 /* Sources */,
+				E30BDA38B308F68380D8A3FE /* Resources */,
+				AA006E6D98D9723A3EDB887D /* Frameworks */,
+				3682091CED2EBB65190E1253 /* Embed System Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				91AF8789581CE9DDED5BC37D /* PBXTargetDependency */,
+				4991BB69E4369AA5374F132B /* PBXTargetDependency */,
+				5F604FD577D70439FA9D2725 /* PBXTargetDependency */,
+			);
+			name = SketchCam;
+			packageProductDependencies = (
+			);
+			productName = SketchCam;
+			productReference = 899FA7D13C6CB19A855B1642 /* SketchCam.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D5686A89FBFB342B441A410D /* SketchCamCoreTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 69563065D60C8E02EA3DF140 /* Build configuration list for PBXNativeTarget "SketchCamCoreTests" */;
+			buildPhases = (
+				FEDF8368A516037221A6C409 /* Sources */,
+				C06F94C87D5CBAF19E44E4FF /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				235269EE9E8F580355D156B6 /* PBXTargetDependency */,
+				2FBE9FDCE9E4A4E2F3BD2E22 /* PBXTargetDependency */,
+			);
+			name = SketchCamCoreTests;
+			packageProductDependencies = (
+			);
+			productName = SketchCamCoreTests;
+			productReference = 013A76E6492A58B8DFFD7542 /* SketchCamCoreTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		57B275359B5F97A02D1A5150 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					05E8622872884ACE7C27B244 = {
+						DevelopmentTeam = FAG3XX5RL8;
+						ProvisioningStyle = Automatic;
+					};
+					0C5624BC2B2BC198CF988C97 = {
+						DevelopmentTeam = FAG3XX5RL8;
+						ProvisioningStyle = Automatic;
+					};
+					160C29A59DAB08E3DBAB4A8B = {
+						DevelopmentTeam = FAG3XX5RL8;
+						ProvisioningStyle = Automatic;
+					};
+					8D5B2EDD461E5A5C7B32C497 = {
+						DevelopmentTeam = FAG3XX5RL8;
+						ProvisioningStyle = Automatic;
+					};
+					D5686A89FBFB342B441A410D = {
+						DevelopmentTeam = FAG3XX5RL8;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B81175472227B2878928A711 /* Build configuration list for PBXProject "SketchCam" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 33DD89C4CB4C7A3268879FDA;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B66A83F120060B592BB6A87C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8D5B2EDD461E5A5C7B32C497 /* SketchCam */,
+				0C5624BC2B2BC198CF988C97 /* SketchCamCameraExtension */,
+				05E8622872884ACE7C27B244 /* SketchCamCore */,
+				D5686A89FBFB342B441A410D /* SketchCamCoreTests */,
+				160C29A59DAB08E3DBAB4A8B /* SketchCamShared */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E30BDA38B308F68380D8A3FE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1A69995EB356D7C31388D071 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */,
+				B7717997B7A7D676037BAB33 /* FallbackTestPatternGenerator.swift in Sources */,
+				6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */,
+				619CC315756F80E46B825A18 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		58F7A9EA21784628451E777C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */,
+				2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A7A9EA85AF348AA27C707F3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */,
+				869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */,
+				B32E553B221584589B18FF01 /* CameraPermissionManager.swift in Sources */,
+				DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */,
+				3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */,
+				1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */,
+				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
+				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,
+				7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */,
+				705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AAC53BED1ABA42745CF38BBC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
+				D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */,
+				1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */,
+				E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */,
+				A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FEDF8368A516037221A6C409 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */,
+				AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */,
+				EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		235269EE9E8F580355D156B6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 05E8622872884ACE7C27B244 /* SketchCamCore */;
+			targetProxy = 0696991DE1F8949EB4DB41EB /* PBXContainerItemProxy */;
+		};
+		2FBE9FDCE9E4A4E2F3BD2E22 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 160C29A59DAB08E3DBAB4A8B /* SketchCamShared */;
+			targetProxy = 65ECC519EB25BFFA2A454DB6 /* PBXContainerItemProxy */;
+		};
+		4991BB69E4369AA5374F132B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 160C29A59DAB08E3DBAB4A8B /* SketchCamShared */;
+			targetProxy = 42FBD67ACE1EB66F36572CCF /* PBXContainerItemProxy */;
+		};
+		5F604FD577D70439FA9D2725 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0C5624BC2B2BC198CF988C97 /* SketchCamCameraExtension */;
+			targetProxy = 405C443300951CBBE7A19596 /* PBXContainerItemProxy */;
+		};
+		8D8C4E74793A1EA77E012A35 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 160C29A59DAB08E3DBAB4A8B /* SketchCamShared */;
+			targetProxy = 42D6DDDF28D2753A2F95DF21 /* PBXContainerItemProxy */;
+		};
+		91AF8789581CE9DDED5BC37D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 05E8622872884ACE7C27B244 /* SketchCamCore */;
+			targetProxy = 7FC63A2AADF883BAA49591BE /* PBXContainerItemProxy */;
+		};
+		A04F3B4EA3A0244D1C9A22B8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 160C29A59DAB08E3DBAB4A8B /* SketchCamShared */;
+			targetProxy = 0B089EFDD675085864772122 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0E17D1C09A4955560EFA3B50 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SketchCam/Resources/SketchCam.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = SketchCam/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam;
+				PRODUCT_NAME = SketchCam;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		16B92BC14D69A8B30C68C4A5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		31CBF721CAF91B37570E86F6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.tests;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		3405A15465E649D9D7255598 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SketchCamCameraExtension/SketchCamCameraExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				INFOPLIST_FILE = SketchCamCameraExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.languel.sketchcam.camera-extension";
+				PRODUCT_NAME = SketchCamCameraExtension;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		5343DF39B8DB29C43B602112 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SketchCamCameraExtension/SketchCamCameraExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				INFOPLIST_FILE = SketchCamCameraExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.languel.sketchcam.camera-extension";
+				PRODUCT_NAME = SketchCamCameraExtension;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5C6D57BD25BD1BDDA46A6F46 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.core;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		5DB8F9021663D67C3CE34EBB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.shared;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		61EBE9E41F4AAFBF02CA432F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6280A9E2FB45C642D938D158 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.core;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		BBA9351B7A603565D33614AE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SketchCam/Resources/SketchCam.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = FAG3XX5RL8;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = SketchCam/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam;
+				PRODUCT_NAME = SketchCam;
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		D61B96AC7EFED9A97443845D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.shared;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		F805318CE34EE7B847075430 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.languel.sketchcam.tests;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0E160482339753807B7B7DCF /* Build configuration list for PBXNativeTarget "SketchCamCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C6D57BD25BD1BDDA46A6F46 /* Debug */,
+				6280A9E2FB45C642D938D158 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3CFF7D5F862F09E9AE20474B /* Build configuration list for PBXNativeTarget "SketchCamShared" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D61B96AC7EFED9A97443845D /* Debug */,
+				5DB8F9021663D67C3CE34EBB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		41D200FF2264692F0D707CB7 /* Build configuration list for PBXNativeTarget "SketchCam" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BBA9351B7A603565D33614AE /* Debug */,
+				0E17D1C09A4955560EFA3B50 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		69563065D60C8E02EA3DF140 /* Build configuration list for PBXNativeTarget "SketchCamCoreTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				31CBF721CAF91B37570E86F6 /* Debug */,
+				F805318CE34EE7B847075430 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B401E3F96EE157D9EFCCB003 /* Build configuration list for PBXNativeTarget "SketchCamCameraExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3405A15465E649D9D7255598 /* Debug */,
+				5343DF39B8DB29C43B602112 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B81175472227B2878928A711 /* Build configuration list for PBXProject "SketchCam" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				61EBE9E41F4AAFBF02CA432F /* Debug */,
+				16B92BC14D69A8B30C68C4A5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 57B275359B5F97A02D1A5150 /* Project object */;
+}
