@@ -164,3 +164,36 @@ codex/mediapipe-landmark-yarn ──► commit as-is for reference, then freeze
 - `SketchCamShared/Sources/PixelBufferUtils.swift` — add pool-based allocation + cached format descriptions.
 - `SketchCam/Preview/PreviewRenderer.swift` — downscale + throttle; later replace with a layer-based preview.
 - `SketchCam/Landmarks/VisionLandmarkTracker.swift` — request reuse, drop double downsample.
+
+---
+
+## Results (2026-06-11, perf/pipeline)
+
+Phases 0, 1, and 3 are implemented on this branch. Measured live (Debug
+build, VGA input, 1080p output, full effects, publishing to the activated
+extension, Photo-Booth-class consumer attached):
+
+| Metric | Before (yarn branch) | After |
+|---|---|---|
+| End-to-end FPS | ~1 | **30.2** (camera-locked) |
+| Frame total | ~1000 ms | **2.2 ms** |
+| Process (CI chain + render) | — | 1.5 ms |
+| Preview readback (12 Hz, ≤960 px) | full-res every frame | 2.0 ms |
+| Snapshot / Publish | main.sync per frame | 0.0 ms |
+
+Headless throughput guards (Debug, `ProcessorThroughputTests`, written to
+`/tmp/sketchcam-perf.txt`):
+
+| Path | ms/frame |
+|---|---|
+| full effects 1080p | 0.78 |
+| full effects @540p→1080p | 0.75 |
+| threshold-only 1080p | 0.53 |
+| full effects 720p | 0.53 |
+| passthrough 1080p | 0.45 |
+
+Remaining phases when landmarks land on this base: Phase 2 (overlay as
+cached CIImage composite, rendered at detection cadence) and Phase 4
+(detection backend tuning). The Phase 1/3 infrastructure (state store,
+pools, shared context, preview throttle, bypass matrix, stage HUD) is what
+they build on.
