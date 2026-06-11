@@ -70,3 +70,25 @@ version of the same idea; shortcut conventions borrowed below).
 Open questions for later: per-display fullscreen choice; whether
 presentation mode should auto-switch Background→Alpha and preview→full
 window (probably yes: one macro that sets both pipeline + window).
+
+## Modular shortcut system (Keys tab) — foundation, build FIRST
+
+Everything above (and future drawing work) wants reliable, rebindable
+shortcuts, so the registry comes before the window features and they
+register into it.
+
+- `AppAction`: stable string id + title + category (Transport, Window,
+  Presets, Marks, …) + closure. Features register actions at startup;
+  the hard-coded .keyboardShortcut modifiers on buttons go away.
+- `KeyBinding: Codable` (key + modifiers). `ShortcutRegistry` maps
+  actionID → binding; ships defaults; user overrides persist as JSON in
+  UserDefaults; conflict detection on assign.
+- Dispatch via ONE `NSEvent.addLocalMonitorForEvents(matching: .keyDown)`
+  in the app delegate, matched against the registry — works regardless of
+  control focus, no per-view shortcut declarations, and keeps working in
+  borderless/presentation windows. (Menu items in the menu bar/MenuBarExtra
+  still display the current bindings for discoverability.)
+- New "Keys" tab: actions grouped by category; each row = title, current
+  binding, click-to-record (capture next keypress), clear, reset-to-default;
+  red highlight on conflicts. Export/import of the binding set later.
+- Migration step 0: wrap existing ⌘F/⌘E as the first registered actions.
