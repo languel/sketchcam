@@ -274,3 +274,20 @@ The CI DAG composes this naturally and all sources/mattes are already
 CIImages, so the refactor is mostly settings-model + UI work, not pipeline
 work. Defer until the fixed stack stops being enough; the matte plumbing
 (scale-to-source-space then aspect-fill) is the part that must be reused.
+
+## Checkpoint (2026-06-11, 514ca9c + docs)
+
+Feature-complete prototype on perf/pipeline: effects (threshold incl. ink-only,
+colored/dilated outline), layer stack (input toggle, live/solid/alpha
+background with color+opacity), Vision person key (cutout/silhouette,
+invertible, quality picker), landmark yarn/dots overlay, full performance
+control matrix, per-stage HUD, 14 unit/perf tests green. 30 fps at 1080p
+with everything on.
+
+Open items, in rough priority:
+1. Landmark work (next up per user).
+2. Release deploy to ship the extension frame-rescaling fix
+   (script/release_build.sh → notarize.sh → install_release.sh).
+3. Zero-readback preview (AVSampleBufferDisplayLayer) for full-rate preview.
+4. Landmark interpolation between detections.
+5. Per-layer mask architecture (sketched above).
