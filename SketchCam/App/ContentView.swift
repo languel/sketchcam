@@ -75,8 +75,9 @@ struct ContentView: View {
                         Button("Load") { model.openMovieURL(movieURLField) }
                             .disabled(movieURLField.isEmpty)
                     }
-                    SliderRow(title: "Speed", value: $model.movieRate, range: 0.1...2)
+                    SliderRow(title: "Speed (0 = pause)", value: $model.movieRate, range: 0...2)
                 }
+                Toggle("Freeze input", isOn: $model.inputFrozen)
 
                 Picker("Output", selection: $model.outputFormat) {
                     ForEach(SketchCamFormats.all) { format in
@@ -191,6 +192,7 @@ struct ContentView: View {
                         Toggle("Eyes", isOn: $model.settings.landmarks.trackEyesAndIrises)
                     }
                     .toggleStyle(.checkbox)
+                    Toggle("Show IDs", isOn: $model.settings.landmarks.showIDs)
                     SliderRow(title: "Rate (Hz)", value: detectionRateBinding, range: 1...15)
                     SliderRow(title: "Detail", value: subsetBinding)
                     SliderRow(title: "Stroke", value: strokeBinding, range: 0.7...6)

@@ -138,6 +138,10 @@ public enum LandmarkVisualizationMode: String, CaseIterable, Identifiable, Senda
     case raw
     case yarn
     case rawAndYarn
+    /// MediaPipe-style structural rendering: face outline, eye shapes,
+    /// articulated fingers, and a body skeleton, drawn from the per-group
+    /// edge lists supplied by the tracker.
+    case skeleton
 
     public var id: String { rawValue }
 
@@ -146,6 +150,7 @@ public enum LandmarkVisualizationMode: String, CaseIterable, Identifiable, Senda
         case .raw: return "Dots"
         case .yarn: return "Yarn"
         case .rawAndYarn: return "Both"
+        case .skeleton: return "Stick"
         }
     }
 }
@@ -164,6 +169,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var detectionsPerSecond: Double
     /// Longest input dimension handed to the detector.
     public var detectionMaxDimension: Int
+    /// Draw each landmark's stable identifier next to it (debugging aid —
+    /// hand labels use MediaPipe indices, e.g. "L4" = left thumb tip).
+    public var showIDs: Bool
     public var seed: Int
     public var subsetRatio: Float
     public var yarnStrokeWidth: Float
@@ -182,6 +190,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         trackEyesAndIrises: Bool = false,
         detectionsPerSecond: Double = 10,
         detectionMaxDimension: Int = 384,
+        showIDs: Bool = false,
         seed: Int = 7,
         subsetRatio: Float = 0.65,
         yarnStrokeWidth: Float = 2.2,
@@ -199,6 +208,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.trackEyesAndIrises = trackEyesAndIrises
         self.detectionsPerSecond = detectionsPerSecond
         self.detectionMaxDimension = detectionMaxDimension
+        self.showIDs = showIDs
         self.seed = seed
         self.subsetRatio = subsetRatio
         self.yarnStrokeWidth = yarnStrokeWidth

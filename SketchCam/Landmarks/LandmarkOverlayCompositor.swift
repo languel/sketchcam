@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import CoreImage
+import CoreText
 import Foundation
 import SketchCamCore
 
@@ -105,6 +106,12 @@ final class LandmarkOverlayCompositor {
             case .rawAndYarn:
                 drawYarn(selected, region: group.region, in: cgContext, landmarks: landmarks)
                 drawRaw(mapped, region: group.region, in: cgContext, landmarks: landmarks)
+            case .skeleton:
+                drawSkeleton(mapped, edges: group.edges, region: group.region, in: cgContext, landmarks: landmarks)
+            }
+
+            if landmarks.showIDs {
+                drawLabels(mapped, points: group.points, in: cgContext)
             }
         }
 
@@ -127,6 +134,59 @@ final class LandmarkOverlayCompositor {
             context.fillEllipse(in: rect)
             context.strokeEllipse(in: rect)
         }
+    }
+
+    /// MediaPipe-docs-style structural rendering: connection lines (face
+    /// outline, eye shapes, finger chains, body skeleton) over joint dots.
+    private func drawSkeleton(_ points: [CGPoint], edges: [(Int, Int)], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
+        let width = CGFloat(max(0.7, landmarks.yarnStrokeWidth))
+        let opacity = CGFloat(min(1, max(0, landmarks.yarnStrokeOpacity)))
+
+        let path = CGMutablePath()
+        for edge in edges {
+            guard points.indices.contains(edge.0), points.indices.contains(edge.1) else { continue }
+            path.move(to: points[edge.0])
+            path.addLine(to: points[edge.1])
+        }
+
+        // dark halo under the colored bones
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.addPath(path)
+        context.setStrokeColor(NSColor.black.withAlphaComponent(0.55 * opacity).cgColor)
+        context.setLineWidth(width * 2.4)
+        context.strokePath()
+        context.addPath(path)
+        context.setStrokeColor(paletteColor(for: region, alpha: opacity).cgColor)
+        context.setLineWidth(width)
+        context.strokePath()
+
+        // joints
+        let radius = max(2, width * 1.6)
+        context.setFillColor(NSColor.white.withAlphaComponent(0.92 * opacity).cgColor)
+        context.setStrokeColor(paletteColor(for: region, alpha: opacity).cgColor)
+        context.setLineWidth(max(0.8, width * 0.4))
+        for point in points {
+            let rect = CGRect(x: point.x - radius / 2, y: point.y - radius / 2, width: radius, height: radius)
+            context.fillEllipse(in: rect)
+            context.strokeEllipse(in: rect)
+        }
+    }
+
+    private func drawLabels(_ mapped: [CGPoint], points: [LandmarkPoint], in context: CGContext) {
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: NSColor.black.cgColor)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        for (index, point) in mapped.enumerated() {
+            guard let label = points[safe: index]?.label else { continue }
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: label, attributes: attributes))
+            context.textPosition = CGPoint(x: point.x + 4, y: point.y + 3)
+            CTLineDraw(line, context)
+        }
+        context.restoreGState()
     }
 
     private func drawYarn(_ points: [CGPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {

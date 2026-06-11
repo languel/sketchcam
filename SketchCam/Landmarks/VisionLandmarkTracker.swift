@@ -42,6 +42,37 @@ final class VisionLandmarkTracker {
         .leftKnee, .rightKnee, .leftAnkle, .rightAnkle
     ]
 
+    /// Short labels for the canonical body joints (same order).
+    private static let bodyJointLabels: [String] = [
+        "nose", "Leye", "Reye", "Lear", "Rear",
+        "neck", "Lsho", "Rsho",
+        "Lelb", "Relb", "Lwri", "Rwri",
+        "root", "Lhip", "Rhip",
+        "Lkne", "Rkne", "Lank", "Rank"
+    ]
+
+    /// Skeleton connections over the canonical body joints (by canonical
+    /// index; remapped to emitted indices per detection since dropped
+    /// joints shift positions).
+    private static let bodyEdges: [(Int, Int)] = [
+        (0, 1), (0, 2), (1, 3), (2, 4),          // head
+        (0, 5),                                   // nose-neck
+        (5, 6), (5, 7),                           // neck-shoulders
+        (6, 8), (8, 10), (7, 9), (9, 11),         // arms
+        (5, 12), (12, 13), (12, 14),              // spine-hips
+        (13, 15), (15, 17), (14, 16), (16, 18)    // legs
+    ]
+
+    /// MediaPipe hand connections — `handJointOrder` matches MediaPipe's
+    /// 0–20 hand-landmark indexing, so these are the documented pairs.
+    private static let handEdges: [(Int, Int)] = [
+        (0, 1), (1, 2), (2, 3), (3, 4),           // thumb
+        (0, 5), (5, 6), (6, 7), (7, 8),           // index
+        (5, 9), (9, 10), (10, 11), (11, 12),      // middle
+        (9, 13), (13, 14), (14, 15), (15, 16),    // ring
+        (13, 17), (0, 17), (17, 18), (18, 19), (19, 20) // pinky + palm edge
+    ]
+
     private static let handJointOrder: [VNHumanHandPoseObservation.JointName] = [
         .wrist,
         .thumbCMC, .thumbMP, .thumbIP, .thumbTip,
@@ -89,17 +120,25 @@ final class VisionLandmarkTracker {
         return observations.enumerated().compactMap { index, observation in
             guard let recognized = try? observation.recognizedPoints(.all) else { return nil }
             var points: [LandmarkPoint] = []
-            for joint in Self.bodyJointOrder {
-                let key = "body\(index).\(joint.rawValue.rawValue)"
-                if let smoothed = resolve(
+            var emittedIndex: [Int: Int] = [:]  // canonical index → emitted index
+            for (canonicalIndex, joint) in Self.bodyJointOrder.enumerated() {
+                let label = Self.bodyJointLabels[canonicalIndex]
+                let key = "body\(index).\(label)"
+                if var smoothed = resolve(
                     key: key,
                     candidate: recognized[joint].flatMap { $0.confidence > minimumConfidence ? ($0.location, $0.confidence) : nil }
                 ) {
+                    smoothed.label = label
+                    emittedIndex[canonicalIndex] = points.count
                     points.append(smoothed)
                     nextPoints[key] = smoothed.point
                 }
             }
-            return points.isEmpty ? nil : LandmarkGroup(region: .body, points: points)
+            let edges = Self.bodyEdges.compactMap { edge -> (Int, Int)? in
+                guard let a = emittedIndex[edge.0], let b = emittedIndex[edge.1] else { return nil }
+                return (a, b)
+            }
+            return points.isEmpty ? nil : LandmarkGroup(region: .body, points: points, edges: edges)
         }
     }
 
@@ -134,18 +173,28 @@ final class VisionLandmarkTracker {
 
         return slots.compactMap { slot, observation in
             guard let recognized = try? observation.recognizedPoints(.all) else { return nil }
+            // Label prefix: MediaPipe-style indices per hand ("L4" = left thumb tip).
+            let prefix = slot == "left" ? "L" : slot == "right" ? "R" : "E"
             var points: [LandmarkPoint] = []
-            for joint in Self.handJointOrder {
-                let key = "hand.\(slot).\(joint.rawValue.rawValue)"
-                if let smoothed = resolve(
+            var emittedIndex: [Int: Int] = [:]
+            for (canonicalIndex, joint) in Self.handJointOrder.enumerated() {
+                let label = "\(prefix)\(canonicalIndex)"
+                let key = "hand.\(slot).\(canonicalIndex)"
+                if var smoothed = resolve(
                     key: key,
                     candidate: recognized[joint].flatMap { $0.confidence > minimumConfidence ? ($0.location, $0.confidence) : nil }
                 ) {
+                    smoothed.label = label
+                    emittedIndex[canonicalIndex] = points.count
                     points.append(smoothed)
                     nextPoints[key] = smoothed.point
                 }
             }
-            return points.isEmpty ? nil : LandmarkGroup(region: .hands, points: points)
+            let edges = Self.handEdges.compactMap { edge -> (Int, Int)? in
+                guard let a = emittedIndex[edge.0], let b = emittedIndex[edge.1] else { return nil }
+                return (a, b)
+            }
+            return points.isEmpty ? nil : LandmarkGroup(region: .hands, points: points, edges: edges)
         }
     }
 
@@ -161,25 +210,27 @@ final class VisionLandmarkTracker {
 
             if settings.trackFace {
                 var facePoints: [LandmarkPoint] = []
-                appendRegion(landmarks.faceContour, name: "contour", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.nose, name: "nose", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.outerLips, name: "outerLips", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.innerLips, name: "innerLips", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.leftEyebrow, name: "leftBrow", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightEyebrow, name: "rightBrow", faceIndex: index, observation: observation, to: &facePoints, nextPoints: &nextPoints)
+                var faceEdges: [(Int, Int)] = []
+                appendRegion(landmarks.faceContour, short: "c", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.nose, short: "n", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.outerLips, short: "oL", chain: .closed, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.innerLips, short: "iL", chain: .closed, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.leftEyebrow, short: "bL", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.rightEyebrow, short: "bR", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
                 if !facePoints.isEmpty {
-                    groups.append(LandmarkGroup(region: .face, points: facePoints))
+                    groups.append(LandmarkGroup(region: .face, points: facePoints, edges: faceEdges))
                 }
             }
 
             if settings.trackEyesAndIrises {
                 var eyePoints: [LandmarkPoint] = []
-                appendRegion(landmarks.leftEye, name: "leftEye", faceIndex: index, observation: observation, to: &eyePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightEye, name: "rightEye", faceIndex: index, observation: observation, to: &eyePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.leftPupil, name: "leftPupil", faceIndex: index, observation: observation, to: &eyePoints, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightPupil, name: "rightPupil", faceIndex: index, observation: observation, to: &eyePoints, nextPoints: &nextPoints)
+                var eyeEdges: [(Int, Int)] = []
+                appendRegion(landmarks.leftEye, short: "eL", chain: .closed, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.rightEye, short: "eR", chain: .closed, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.leftPupil, short: "pL", chain: .none, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
+                appendRegion(landmarks.rightPupil, short: "pR", chain: .none, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
                 if !eyePoints.isEmpty {
-                    groups.append(LandmarkGroup(region: .eyes, points: eyePoints))
+                    groups.append(LandmarkGroup(region: .eyes, points: eyePoints, edges: eyeEdges))
                 }
             }
 
@@ -187,26 +238,44 @@ final class VisionLandmarkTracker {
         }
     }
 
+    private enum ChainStyle {
+        case none
+        case open
+        case closed
+    }
+
     private func appendRegion(
         _ region: VNFaceLandmarkRegion2D?,
-        name: String,
+        short: String,
+        chain: ChainStyle,
         faceIndex: Int,
         observation: VNFaceObservation,
         to points: inout [LandmarkPoint],
+        edges: inout [(Int, Int)],
         nextPoints: inout [String: CGPoint]
     ) {
         guard let region else { return }
         let box = observation.boundingBox
+        let start = points.count
         for (pointIndex, normalized) in region.normalizedPoints.enumerated() {
-            let key = "face\(faceIndex).\(name).\(pointIndex)"
+            let key = "face\(faceIndex).\(short).\(pointIndex)"
             let location = CGPoint(
                 x: box.origin.x + normalized.x * box.width,
                 y: box.origin.y + normalized.y * box.height
             )
-            if let smoothed = resolve(key: key, candidate: (location, observation.confidence)) {
+            if var smoothed = resolve(key: key, candidate: (location, observation.confidence)) {
+                smoothed.label = "\(short)\(pointIndex)"
                 points.append(smoothed)
                 nextPoints[key] = smoothed.point
             }
+        }
+        let count = points.count - start
+        guard count > 1, chain != .none else { return }
+        for offset in 0..<(count - 1) {
+            edges.append((start + offset, start + offset + 1))
+        }
+        if chain == .closed {
+            edges.append((start + count - 1, start))
         }
     }
 

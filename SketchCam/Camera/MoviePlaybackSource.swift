@@ -14,6 +14,7 @@ final class MoviePlaybackSource {
     private var videoOutput: AVPlayerItemVideoOutput?
     private weak var attachedItem: AVPlayerItem?
     private var timer: DispatchSourceTimer?
+    private var lastPixelBuffer: CVPixelBuffer?
     private let queue = DispatchQueue(label: "io.github.languel.sketchcam.movie", qos: .userInitiated)
     private(set) var currentURL: URL?
     private var currentRate: Float = 1
@@ -47,6 +48,8 @@ final class MoviePlaybackSource {
         timer.resume()
     }
 
+    /// Rate 0 pauses (the last frame keeps being delivered so detection,
+    /// preview, and the published feed stay alive on the frozen image).
     func setRate(_ rate: Float) {
         currentRate = rate
         guard isPlaying else { return }
@@ -61,6 +64,7 @@ final class MoviePlaybackSource {
         looper = nil
         videoOutput = nil
         currentURL = nil
+        lastPixelBuffer = nil
     }
 
     private func pullFrame() {
@@ -74,10 +78,15 @@ final class MoviePlaybackSource {
             attachedItem = item
         }
         let itemTime = videoOutput.itemTime(forHostTime: CACurrentMediaTime())
-        guard videoOutput.hasNewPixelBuffer(forItemTime: itemTime),
-              let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else {
-            return
+        if videoOutput.hasNewPixelBuffer(forItemTime: itemTime),
+           let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) {
+            lastPixelBuffer = pixelBuffer
+            onPixelBuffer?(pixelBuffer)
+        } else if let lastPixelBuffer {
+            // Paused or between movie frames: keep the pipeline fed so the
+            // extension doesn't fall back and detection can keep iterating
+            // on the same frame.
+            onPixelBuffer?(lastPixelBuffer)
         }
-        onPixelBuffer?(pixelBuffer)
     }
 }

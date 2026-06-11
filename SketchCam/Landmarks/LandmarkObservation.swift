@@ -20,11 +20,29 @@ enum LandmarkRegion: String, CaseIterable {
 struct LandmarkPoint {
     var point: CGPoint
     var confidence: Float
+    /// Stable identifier for debugging/annotation (e.g. "L4" = MediaPipe
+    /// left-hand thumb tip, "Lelb" = left elbow, "c5" = face contour 5).
+    var label: String?
+
+    init(point: CGPoint, confidence: Float, label: String? = nil) {
+        self.point = point
+        self.confidence = confidence
+        self.label = label
+    }
 }
 
 struct LandmarkGroup {
     var region: LandmarkRegion
     var points: [LandmarkPoint]
+    /// Structural connections (indices into `points`) for skeleton-style
+    /// rendering: face outline, eye shapes, finger chains, body skeleton.
+    var edges: [(Int, Int)]
+
+    init(region: LandmarkRegion, points: [LandmarkPoint], edges: [(Int, Int)] = []) {
+        self.region = region
+        self.points = points
+        self.edges = edges
+    }
 }
 
 /// One detection result: the groups plus a monotonically increasing id the

@@ -40,6 +40,15 @@ final class SketchCamViewModel: ObservableObject {
     @Published var movieRate: Double = 1.0 {
         didSet { movieSource.setRate(Float(movieRate)) }
     }
+    /// Freeze the input: the next incoming frame is copied and re-fed to the
+    /// pipeline on every tick, so detection/effects keep running on one
+    /// still image for analysis and annotation (combine with Show IDs).
+    @Published var inputFrozen = false {
+        didSet {
+            guard !inputFrozen else { return }
+            frozenLock.withLock { frozenFrame = nil }
+        }
+    }
     @Published var inputResolution = CameraInputResolution.vga {
         didSet {
             guard oldValue != inputResolution, cameraPermissionState == .authorized else { return }
@@ -77,6 +86,8 @@ final class SketchCamViewModel: ObservableObject {
     private let timings = PipelineTimings()
     private let frameGate = NSLock()
     private var cameraFrameInFlight = false
+    private let frozenLock = NSLock()
+    private var frozenFrame: CVPixelBuffer?
     private var lastPreviewTime: CFAbsoluteTime = 0
     private var lastStatsTime: CFAbsoluteTime = 0
     private var lastPerfLogTime: CFAbsoluteTime = 0
@@ -140,10 +151,11 @@ final class SketchCamViewModel: ObservableObject {
 
     private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
         guard beginCameraFrame() else { return }
+        let effective = effectiveInputFrame(pixelBuffer)
         process(
-            pixelBuffer: pixelBuffer,
+            pixelBuffer: effective,
             timestamp: CMClockGetTime(CMClockGetHostTimeClock()),
-            originalPixelBuffer: pixelBuffer
+            originalPixelBuffer: effective
         )
     }
 
@@ -213,7 +225,34 @@ final class SketchCamViewModel: ObservableObject {
         // Drop frames while one is in flight instead of queueing them up —
         // backlog on the processing queue turns into unbounded latency.
         guard beginCameraFrame() else { return }
-        process(pixelBuffer: pixelBuffer, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: pixelBuffer)
+        let effective = effectiveInputFrame(pixelBuffer)
+        process(pixelBuffer: effective, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: effective)
+    }
+
+    /// When frozen, the first incoming frame is deep-copied (camera buffers
+    /// come from a small fixed pool — holding one starves the capture
+    /// session) and substituted for every subsequent frame.
+    private func effectiveInputFrame(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer {
+        guard inputFrozen else { return pixelBuffer }
+        return frozenLock.withLock {
+            if let frozenFrame {
+                return frozenFrame
+            }
+            let copy = Self.deepCopy(pixelBuffer) ?? pixelBuffer
+            frozenFrame = copy
+            return copy
+        }
+    }
+
+    private static func deepCopy(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let format = FrameFormat(
+            id: "frozen",
+            width: CVPixelBufferGetWidth(pixelBuffer),
+            height: CVPixelBufferGetHeight(pixelBuffer)
+        )
+        guard let copy = try? PixelBufferUtils.makePixelBuffer(format: format) else { return nil }
+        sharedCIContext.render(CIImage(cvPixelBuffer: pixelBuffer), to: copy)
+        return copy
     }
 
     private func beginCameraFrame() -> Bool {
