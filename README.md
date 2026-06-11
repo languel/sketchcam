@@ -4,12 +4,14 @@ SketchCam is an open programmable virtual camera host for interactive art teachi
 
 A macOS app captures a webcam, runs a GPU compositing pipeline, previews it, and publishes the result as a Core Media I/O virtual camera named **SketchCam** that any camera consumer (QuickTime, Zoom, OBS, TouchDesigner, browsers) can select.
 
-## Features (perf/pipeline branch)
+## Features
 
-- **Effects**: black-and-white threshold (with "ink only" transparent-paper mode) and outline strokes (intensity, thickness 0–24 px, stroke color + opacity), individually bypassable.
-- **Layers**: live input layer toggle; background = live video, solid color (color + opacity picker), or true alpha; the published BGRA frames carry a real alpha channel for downstream compositing.
-- **Person keying**: Vision person segmentation (fast/balanced/accurate) masks the layer stack to the person — Cutout or flat-color Silhouette mode, invertible.
-- **Landmark doodle**: face/body/hands/eyes landmarks (Apple Vision backend; synthetic source for tuning) rendered as seeded "yarn" curves or dots, GPU-composited from a cached layer at detection cadence (1–15 Hz).
+- **Sources**: any camera, or a looping movie file / http(s) stream with 0–2x playback speed (0 = pause) for deterministic testing; freeze-frame on any source (⌘F); export the current published frame as PNG with alpha (⌘E).
+- **Effects**: black-and-white threshold (with "ink only" transparent-paper mode and invert) and solid-color outline strokes (edge sensitivity, thickness 0–24 px, stroke color + opacity), individually bypassable.
+- **Layers**: live input layer toggle; background = live video, solid color (color + opacity picker), or true alpha; the published BGRA frames carry a real alpha channel for downstream compositing (TouchDesigner etc.).
+- **Person keying**: Vision person segmentation (fast/balanced/accurate) masks the layer stack to the person — Cutout or flat-color Silhouette mode, invertible (the outline always stays on the subject).
+- **Landmarks**: face/body/hands/eyes (Apple Vision backend; synthetic source for tuning) rendered as seeded "yarn" curves, dots, or a MediaPipe-style stick figure (face outline, eye shapes, articulated fingers, body skeleton). Per-region color + size styling, stable IDs with adjustable color-matched labels (hands use MediaPipe 0–20 indices), detection rate 1–15 Hz. Jitter-stable: canonical joint ordering, chirality-locked hands, identity-keyed smoothing with dropout carry-over.
+- **UI**: tabbed controls (Input / Layers / Effect / Marks / Debug) with compact one-line style rows (color + size per visual element).
 - **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, per-stage ms HUD.
 - The pipeline sustains 30 fps at 1080p with all features enabled (~2–5 ms/frame on the hot path; detection and segmentation run off-path on their own queues). See `notes/performance-plan.md` for the audit, architecture, and measured numbers.
 

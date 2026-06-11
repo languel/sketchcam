@@ -291,3 +291,19 @@ Open items, in rough priority:
 3. Zero-readback preview (AVSampleBufferDisplayLayer) for full-rate preview.
 4. Landmark interpolation between detections.
 5. Per-layer mask architecture (sketched above).
+
+## Checkpoint 2 (2026-06-11, merged to main)
+
+Since the previous checkpoint: movie/stream test source with speed control
+and pause, input freeze + frame export (cmd-F / cmd-E), landmark stability
+fix (canonical joint ordering, chirality-locked hands, identity-keyed
+smoothing with dropout carry-over — the unordered recognizedPoints
+dictionary was the jitter), MediaPipe-style stick figure with documented
+hand connections, stable landmark IDs with crisp color-matched labels,
+tabbed UI with the generic StyleRow (per-region landmark color+size),
+solid-color outline strokes (binarized edge mask; Strength = sensitivity),
+and outline pinned to the subject under inverted keying.
+
+Still open: release deploy of the extension rescaling fix, zero-readback
+preview, landmark interpolation between detections, per-layer mask
+mapping system.
