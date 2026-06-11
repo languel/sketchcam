@@ -197,3 +197,30 @@ cached CIImage composite, rendered at detection cadence) and Phase 4
 (detection backend tuning). The Phase 1/3 infrastructure (state store,
 pools, shared context, preview throttle, bypass matrix, stage HUD) is what
 they build on.
+
+## Results: Phases 2+4 (landmark overlay, 2026-06-11)
+
+Live measurement (Debug build, camera source, Vision detection at 10 Hz,
+yarn overlay enabled, VGA input, 1080p output, publishing):
+
+| Metric | yarn branch | perf/pipeline |
+|---|---|---|
+| FPS with landmark overlay | ~1 | **30.0** (camera-locked) |
+| Frame total | ~1000 ms | **3.6–4.8 ms** |
+| Overlay stage (cached composite + periodic re-render) | full CPU redraw/frame | 2.0–2.5 ms |
+| Detect (off hot path, own queue) | blocking-adjacent | 14.7–18.7 ms @ 10 Hz |
+| App CPU | — | ~37% |
+
+Throughput guard: full effects + overlay composite 1080p = 0.83 ms/frame.
+
+Also fixed: changing the app's output resolution no longer produces the
+fallback stripes in consumers — the extension now rescales host frames to
+the consumer-negotiated format (FrameScaler) instead of dropping them.
+NOTE: the extension fix ships with the next release build
+(script/release_build.sh + notarize + install) — the installed extension
+predates it.
+
+Dev affordances: `SKETCHCAM_LANDMARKS=camera|synthetic` env var or
+`defaults write io.github.languel.sketchcam SKETCHCAM_LANDMARKS camera`
+enables the overlay at launch; DEBUG builds append 5-second perf lines to
+`~/Library/Containers/io.github.languel.sketchcam/Data/tmp/sketchcam-perf-live.txt`.

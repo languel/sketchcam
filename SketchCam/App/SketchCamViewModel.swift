@@ -46,6 +46,7 @@ final class SketchCamViewModel: ObservableObject {
     private var cameraFrameInFlight = false
     private var lastPreviewTime: CFAbsoluteTime = 0
     private var lastStatsTime: CFAbsoluteTime = 0
+    private var lastPerfLogTime: CFAbsoluteTime = 0
     private var frameIndex = 0
     private var fpsStartTime = CFAbsoluteTimeGetCurrent()
     private var fpsFrameCount = 0
@@ -69,6 +70,16 @@ final class SketchCamViewModel: ObservableObject {
     func start() {
         refreshDevices()
         startTestPatternTimer()
+        // Dev affordance: enable the overlay at launch for headless perf
+        // verification and demo scripts. Env var works for direct exec;
+        // `defaults write io.github.languel.sketchcam SKETCHCAM_LANDMARKS camera`
+        // works for LaunchServices launches.
+        let landmarkOverride = ProcessInfo.processInfo.environment["SKETCHCAM_LANDMARKS"]
+            ?? UserDefaults.standard.string(forKey: "SKETCHCAM_LANDMARKS")
+        if let mode = landmarkOverride, !mode.isEmpty {
+            settings.landmarks.enabled = true
+            settings.landmarks.sourceMode = mode == "synthetic" ? .synthetic : .camera
+        }
         Task {
             let granted = await CameraPermissionManager.requestAccess()
             DispatchQueue.main.async {
@@ -237,6 +248,17 @@ final class SketchCamViewModel: ObservableObject {
         let stageMillis = timings.snapshotMillis()
         let frameIndexSnapshot = frameIndex
         let virtualStatus = publisher.status.displayText
+        #if DEBUG
+        if now - lastPerfLogTime >= 5 {
+            lastPerfLogTime = now
+            let stages = stageMillis.map { "\($0.stage.rawValue)=\(String(format: "%.1f", $0.millis))" }.joined(separator: " ")
+            let line = String(format: "SketchCamPerf fps=%.1f %@ landmarks=%d\n", fps, stages, settings.landmarks.enabled ? 1 : 0)
+            // Sandboxed: lands in ~/Library/Containers/io.github.languel.sketchcam/Data/tmp/
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("sketchcam-perf-live.txt")
+            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            try? (existing + line).write(to: url, atomically: true, encoding: .utf8)
+        }
+        #endif
         DispatchQueue.main.async {
             if let image {
                 self.previewImage = image
