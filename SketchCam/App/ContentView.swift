@@ -92,6 +92,35 @@ struct ContentView: View {
                 Toggle("Preview", isOn: $model.settings.previewEnabled)
 
                 Divider()
+                SectionHeader("Landmarks")
+                Toggle("Landmark overlay", isOn: $model.settings.landmarks.enabled)
+                Group {
+                    Picker("Source", selection: $model.settings.landmarks.sourceMode) {
+                        ForEach(LandmarkSourceMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Picker("Style", selection: $model.settings.landmarks.visualizationMode) {
+                        ForEach(LandmarkVisualizationMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    HStack {
+                        Toggle("Face", isOn: $model.settings.landmarks.trackFace)
+                        Toggle("Body", isOn: $model.settings.landmarks.trackBody)
+                        Toggle("Hands", isOn: $model.settings.landmarks.trackHands)
+                        Toggle("Eyes", isOn: $model.settings.landmarks.trackEyesAndIrises)
+                    }
+                    .toggleStyle(.checkbox)
+                    SliderRow(title: "Rate (Hz)", value: detectionRateBinding, range: 1...15)
+                    SliderRow(title: "Detail", value: subsetBinding)
+                    SliderRow(title: "Stroke", value: strokeBinding, range: 0.7...6)
+                }
+                .disabled(!model.settings.landmarks.enabled)
+
+                Divider()
                 SectionHeader("Camera Extension")
                 HStack {
                     Button {
@@ -131,6 +160,27 @@ struct ContentView: View {
         )
     }
 
+    private var detectionRateBinding: Binding<Double> {
+        Binding(
+            get: { model.settings.landmarks.detectionsPerSecond },
+            set: { model.settings.landmarks.detectionsPerSecond = $0.rounded() }
+        )
+    }
+
+    private var subsetBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.settings.landmarks.subsetRatio) },
+            set: { model.settings.landmarks.subsetRatio = Float($0) }
+        )
+    }
+
+    private var strokeBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.settings.landmarks.yarnStrokeWidth) },
+            set: { model.settings.landmarks.yarnStrokeWidth = Float($0) }
+        )
+    }
+
     private var edgeBinding: Binding<Double> {
         Binding(
             get: { Double(model.settings.edgeStrength) },
@@ -155,6 +205,7 @@ private struct SectionHeader: View {
 private struct SliderRow: View {
     let title: String
     @Binding var value: Double
+    var range: ClosedRange<Double> = 0...1
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -165,7 +216,7 @@ private struct SliderRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            Slider(value: $value, in: 0...1)
+            Slider(value: $value, in: range)
         }
     }
 }

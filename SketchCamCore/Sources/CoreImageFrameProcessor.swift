@@ -37,10 +37,10 @@ public final class CoreImageFrameProcessor: FrameProcessor {
         )!
     }
 
-    public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime) throws -> ProcessedFrame {
+    public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?) throws -> ProcessedFrame {
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
-        let finalImage: CIImage
+        var finalImage: CIImage
 
         if !settings.effectsEnabled || (!settings.thresholdEnabled && !settings.outlineEnabled) {
             // Master bypass: aspect-fill only, no filters in the DAG.
@@ -80,6 +80,10 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             }
 
             finalImage = Self.upscale(processed, from: processingRect, to: outputRect)
+        }
+
+        if let overlay {
+            finalImage = overlay.composited(over: finalImage).cropped(to: outputRect)
         }
 
         let output = try outputPool.makeBuffer(format: outputFormat)

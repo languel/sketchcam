@@ -11,12 +11,15 @@
 		117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */; };
 		1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */; };
 		1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A62B38FB62959937129F6F /* ProcessingSettings.swift */; };
+		1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
 		3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */; };
 		4BDCEC52901FF67A5655DEA1 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
+		57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */; };
 		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
 		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
+		6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */; };
 		705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */; };
 		76B1CE7ED4A8056EE6C67CB6 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
 		7A46446167656D52AAD61F91 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
@@ -30,6 +33,7 @@
 		B32E553B221584589B18FF01 /* CameraPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */; };
 		B7717997B7A7D676037BAB33 /* FallbackTestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */; };
 		C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */; };
+		C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */; };
 		C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
 		C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */; };
 		CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */; };
@@ -41,6 +45,7 @@
 		DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */; };
 		E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69372C0E7B99EADDD8731E11 /* SketchCamState.swift */; };
 		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
+		EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */; };
 		F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEAB9229D624BE20FB261892 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -122,6 +127,7 @@
 		250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferUtils.swift; sourceTree = "<group>"; };
 		33A62B38FB62959937129F6F /* ProcessingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingSettings.swift; sourceTree = "<group>"; };
 		34C077C1A613941A722E856D /* FrameFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormat.swift; sourceTree = "<group>"; };
+		4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionLandmarkTracker.swift; sourceTree = "<group>"; };
 		43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
@@ -129,14 +135,18 @@
 		69372C0E7B99EADDD8731E11 /* SketchCamState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamState.swift; sourceTree = "<group>"; };
 		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
+		8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkOverlayCompositor.swift; sourceTree = "<group>"; };
 		899FA7D13C6CB19A855B1642 /* SketchCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SketchCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineTimings.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
 		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
+		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
+		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
 		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
+		C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkDetectionService.swift; sourceTree = "<group>"; };
 		C63392630883E5E55B589354 /* SketchCamCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionActivationManager.swift; sourceTree = "<group>"; };
 		CEAB9229D624BE20FB261892 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -287,6 +297,7 @@
 				8AD5A1987311DAB66C1D26CA /* Camera */,
 				43EBB7984D99D48928D716A0 /* Debug */,
 				5673C2E23C8D68622A1808E0 /* Diagnostics */,
+				C0045440A55F23B6F41D6D01 /* Landmarks */,
 				76AE06D218CFA9453EC92B71 /* Preview */,
 				0E332C77645CE3D351493FA8 /* Resources */,
 				F1F23FD48ADC73BC4FA7E170 /* VirtualCamera */,
@@ -314,6 +325,18 @@
 				0C7E204A325423D92D191A3B /* SketchCamShared.framework */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C0045440A55F23B6F41D6D01 /* Landmarks */ = {
+			isa = PBXGroup;
+			children = (
+				C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */,
+				B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */,
+				8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */,
+				ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */,
+				4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */,
+			);
+			path = Landmarks;
 			sourceTree = "<group>";
 		};
 		C7E4865A21694D6D126994FA /* Tests */ = {
@@ -542,12 +565,17 @@
 				DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */,
 				3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */,
 				1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */,
+				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
+				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,
+				EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
 				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,
 				7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */,
+				C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */,
 				705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */,
+				6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

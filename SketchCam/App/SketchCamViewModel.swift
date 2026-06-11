@@ -37,6 +37,8 @@ final class SketchCamViewModel: ObservableObject {
     private static let sharedCIContext = CIContext(options: [.cacheIntermediates: true])
     private let processor = CoreImageFrameProcessor(context: SketchCamViewModel.sharedCIContext)
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
+    private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
+    private let overlayCompositor = LandmarkOverlayCompositor()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
     private let timings = PipelineTimings()
@@ -166,13 +168,29 @@ final class SketchCamViewModel: ObservableObject {
                 (self.store.settings, self.store.outputFormat)
             }
             do {
+                let frameIndex = self.nextFrameIndex()
+                let overlay = self.timings.measure(.overlay) { () -> CIImage? in
+                    guard settings.landmarks.enabled else { return nil }
+                    let detection = self.landmarkService.currentDetection(
+                        pixelBuffer: originalPixelBuffer,
+                        settings: settings,
+                        frameIndex: frameIndex
+                    )
+                    return self.overlayCompositor.overlay(
+                        detection: detection,
+                        settings: settings,
+                        outputSize: outputFormat.size
+                    )
+                }
+                self.timings.record(.detect, seconds: self.landmarkService.lastDetectionMillis / 1_000)
                 let processed = try self.timings.measure(.process) {
                     try self.processor.process(
                         pixelBuffer: pixelBuffer,
                         settings: settings,
                         outputFormat: outputFormat,
-                        frameIndex: self.nextFrameIndex(),
-                        timestamp: timestamp
+                        frameIndex: frameIndex,
+                        timestamp: timestamp,
+                        overlay: overlay
                     )
                 }
                 self.publish(frame: processed.pixelBuffer, sampleBuffer: processed.sampleBuffer, originalPixelBuffer: originalPixelBuffer)

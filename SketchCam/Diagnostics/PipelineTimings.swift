@@ -3,17 +3,21 @@ import os
 
 enum PipelineStage: String, CaseIterable {
     case snapshot   // settings/format snapshot acquisition
-    case process    // Core Image chain + render to pixel buffer
+    case overlay    // landmark overlay layer (cached; cost only on re-render)
+    case process    // Core Image chain + composite + render to pixel buffer
     case preview    // preview CGImage creation
     case publish    // sink enqueue
+    case detect     // landmark detection (off hot path, detection queue)
     case total      // camera callback → published
 
     var displayName: String {
         switch self {
         case .snapshot: return "Snapshot"
+        case .overlay: return "Overlay"
         case .process: return "Process"
         case .preview: return "Preview"
         case .publish: return "Publish"
+        case .detect: return "Detect"
         case .total: return "Frame total"
         }
     }

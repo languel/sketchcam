@@ -1,3 +1,4 @@
+import CoreImage
 import CoreMedia
 import XCTest
 @testable import SketchCamCore
@@ -91,6 +92,32 @@ extension ProcessorThroughputTests {
             format: SketchCamFormats.fullHD
         )
         report("PERF full-effect@540p->1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
+        XCTAssertLessThan(millis, 33.3)
+    }
+}
+
+extension ProcessorThroughputTests {
+    /// Composite cost of a cached overlay layer (Phase 2 hot-path addition).
+    func testOverlayCompositeThroughput1080p() throws {
+        let processor = CoreImageFrameProcessor()
+        let format = SketchCamFormats.fullHD
+        let settings = ProcessingSettings()
+        let input = try TestPatternGenerator.makeFrame(format: format, frameIndex: 0).pixelBuffer
+        let overlaySource = try TestPatternGenerator.makeFrame(format: SketchCamFormats.hd, frameIndex: 3).pixelBuffer
+        let overlay = CIImage(cvPixelBuffer: overlaySource)
+            .transformed(by: CGAffineTransform(scaleX: 1.5, y: 1.5))
+            .cropped(to: CGRect(origin: .zero, size: format.size))
+
+        for index in 0..<5 {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30), overlay: overlay)
+        }
+        let frames = 60
+        let start = CFAbsoluteTimeGetCurrent()
+        for index in 0..<frames {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30), overlay: overlay)
+        }
+        let millis = (CFAbsoluteTimeGetCurrent() - start) / Double(frames) * 1_000
+        report("PERF full-effect+overlay 1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
         XCTAssertLessThan(millis, 33.3)
     }
 }

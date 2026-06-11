@@ -61,6 +61,7 @@ public struct ProcessingSettings: Equatable, Sendable {
     /// When false, no preview readback happens at all; publishing continues.
     public var previewEnabled: Bool
     public var processingQuality: ProcessingQuality
+    public var landmarks: LandmarkSettings
 
     public init(
         threshold: Float = 0.52,
@@ -73,7 +74,8 @@ public struct ProcessingSettings: Equatable, Sendable {
         thresholdEnabled: Bool = true,
         outlineEnabled: Bool = true,
         previewEnabled: Bool = true,
-        processingQuality: ProcessingQuality = .full
+        processingQuality: ProcessingQuality = .full,
+        landmarks: LandmarkSettings = LandmarkSettings()
     ) {
         self.threshold = threshold
         self.edgeStrength = edgeStrength
@@ -86,5 +88,95 @@ public struct ProcessingSettings: Equatable, Sendable {
         self.outlineEnabled = outlineEnabled
         self.previewEnabled = previewEnabled
         self.processingQuality = processingQuality
+        self.landmarks = landmarks
+    }
+}
+
+public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable {
+    case camera
+    case synthetic
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .camera: return "Camera"
+        case .synthetic: return "Synthetic"
+        }
+    }
+}
+
+public enum LandmarkVisualizationMode: String, CaseIterable, Identifiable, Sendable {
+    case raw
+    case yarn
+    case rawAndYarn
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .raw: return "Dots"
+        case .yarn: return "Yarn"
+        case .rawAndYarn: return "Both"
+        }
+    }
+}
+
+/// Landmark overlay settings. Detection runs off the frame hot path at
+/// `landmarkDetectionsPerSecond`; the overlay layer is re-rendered only when
+/// a detection lands and is GPU-composited into every published frame.
+public struct LandmarkSettings: Equatable, Sendable {
+    public var enabled: Bool
+    public var sourceMode: LandmarkSourceMode
+    public var visualizationMode: LandmarkVisualizationMode
+    public var trackFace: Bool
+    public var trackBody: Bool
+    public var trackHands: Bool
+    public var trackEyesAndIrises: Bool
+    public var detectionsPerSecond: Double
+    /// Longest input dimension handed to the detector.
+    public var detectionMaxDimension: Int
+    public var seed: Int
+    public var subsetRatio: Float
+    public var yarnStrokeWidth: Float
+    public var yarnStrokeOpacity: Float
+    public var yarnWeaveAmount: Float
+    public var rawLandmarkSize: Float
+    public var rawLandmarkOpacity: Float
+
+    public init(
+        enabled: Bool = false,
+        sourceMode: LandmarkSourceMode = .camera,
+        visualizationMode: LandmarkVisualizationMode = .yarn,
+        trackFace: Bool = true,
+        trackBody: Bool = true,
+        trackHands: Bool = true,
+        trackEyesAndIrises: Bool = false,
+        detectionsPerSecond: Double = 10,
+        detectionMaxDimension: Int = 384,
+        seed: Int = 7,
+        subsetRatio: Float = 0.65,
+        yarnStrokeWidth: Float = 2.2,
+        yarnStrokeOpacity: Float = 0.85,
+        yarnWeaveAmount: Float = 0.7,
+        rawLandmarkSize: Float = 5,
+        rawLandmarkOpacity: Float = 0.9
+    ) {
+        self.enabled = enabled
+        self.sourceMode = sourceMode
+        self.visualizationMode = visualizationMode
+        self.trackFace = trackFace
+        self.trackBody = trackBody
+        self.trackHands = trackHands
+        self.trackEyesAndIrises = trackEyesAndIrises
+        self.detectionsPerSecond = detectionsPerSecond
+        self.detectionMaxDimension = detectionMaxDimension
+        self.seed = seed
+        self.subsetRatio = subsetRatio
+        self.yarnStrokeWidth = yarnStrokeWidth
+        self.yarnStrokeOpacity = yarnStrokeOpacity
+        self.yarnWeaveAmount = yarnWeaveAmount
+        self.rawLandmarkSize = rawLandmarkSize
+        self.rawLandmarkOpacity = rawLandmarkOpacity
     }
 }
