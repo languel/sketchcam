@@ -58,6 +58,16 @@ public struct ProcessingSettings: Equatable, Sendable {
     public var effectsEnabled: Bool
     public var thresholdEnabled: Bool
     public var outlineEnabled: Bool
+    /// Outline stroke dilation radius in pixels (at processing resolution).
+    public var outlineThickness: Float
+    public var outlineColor: RGBAColor
+    /// When false, the video layer is not drawn — outline strokes and the
+    /// landmark doodle render directly against the background, giving a
+    /// clean compositing source.
+    public var inputLayerEnabled: Bool
+    public var backgroundMode: BackgroundMode
+    public var backgroundColor: RGBAColor
+    public var segmentation: SegmentationSettings
     /// When false, no preview readback happens at all; publishing continues.
     public var previewEnabled: Bool
     public var processingQuality: ProcessingQuality
@@ -73,6 +83,12 @@ public struct ProcessingSettings: Equatable, Sendable {
         effectsEnabled: Bool = true,
         thresholdEnabled: Bool = true,
         outlineEnabled: Bool = true,
+        outlineThickness: Float = 1,
+        outlineColor: RGBAColor = .black,
+        inputLayerEnabled: Bool = true,
+        backgroundMode: BackgroundMode = .live,
+        backgroundColor: RGBAColor = .chromaGreen,
+        segmentation: SegmentationSettings = SegmentationSettings(),
         previewEnabled: Bool = true,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings()
@@ -86,6 +102,12 @@ public struct ProcessingSettings: Equatable, Sendable {
         self.effectsEnabled = effectsEnabled
         self.thresholdEnabled = thresholdEnabled
         self.outlineEnabled = outlineEnabled
+        self.outlineThickness = outlineThickness
+        self.outlineColor = outlineColor
+        self.inputLayerEnabled = inputLayerEnabled
+        self.backgroundMode = backgroundMode
+        self.backgroundColor = backgroundColor
+        self.segmentation = segmentation
         self.previewEnabled = previewEnabled
         self.processingQuality = processingQuality
         self.landmarks = landmarks
@@ -178,5 +200,72 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.yarnWeaveAmount = yarnWeaveAmount
         self.rawLandmarkSize = rawLandmarkSize
         self.rawLandmarkOpacity = rawLandmarkOpacity
+    }
+}
+
+/// Plain-value color (no AppKit dependency in Core).
+public struct RGBAColor: Equatable, Sendable {
+    public var red: Float
+    public var green: Float
+    public var blue: Float
+    public var alpha: Float
+
+    public init(red: Float, green: Float, blue: Float, alpha: Float = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
+    public static let black = RGBAColor(red: 0, green: 0, blue: 0)
+    public static let chromaGreen = RGBAColor(red: 0, green: 0.85, blue: 0.25)
+}
+
+/// What sits behind the composited layers. `solid`/`transparent` exist so the
+/// doodle/effects can be exported with a keyable background (or a real alpha
+/// channel) into TouchDesigner and similar tools.
+public enum BackgroundMode: String, CaseIterable, Identifiable, Sendable {
+    case live
+    case solid
+    case transparent
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .live: return "Live"
+        case .solid: return "Solid"
+        case .transparent: return "Alpha"
+        }
+    }
+}
+
+public enum SegmentationQuality: String, CaseIterable, Identifiable, Sendable {
+    case fast
+    case balanced
+    case accurate
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .fast: return "Fast"
+        case .balanced: return "Balanced"
+        case .accurate: return "Accurate"
+        }
+    }
+}
+
+/// Person keying via Vision person segmentation: the foreground stack (video
+/// layer + outline) is masked to the detected person and composited over the
+/// background. MediaPipe selfie segmentation has no official macOS runtime;
+/// Vision runs on the ANE and is the native equivalent.
+public struct SegmentationSettings: Equatable, Sendable {
+    public var enabled: Bool
+    public var quality: SegmentationQuality
+
+    public init(enabled: Bool = false, quality: SegmentationQuality = .fast) {
+        self.enabled = enabled
+        self.quality = quality
     }
 }

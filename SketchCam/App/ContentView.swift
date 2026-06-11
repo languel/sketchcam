@@ -63,6 +63,28 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
 
                 Divider()
+                SectionHeader("Layers")
+                Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
+                Picker("Background", selection: $model.settings.backgroundMode) {
+                    ForEach(BackgroundMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                if model.settings.backgroundMode == .solid {
+                    ColorPicker("Background color", selection: backgroundColorBinding, supportsOpacity: false)
+                }
+                Toggle("Person key (Vision)", isOn: $model.settings.segmentation.enabled)
+                if model.settings.segmentation.enabled {
+                    Picker("Key quality", selection: $model.settings.segmentation.quality) {
+                        ForEach(SegmentationQuality.allCases) { quality in
+                            Text(quality.title).tag(quality)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Divider()
                 SectionHeader("Effect")
                 Toggle("Effects (master)", isOn: $model.settings.effectsEnabled)
                 Group {
@@ -70,6 +92,8 @@ struct ContentView: View {
                     SliderRow(title: "Threshold", value: thresholdBinding)
                     Toggle("Outline layer", isOn: $model.settings.outlineEnabled)
                     SliderRow(title: "Outline", value: edgeBinding)
+                    SliderRow(title: "Thickness", value: outlineThicknessBinding, range: 0...24)
+                    ColorPicker("Stroke color", selection: outlineColorBinding, supportsOpacity: true)
                     Toggle("Invert", isOn: $model.settings.invert)
                 }
                 .disabled(!model.settings.effectsEnabled)
@@ -157,6 +181,39 @@ struct ContentView: View {
         Binding(
             get: { Double(model.settings.threshold) },
             set: { model.settings.threshold = Float($0) }
+        )
+    }
+
+    private var outlineThicknessBinding: Binding<Double> {
+        Binding(
+            get: { Double(model.settings.outlineThickness) },
+            set: { model.settings.outlineThickness = Float($0) }
+        )
+    }
+
+    private var outlineColorBinding: Binding<Color> {
+        rgbaBinding(\.outlineColor)
+    }
+
+    private var backgroundColorBinding: Binding<Color> {
+        rgbaBinding(\.backgroundColor)
+    }
+
+    private func rgbaBinding(_ keyPath: WritableKeyPath<ProcessingSettings, RGBAColor>) -> Binding<Color> {
+        Binding(
+            get: {
+                let c = model.settings[keyPath: keyPath]
+                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+            },
+            set: { newValue in
+                guard let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                model.settings[keyPath: keyPath] = RGBAColor(
+                    red: Float(converted.redComponent),
+                    green: Float(converted.greenComponent),
+                    blue: Float(converted.blueComponent),
+                    alpha: Float(converted.alphaComponent)
+                )
+            }
         )
     }
 

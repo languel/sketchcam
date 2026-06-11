@@ -224,3 +224,30 @@ Dev affordances: `SKETCHCAM_LANDMARKS=camera|synthetic` env var or
 `defaults write io.github.languel.sketchcam SKETCHCAM_LANDMARKS camera`
 enables the overlay at launch; DEBUG builds append 5-second perf lines to
 `~/Library/Containers/io.github.languel.sketchcam/Data/tmp/sketchcam-perf-live.txt`.
+
+## Layers, keying, and outline granularity (2026-06-11, second pass)
+
+New on perf/pipeline:
+
+- **Layer stack**: "Live input layer" toggle; Background = Live / Solid
+  (color picker) / Alpha (true transparency in the published BGRA buffer).
+  Input off + alpha background = outline strokes + landmark doodle on a
+  transparent or keyable canvas for TouchDesigner-class compositing.
+  Caveat: most camera consumers ignore alpha — the Solid (chroma) background
+  is the practical keying route; Alpha matters once we add NDI/Syphon-style
+  outputs or file capture.
+- **Person key**: Vision `VNGeneratePersonSegmentationRequest` (ANE), the
+  native macOS equivalent of MediaPipe selfie segmentation. Off-hot-path
+  like landmark detection; matte cached, GPU `CIBlendWithMask` per frame.
+  Measured live (Accurate quality!): 30 fps, frame total 1.5–1.9 ms,
+  segment 6.6–8.8 ms on its own queue, ~37% CPU.
+  MediaPipe alternative (image segmenter / selfie segmentation) has no
+  official macOS runtime — same conclusion as landmarks: revisit only if
+  Vision quality is insufficient; the pipeline treats the matte as an
+  opaque CIImage, so backends are swappable.
+- **Outline controls**: thickness 0–24 px (CIMorphologyMaximum dilation at
+  processing resolution) and stroke color+opacity picker; strokes are now a
+  colored alpha layer (new edge-color kernel) so they composite over any
+  background instead of darkening the threshold image.
+- Throughput guards: keyed+solid+thick-outline 1.31 ms/frame,
+  outline-on-alpha 1.28 ms/frame (both 1080p).

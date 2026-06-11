@@ -39,6 +39,7 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
+    private let segmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
     private let timings = PipelineTimings()
@@ -194,6 +195,11 @@ final class SketchCamViewModel: ObservableObject {
                     )
                 }
                 self.timings.record(.detect, seconds: self.landmarkService.lastDetectionMillis / 1_000)
+                let matte = self.segmentationService.currentMatte(
+                    pixelBuffer: originalPixelBuffer,
+                    settings: settings.segmentation
+                )
+                self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let processed = try self.timings.measure(.process) {
                     try self.processor.process(
                         pixelBuffer: pixelBuffer,
@@ -201,7 +207,8 @@ final class SketchCamViewModel: ObservableObject {
                         outputFormat: outputFormat,
                         frameIndex: frameIndex,
                         timestamp: timestamp,
-                        overlay: overlay
+                        overlay: overlay,
+                        matte: matte
                     )
                 }
                 self.publish(frame: processed.pixelBuffer, sampleBuffer: processed.sampleBuffer, originalPixelBuffer: originalPixelBuffer)

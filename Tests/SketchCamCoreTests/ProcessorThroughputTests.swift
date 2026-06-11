@@ -121,3 +121,52 @@ extension ProcessorThroughputTests {
         XCTAssertLessThan(millis, 33.3)
     }
 }
+
+extension ProcessorThroughputTests {
+    func testKeyedSolidBackgroundThroughput1080p() throws {
+        let processor = CoreImageFrameProcessor()
+        let format = SketchCamFormats.fullHD
+        var settings = ProcessingSettings()
+        settings.backgroundMode = .solid
+        settings.outlineThickness = 8
+        settings.outlineColor = RGBAColor(red: 1, green: 0.2, blue: 0.1)
+        let input = try TestPatternGenerator.makeFrame(format: format, frameIndex: 0).pixelBuffer
+        let matte = CIImage(color: CIColor(red: 1, green: 1, blue: 1))
+            .cropped(to: CGRect(x: 0, y: 0, width: 512, height: 288))
+
+        for index in 0..<5 {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30), overlay: nil, matte: matte)
+        }
+        let frames = 60
+        let start = CFAbsoluteTimeGetCurrent()
+        for index in 0..<frames {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30), overlay: nil, matte: matte)
+        }
+        let millis = (CFAbsoluteTimeGetCurrent() - start) / Double(frames) * 1_000
+        report("PERF keyed+solid-bg+thick-outline 1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
+        XCTAssertLessThan(millis, 33.3)
+    }
+
+    func testTransparentDoodleOnlyThroughput1080p() throws {
+        let processor = CoreImageFrameProcessor()
+        let format = SketchCamFormats.fullHD
+        var settings = ProcessingSettings()
+        settings.inputLayerEnabled = false
+        settings.thresholdEnabled = false
+        settings.backgroundMode = .transparent
+        settings.outlineThickness = 4
+        let input = try TestPatternGenerator.makeFrame(format: format, frameIndex: 0).pixelBuffer
+
+        for index in 0..<5 {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30))
+        }
+        let frames = 60
+        let start = CFAbsoluteTimeGetCurrent()
+        for index in 0..<frames {
+            _ = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: index, timestamp: CMTime(value: CMTimeValue(index), timescale: 30))
+        }
+        let millis = (CFAbsoluteTimeGetCurrent() - start) / Double(frames) * 1_000
+        report("PERF outline-on-alpha 1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
+        XCTAssertLessThan(millis, 33.3)
+    }
+}

@@ -8,6 +8,7 @@ enum PipelineStage: String, CaseIterable {
     case preview    // preview CGImage creation
     case publish    // sink enqueue
     case detect     // landmark detection (off hot path, detection queue)
+    case segment    // person segmentation (off hot path, own queue)
     case total      // camera callback → published
 
     var displayName: String {
@@ -18,6 +19,7 @@ enum PipelineStage: String, CaseIterable {
         case .preview: return "Preview"
         case .publish: return "Publish"
         case .detect: return "Detect"
+        case .segment: return "Segment"
         case .total: return "Frame total"
         }
     }

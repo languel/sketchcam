@@ -30,6 +30,7 @@
 		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
 		AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */; };
 		AE0591748979F51E8055BFFD /* FrameScaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ADDC344946874669A1BA2DD /* FrameScaler.swift */; };
+		B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53093F3EB6121C4B7899971 /* SegmentationService.swift */; };
 		B32E553B221584589B18FF01 /* CameraPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */; };
 		B7717997B7A7D676037BAB33 /* FallbackTestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */; };
 		C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */; };
@@ -144,6 +145,7 @@
 		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
+		B53093F3EB6121C4B7899971 /* SegmentationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentationService.swift; sourceTree = "<group>"; };
 		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
 		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
 		C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkDetectionService.swift; sourceTree = "<group>"; };
@@ -333,6 +335,7 @@
 				C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */,
 				B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */,
 				8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */,
+				B53093F3EB6121C4B7899971 /* SegmentationService.swift */,
 				ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */,
 				4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */,
 			);
@@ -571,6 +574,7 @@
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
+				B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */,
 				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,
 				7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */,
 				C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */,
