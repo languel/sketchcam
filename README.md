@@ -49,18 +49,39 @@ Use the project script:
 
 The script regenerates the Xcode project, builds `SketchCam.app`, copies it to `/Applications/SketchCam.app`, and opens it. The `/Applications` location matters because macOS system extensions must be activated from an app bundle in `/Applications`.
 
+On a first run on a new Mac, allow Xcode to register the device while creating the development profiles:
+
+```sh
+SKETCHCAM_ALLOW_DEVICE_REGISTRATION=1 ./script/build_and_run.sh
+```
+
+## Release Build (Developer ID, Notarized)
+
+On SIP-enabled macOS, the system extension only activates from a notarized Developer ID build. The working pipeline (see `notes/notarization.md` for the full story):
+
+```sh
+./script/release_build.sh        # archive + developer-id export → build/Release-export/SketchCam.app
+./script/notarize.sh             # notarytool submit + staple (keychain profile, see notes)
+./script/install_release.sh     # copy to /Applications + LaunchServices cleanup
+./script/verify_signing.sh      # signatures, entitlements, spctl, systemextensionsctl report
+```
+
+Then launch the app, click **Activate**, approve in System Settings → General → Login Items & Extensions → Camera Extensions, and **restart the app** so it picks up the new CMIO device.
+
 ## Signing And Activation
 
-Camera Extension activation requires Apple Development signing and a provisioning profile with the app group and system-extension capabilities.
+Camera Extension development builds require Apple Development signing and provisioning profiles with the app group and system-extension capabilities. On SIP-enabled macOS 26, development-signed builds cannot activate the extension under normal policy — use the Release pipeline above (or system-extension developer mode from Recovery).
 
 The project is configured for:
 
 - App bundle ID: `io.github.languel.sketchcam`
 - Camera extension bundle ID: `io.github.languel.sketchcam.camera-extension`
 - App group: `$(TeamIdentifierPrefix)io.github.languel.sketchcam`
-- Team: `FAG3XX5RL8`
+- Team: `K39T7B8529`
 
-If CLI signing reports `No Account for Team "FAG3XX5RL8"`, open Xcode, add the Apple Developer account in Settings, then let automatic signing create/update the profiles.
+If CLI signing reports `No Account for Team "K39T7B8529"`, open Xcode, add the Apple Developer account in Settings, then let automatic signing create/update the profiles.
+
+If activation fails with `Extension not found in App bundle`, check `notes/troubleshooting.md` — the known causes are the extension bundle not being named after its bundle identifier, missing version keys in its Info.plist, or stale LaunchServices registrations.
 
 To activate the virtual camera:
 
@@ -96,4 +117,3 @@ If no host frames are arriving, the extension should keep outputting its generat
 - Core Image is the first processor backend, but the `FrameProcessor` boundary is intended to allow Metal or other renderers later.
 
 See `notes/architecture.md`, `notes/phase-1-test-plan.md`, and `notes/troubleshooting.md` for more detail.
-

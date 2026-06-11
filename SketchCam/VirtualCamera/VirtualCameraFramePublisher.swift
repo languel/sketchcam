@@ -56,7 +56,10 @@ final class VirtualCameraFramePublisher {
             let device = try Self.findDevice(named: "SketchCam")
             let sink = try Self.findSinkStream(on: device)
             var unmanagedQueue: Unmanaged<CMSimpleQueue>?
-            let copyStatus = CMIOStreamCopyBufferQueue(sink, nil, nil, &unmanagedQueue)
+            // CMIOStreamCopyBufferQueue hands back a NULL queue (with noErr)
+            // when no queue-altered callback is supplied.
+            let queueAlteredProc: CMIODeviceStreamQueueAlteredProc = { _, _, _ in }
+            let copyStatus = CMIOStreamCopyBufferQueue(sink, queueAlteredProc, nil, &unmanagedQueue)
             guard copyStatus == noErr, let unmanagedQueue else {
                 status = .failed("queue \(copyStatus)")
                 return

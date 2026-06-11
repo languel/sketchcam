@@ -10,11 +10,28 @@ configs:
 settings:
   base:
     CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
-    DEVELOPMENT_TEAM: FAG3XX5RL8
+    DEVELOPMENT_TEAM: K39T7B8529
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     SWIFT_VERSION: "5.0"
-    CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: Apple Development
+  # Signing strategy: all xcodebuild builds (Debug and Release archive) use
+  # automatic signing with the development certificate. Distribution signing
+  # happens at EXPORT time: script/release_build.sh archives, then
+  # `xcodebuild -exportArchive` with method=developer-id re-signs both the
+  # app and the camera extension with "Developer ID Application" and embeds
+  # the Developer ID provisioning profile that the
+  # com.apple.developer.system-extension.install entitlement requires at
+  # runtime (without it amfid blocks launch: "No matching profile found").
+  # Do NOT set CODE_SIGN_STYLE/CODE_SIGN_IDENTITY in target `base` settings —
+  # target base overrides these config-level values.
+  configs:
+    Debug:
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Development
+      ENABLE_HARDENED_RUNTIME: NO
+    Release:
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Development
+      ENABLE_HARDENED_RUNTIME: YES
 targets:
   SketchCamShared:
     type: framework.static
@@ -24,6 +41,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.shared
+        # Static frameworks have no Info.plist of their own; archive (install)
+        # builds refuse to sign them without one.
+        GENERATE_INFOPLIST_FILE: YES
 
   SketchCamCore:
     type: framework.static
@@ -35,6 +55,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.core
+        GENERATE_INFOPLIST_FILE: YES
 
   SketchCamCameraExtension:
     type: system-extension
@@ -49,12 +70,15 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.camera-extension
-        PRODUCT_NAME: SketchCamCameraExtension
+        # sysextd only matches an embedded extension whose bundle is named
+        # after its bundle identifier (e.g. OBS ships
+        # com.obsproject.obs-studio.mac-camera-extension.systemextension).
+        # Any other name yields "Extension not found in App bundle".
+        PRODUCT_NAME: io.github.languel.sketchcam.camera-extension
         INFOPLIST_FILE: SketchCamCameraExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: SketchCamCameraExtension/SketchCamCameraExtension.entitlements
-        CODE_SIGN_IDENTITY: Apple Development
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: FAG3XX5RL8
+        DEVELOPMENT_TEAM: K39T7B8529
+        PROVISIONING_PROFILE_REQUIRED: YES
         REGISTER_APP_GROUPS: YES
 
   SketchCam:
@@ -77,11 +101,8 @@ targets:
         PRODUCT_NAME: SketchCam
         INFOPLIST_FILE: SketchCam/Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: SketchCam/Resources/SketchCam.entitlements
-        CODE_SIGN_IDENTITY: Apple Development
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: FAG3XX5RL8
+        DEVELOPMENT_TEAM: K39T7B8529
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ENABLE_HARDENED_RUNTIME: NO
         REGISTER_APP_GROUPS: YES
 
   SketchCamCoreTests:
@@ -95,6 +116,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.tests
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   SketchCam:
