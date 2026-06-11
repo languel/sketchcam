@@ -68,3 +68,29 @@ final class ProcessorThroughputTests: XCTestCase {
         XCTAssertLessThan(millis, 33.3)
     }
 }
+
+extension ProcessorThroughputTests {
+    func testPassthroughThroughput1080p() throws {
+        var settings = ProcessingSettings()
+        settings.effectsEnabled = false
+        let millis = try throughputMillis(
+            processor: CoreImageFrameProcessor(),
+            settings: settings,
+            format: SketchCamFormats.fullHD
+        )
+        report("PERF passthrough 1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
+        XCTAssertLessThan(millis, 33.3)
+    }
+
+    func testFastProcessingThroughput1080p() throws {
+        var settings = ProcessingSettings()
+        settings.processingQuality = .fast
+        let millis = try throughputMillis(
+            processor: CoreImageFrameProcessor(),
+            settings: settings,
+            format: SketchCamFormats.fullHD
+        )
+        report("PERF full-effect@540p->1080p: \(String(format: "%.2f", millis)) ms/frame (\(String(format: "%.1f", 1_000 / millis)) fps)")
+        XCTAssertLessThan(millis, 33.3)
+    }
+}

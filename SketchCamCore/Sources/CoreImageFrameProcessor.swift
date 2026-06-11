@@ -40,28 +40,46 @@ public final class CoreImageFrameProcessor: FrameProcessor {
     public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime) throws -> ProcessedFrame {
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
-        let fitted = Self.aspectFill(source, in: outputRect, mirrored: settings.mirror)
-        let mono = fitted.applyingFilter("CIColorControls", parameters: [
-            kCIInputSaturationKey: 0,
-            kCIInputContrastKey: 1.08
-        ])
-
-        let threshold = thresholdKernel.apply(
-            extent: outputRect,
-            arguments: [mono, CGFloat(settings.threshold), settings.invert ? CGFloat(1) : CGFloat(0)]
-        ) ?? mono
-
         let finalImage: CIImage
-        if settings.edgeStrength > 0.001 {
-            let edges = mono
-                .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: CGFloat(1 + settings.edgeStrength * 6)])
-                .cropped(to: outputRect)
-            finalImage = edgeBlendKernel.apply(
-                extent: outputRect,
-                arguments: [threshold, edges, CGFloat(settings.edgeStrength)]
-            ) ?? threshold
+
+        if !settings.effectsEnabled || (!settings.thresholdEnabled && !settings.outlineEnabled) {
+            // Master bypass: aspect-fill only, no filters in the DAG.
+            finalImage = Self.aspectFill(source, in: outputRect, mirrored: settings.mirror)
         } else {
-            finalImage = threshold
+            // The effect chain runs at the processing resolution (cost scales
+            // with area); a single upscale to the output rect happens at the
+            // end of the DAG.
+            let processingRect = Self.processingRect(for: outputRect, quality: settings.processingQuality)
+            let fitted = Self.aspectFill(source, in: processingRect, mirrored: settings.mirror)
+            let mono = fitted.applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 0,
+                kCIInputContrastKey: 1.08
+            ])
+
+            let base: CIImage
+            if settings.thresholdEnabled {
+                base = thresholdKernel.apply(
+                    extent: processingRect,
+                    arguments: [mono, CGFloat(settings.threshold), settings.invert ? CGFloat(1) : CGFloat(0)]
+                ) ?? mono
+            } else {
+                base = mono
+            }
+
+            let processed: CIImage
+            if settings.outlineEnabled, settings.edgeStrength > 0.001 {
+                let edges = mono
+                    .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: CGFloat(1 + settings.edgeStrength * 6)])
+                    .cropped(to: processingRect)
+                processed = edgeBlendKernel.apply(
+                    extent: processingRect,
+                    arguments: [base, edges, CGFloat(settings.edgeStrength)]
+                ) ?? base
+            } else {
+                processed = base
+            }
+
+            finalImage = Self.upscale(processed, from: processingRect, to: outputRect)
         }
 
         let output = try outputPool.makeBuffer(format: outputFormat)
@@ -82,6 +100,28 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             mirror: settings.mirror
         )
         return ProcessedFrame(pixelBuffer: output, sampleBuffer: sampleBuffer, state: state)
+    }
+
+    static func processingRect(for outputRect: CGRect, quality: ProcessingQuality) -> CGRect {
+        guard let maxHeight = quality.maxHeight, CGFloat(maxHeight) < outputRect.height else {
+            return outputRect
+        }
+        let scale = CGFloat(maxHeight) / outputRect.height
+        return CGRect(
+            x: 0,
+            y: 0,
+            width: (outputRect.width * scale).rounded(.down),
+            height: CGFloat(maxHeight)
+        )
+    }
+
+    static func upscale(_ image: CIImage, from processingRect: CGRect, to outputRect: CGRect) -> CIImage {
+        guard processingRect.size != outputRect.size else { return image }
+        let scaleX = outputRect.width / processingRect.width
+        let scaleY = outputRect.height / processingRect.height
+        return image
+            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            .cropped(to: outputRect)
     }
 
     public static func aspectFill(_ image: CIImage, in outputRect: CGRect, mirrored: Bool) -> CIImage {

@@ -2,6 +2,53 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+/// Camera capture resolution. Capturing more pixels than the pipeline needs
+/// costs ISP bandwidth, memory traffic, and per-frame conversion — VGA is the
+/// default for the doodle pipeline; effects upscale fine.
+enum CameraInputResolution: String, CaseIterable, Identifiable {
+    case low
+    case vga
+    case hd
+    case high
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .low: return "Low (352)"
+        case .vga: return "VGA (640)"
+        case .hd: return "720p"
+        case .high: return "Native"
+        }
+    }
+
+    var targetDimensions: CMVideoDimensions? {
+        switch self {
+        case .low:
+            return CMVideoDimensions(width: 352, height: 288)
+        case .vga:
+            return CMVideoDimensions(width: 640, height: 480)
+        case .hd:
+            return CMVideoDimensions(width: 1280, height: 720)
+        case .high:
+            return nil
+        }
+    }
+
+    var presetCandidates: [AVCaptureSession.Preset] {
+        switch self {
+        case .low:
+            return [.low, .cif352x288]
+        case .vga:
+            return [.vga640x480, .medium]
+        case .hd:
+            return [.hd1280x720, .medium]
+        case .high:
+            return [.high]
+        }
+    }
+}
+
 final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onSampleBuffer: ((CMSampleBuffer) -> Void)?
     var onConfigurationChanged: ((CGSize) -> Void)?
@@ -23,10 +70,10 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
             .filter { !$0.isSketchCamOutput }
     }
 
-    func start(deviceID: String?) {
+    func start(deviceID: String?, inputResolution: CameraInputResolution = .vga) {
         sessionQueue.async {
             do {
-                try self.configure(deviceID: deviceID)
+                try self.configure(deviceID: deviceID, inputResolution: inputResolution)
                 if !self.session.isRunning {
                     self.session.startRunning()
                 }
@@ -47,11 +94,11 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
-    private func configure(deviceID: String?) throws {
+    private func configure(deviceID: String?, inputResolution: CameraInputResolution) throws {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
 
-        session.sessionPreset = .high
+        session.sessionPreset = inputResolution.presetCandidates.first(where: { session.canSetSessionPreset($0) }) ?? .medium
         for input in session.inputs {
             session.removeInput(input)
         }
@@ -60,6 +107,7 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
 
         let device = try selectedDevice(deviceID: deviceID)
+        configureCaptureFormat(on: device, inputResolution: inputResolution)
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else {
             throw CameraError.cannotAddInput
@@ -76,6 +124,55 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
         session.addOutput(videoOutput)
         onConfigurationChanged?(CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription).cgSize)
+    }
+
+    private func configureCaptureFormat(on device: AVCaptureDevice, inputResolution: CameraInputResolution) {
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+
+            if let format = preferredFormat(for: device, inputResolution: inputResolution) {
+                device.activeFormat = format
+            }
+
+            let frameDuration = CMTime(value: 1, timescale: 30)
+            if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { range in
+                range.minFrameRate <= 30 && range.maxFrameRate >= 30
+            }) {
+                device.activeVideoMinFrameDuration = frameDuration
+                device.activeVideoMaxFrameDuration = frameDuration
+            }
+        } catch {
+            NSLog("SketchCam could not configure camera format: \(error.localizedDescription)")
+        }
+    }
+
+    private func preferredFormat(for device: AVCaptureDevice, inputResolution: CameraInputResolution) -> AVCaptureDevice.Format? {
+        guard let target = inputResolution.targetDimensions else { return nil }
+        let targetWidth = Int(target.width)
+        let targetHeight = Int(target.height)
+        return device.formats
+            .filter { format in
+                format.videoSupportedFrameRateRanges.contains { range in
+                    range.minFrameRate <= 30 && range.maxFrameRate >= 30
+                }
+            }
+            .min { lhs, rhs in
+                formatScore(CMVideoFormatDescriptionGetDimensions(lhs.formatDescription), targetWidth: targetWidth, targetHeight: targetHeight)
+                    < formatScore(CMVideoFormatDescriptionGetDimensions(rhs.formatDescription), targetWidth: targetWidth, targetHeight: targetHeight)
+            }
+    }
+
+    private func formatScore(_ dimensions: CMVideoDimensions, targetWidth: Int, targetHeight: Int) -> Int {
+        let width = Int(dimensions.width)
+        let height = Int(dimensions.height)
+        let area = width * height
+        let targetArea = targetWidth * targetHeight
+        let areaPenalty = abs(area - targetArea)
+        let widthPenalty = abs(width - targetWidth)
+        let heightPenalty = abs(height - targetHeight)
+        let oversizePenalty = area > targetArea ? area / 4 : 0
+        return areaPenalty + widthPenalty * 8 + heightPenalty * 8 + oversizePenalty
     }
 
     private func selectedDevice(deviceID: String?) throws -> AVCaptureDevice {

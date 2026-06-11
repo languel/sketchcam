@@ -9,6 +9,12 @@ import SketchCamShared
 final class SketchCamViewModel: ObservableObject {
     @Published var cameraDevices: [CameraDeviceOption] = []
     @Published var selectedDeviceID: String?
+    @Published var inputResolution = CameraInputResolution.vga {
+        didSet {
+            guard oldValue != inputResolution, cameraPermissionState == .authorized else { return }
+            captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+        }
+    }
     @Published var settings = ProcessingSettings() {
         didSet { store.settings = settings }
     }
@@ -67,7 +73,7 @@ final class SketchCamViewModel: ObservableObject {
                 self.cameraPermissionState = CameraPermissionManager.state
                 if granted {
                     self.settings.testPatternMode = false
-                    self.captureService.start(deviceID: self.selectedDeviceID)
+                    self.captureService.start(deviceID: self.selectedDeviceID, inputResolution: self.inputResolution)
                 } else {
                     self.settings.testPatternMode = true
                     self.errorText = "Camera permission denied; using test pattern."
@@ -94,7 +100,7 @@ final class SketchCamViewModel: ObservableObject {
     func selectCamera(_ id: String?) {
         selectedDeviceID = id
         guard cameraPermissionState == .authorized else { return }
-        captureService.start(deviceID: id)
+        captureService.start(deviceID: id, inputResolution: inputResolution)
     }
 
     func activateExtension() {
@@ -190,7 +196,7 @@ final class SketchCamViewModel: ObservableObject {
         // gets every frame; the UI gets a throttled, downscaled view of them.
         let now = CFAbsoluteTimeGetCurrent()
         var image: CGImage?
-        if now - lastPreviewTime >= previewInterval {
+        if settings.previewEnabled, now - lastPreviewTime >= previewInterval {
             lastPreviewTime = now
             image = timings.measure(.preview) {
                 switch settings.previewMode {

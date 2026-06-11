@@ -19,7 +19,10 @@ struct ContentView: View {
     private var previewPane: some View {
         ZStack {
             Color.black
-            if let previewImage = model.previewImage {
+            if !model.settings.previewEnabled {
+                Text("Preview off — still publishing")
+                    .foregroundStyle(.secondary)
+            } else if let previewImage = model.previewImage {
                 Image(previewImage, scale: 1, label: Text("SketchCam preview"))
                     .resizable()
                     .interpolation(.none)
@@ -61,11 +64,32 @@ struct ContentView: View {
 
                 Divider()
                 SectionHeader("Effect")
-                SliderRow(title: "Threshold", value: thresholdBinding)
-                SliderRow(title: "Outline", value: edgeBinding)
-                Toggle("Invert", isOn: $model.settings.invert)
+                Toggle("Effects (master)", isOn: $model.settings.effectsEnabled)
+                Group {
+                    Toggle("Threshold layer", isOn: $model.settings.thresholdEnabled)
+                    SliderRow(title: "Threshold", value: thresholdBinding)
+                    Toggle("Outline layer", isOn: $model.settings.outlineEnabled)
+                    SliderRow(title: "Outline", value: edgeBinding)
+                    Toggle("Invert", isOn: $model.settings.invert)
+                }
+                .disabled(!model.settings.effectsEnabled)
                 Toggle("Mirror", isOn: $model.settings.mirror)
                 Toggle("Test pattern", isOn: $model.settings.testPatternMode)
+
+                Divider()
+                SectionHeader("Performance")
+                Picker("Input", selection: $model.inputResolution) {
+                    ForEach(CameraInputResolution.allCases) { resolution in
+                        Text(resolution.title).tag(resolution)
+                    }
+                }
+                Picker("Processing", selection: $model.settings.processingQuality) {
+                    ForEach(ProcessingQuality.allCases) { quality in
+                        Text(quality.title).tag(quality)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Preview", isOn: $model.settings.previewEnabled)
 
                 Divider()
                 SectionHeader("Camera Extension")
