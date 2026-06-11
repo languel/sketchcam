@@ -289,17 +289,22 @@ public struct SegmentationSettings: Equatable, Sendable {
     public var enabled: Bool
     public var quality: SegmentationQuality
     public var mode: SegmentationMode
+    /// Flip the matte: the background region keeps the layers and the
+    /// person is keyed out instead.
+    public var inverted: Bool
     public var silhouetteColor: RGBAColor
 
     public init(
         enabled: Bool = false,
         quality: SegmentationQuality = .fast,
         mode: SegmentationMode = .cutout,
+        inverted: Bool = false,
         silhouetteColor: RGBAColor = .black
     ) {
         self.enabled = enabled
         self.quality = quality
         self.mode = mode
+        self.inverted = inverted
         self.silhouetteColor = silhouetteColor
     }
 }

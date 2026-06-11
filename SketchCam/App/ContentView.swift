@@ -104,6 +104,7 @@ struct ContentView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    Toggle("Invert key", isOn: $model.settings.segmentation.inverted)
                     if model.settings.segmentation.mode == .silhouette {
                         ColorPicker("Silhouette color", selection: silhouetteColorBinding, supportsOpacity: true)
                     }

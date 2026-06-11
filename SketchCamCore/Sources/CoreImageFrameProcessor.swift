@@ -142,10 +142,15 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                     // resolution — stretch to the source frame's geometry
                     // FIRST so the subsequent aspect-fill matches the video
                     // exactly; aspect-filling the raw matte misaligns it.
-                    let matteInSourceSpace = matte.transformed(by: CGAffineTransform(
+                    var matteInSourceSpace = matte.transformed(by: CGAffineTransform(
                         scaleX: source.extent.width / max(1, matte.extent.width),
                         y: source.extent.height / max(1, matte.extent.height)
                     ))
+                    if settings.segmentation.inverted {
+                        matteInSourceSpace = matteInSourceSpace
+                            .applyingFilter("CIColorInvert")
+                            .cropped(to: matteInSourceSpace.extent)
+                    }
                     let fittedMatte = Self.aspectFill(matteInSourceSpace, in: processingRect, mirrored: settings.mirror)
                     composed = foreground.cropped(to: processingRect).applyingFilter("CIBlendWithMask", parameters: [
                         kCIInputBackgroundImageKey: background,
