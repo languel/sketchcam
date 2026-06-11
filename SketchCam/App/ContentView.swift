@@ -8,23 +8,33 @@ struct ContentView: View {
         case layers = "Layers"
         case effect = "Effect"
         case marks = "Marks"
+        case keys = "Keys"
         case debug = "Debug"
 
         var id: String { rawValue }
     }
 
     @StateObject private var model = SketchCamViewModel()
+    @StateObject private var windowMode = WindowModeController()
+    @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
 
     var body: some View {
         HStack(spacing: 0) {
             previewPane
-            Divider()
-            controlsPane
+            if windowMode.panelVisible {
+                Divider()
+                controlsPane
+            }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { model.start() }
+        .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
+        .background(WindowAccessor(controller: windowMode))
+        .onAppear {
+            model.start()
+            registerShortcuts()
+            ShortcutRegistry.shared.start()
+        }
         .onDisappear { model.stop() }
     }
 
@@ -34,8 +44,11 @@ struct ContentView: View {
         ZStack {
             // Checkerboard backdrop so an Alpha background (or ink-only
             // threshold) is visibly transparent in the preview instead of
-            // reading as black.
-            CheckerboardBackground()
+            // reading as black. Hidden in transparent-window mode, where
+            // alpha must be ACTUALLY transparent.
+            if !windowMode.transparent {
+                CheckerboardBackground()
+            }
             if !model.settings.previewEnabled {
                 Text("Preview off — still publishing")
                     .foregroundStyle(.secondary)
@@ -76,6 +89,7 @@ struct ContentView: View {
                     case .layers: layersTab
                     case .effect: effectTab
                     case .marks: marksTab
+                    case .keys: keysTab
                     case .debug: debugTab
                     }
                 }
@@ -100,15 +114,13 @@ struct ContentView: View {
                     systemImage: isHeld ? "play.fill" : "pause.fill"
                 )
             }
-            .keyboardShortcut("f", modifiers: .command)
-            .help("Freeze live input / pause movie (⌘F)")
+            .help("Freeze live input / pause movie")
             Button {
                 model.exportCurrentFrame()
             } label: {
                 Label("Export", systemImage: "square.and.arrow.down")
             }
-            .keyboardShortcut("e", modifiers: .command)
-            .help("Export current frame as PNG (⌘E)")
+            .help("Export current frame as PNG")
         }
         .controlSize(.small)
     }
@@ -189,6 +201,22 @@ struct ContentView: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         Toggle("Show preview", isOn: $model.settings.previewEnabled)
+
+        SectionHeader("Window")
+        HStack {
+            Toggle("Panel", isOn: $windowMode.panelVisible)
+            Toggle("Decoration", isOn: $windowMode.decorated)
+        }
+        .toggleStyle(.checkbox)
+        HStack {
+            Toggle("Transparent", isOn: $windowMode.transparent)
+            Toggle("On top", isOn: $windowMode.alwaysOnTop)
+        }
+        .toggleStyle(.checkbox)
+        Button(windowMode.presentationMode ? "Exit Presentation Mode" : "Presentation Mode") {
+            windowMode.togglePresentationMode()
+        }
+        .controlSize(.small)
 
         SectionHeader("Camera Extension")
         HStack {
@@ -365,6 +393,66 @@ struct ContentView: View {
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    // MARK: - Keys tab
+
+    @ViewBuilder private var keysTab: some View {
+        let grouped = Dictionary(grouping: shortcuts.actions, by: \.category)
+        ForEach(grouped.keys.sorted(), id: \.self) { category in
+            SectionHeader(category)
+            ForEach(grouped[category] ?? []) { action in
+                HStack {
+                    Text(action.title)
+                    Spacer()
+                    Button {
+                        shortcuts.recordingActionID = shortcuts.recordingActionID == action.id ? nil : action.id
+                    } label: {
+                        Text(shortcuts.recordingActionID == action.id
+                             ? "press keys…"
+                             : (shortcuts.bindings[action.id]?.display ?? "—"))
+                            .monospaced()
+                            .frame(minWidth: 70)
+                    }
+                    Button {
+                        shortcuts.resetBinding(for: action.id)
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .disabled(shortcuts.isDefault(action.id))
+                    .help("Reset to default")
+                    Button {
+                        shortcuts.setBinding(nil, for: action.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .disabled(shortcuts.bindings[action.id] == nil)
+                    .help("Remove binding")
+                }
+                .controlSize(.small)
+            }
+        }
+        Text("Click a binding, then press the new keys. Esc cancels. Assigning a combo steals it from any conflicting action.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func registerShortcuts() {
+        let r = ShortcutRegistry.shared
+        r.register(id: "transport.freezePause", title: "Freeze / Pause", category: "Transport",
+                   default: KeyBinding(key: "f", modifiers: .command)) { [weak model] in model?.toggleFreezeOrPause() }
+        r.register(id: "transport.export", title: "Export Frame", category: "Transport",
+                   default: KeyBinding(key: "e", modifiers: .command)) { [weak model] in model?.exportCurrentFrame() }
+        r.register(id: "window.panel", title: "Toggle Side Panel", category: "Window",
+                   default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.panelVisible.toggle() }
+        r.register(id: "window.decoration", title: "Toggle Window Decoration", category: "Window",
+                   default: KeyBinding(key: "d", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.decorated.toggle() }
+        r.register(id: "window.transparent", title: "Toggle Transparent Window", category: "Window",
+                   default: KeyBinding(key: "t", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.transparent.toggle() }
+        r.register(id: "window.onTop", title: "Toggle Always on Top", category: "Window",
+                   default: KeyBinding(key: "t", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.alwaysOnTop.toggle() }
+        r.register(id: "window.presentation", title: "Presentation Mode", category: "Window",
+                   default: KeyBinding(key: "p", modifiers: .command)) { [weak windowMode] in windowMode?.togglePresentationMode() }
     }
 
     // MARK: - Bindings

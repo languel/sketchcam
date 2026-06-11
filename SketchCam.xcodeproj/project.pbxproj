@@ -12,10 +12,12 @@
 		1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */; };
 		1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A62B38FB62959937129F6F /* ProcessingSettings.swift */; };
 		1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */; };
+		27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
 		3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */; };
 		4BDCEC52901FF67A5655DEA1 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
+		55B7B7BC977F976FD6E95357 /* WindowModeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */; };
 		57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */; };
 		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
 		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
@@ -143,9 +145,11 @@
 		8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineTimings.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
+		A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRegistry.swift; sourceTree = "<group>"; };
 		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
 		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
+		B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowModeController.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
 		B53093F3EB6121C4B7899971 /* SegmentationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentationService.swift; sourceTree = "<group>"; };
 		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
@@ -241,8 +245,10 @@
 			children = (
 				96EBEE96DC987956AD1E458A /* ContentView.swift */,
 				ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */,
+				A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */,
 				1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */,
 				168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */,
+				B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -579,11 +585,13 @@
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
 				B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */,
+				27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */,
 				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,
 				7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */,
 				C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */,
 				705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */,
 				6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */,
+				55B7B7BC977F976FD6E95357 /* WindowModeController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
