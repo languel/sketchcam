@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreGraphics
 import CoreImage
@@ -5,10 +6,40 @@ import CoreMedia
 import Foundation
 import SketchCamCore
 import SketchCamShared
+import UniformTypeIdentifiers
 
 final class SketchCamViewModel: ObservableObject {
+    enum FrameSource: String, CaseIterable, Identifiable {
+        case camera
+        case movie
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .camera: return "Camera"
+            case .movie: return "Movie"
+            }
+        }
+    }
+
     @Published var cameraDevices: [CameraDeviceOption] = []
     @Published var selectedDeviceID: String?
+    @Published var frameSource = FrameSource.camera {
+        didSet {
+            guard oldValue != frameSource else { return }
+            applyFrameSource()
+        }
+    }
+    @Published var movieURL: URL? {
+        didSet {
+            if frameSource == .movie {
+                applyFrameSource()
+            }
+        }
+    }
+    @Published var movieRate: Double = 1.0 {
+        didSet { movieSource.setRate(Float(movieRate)) }
+    }
     @Published var inputResolution = CameraInputResolution.vga {
         didSet {
             guard oldValue != inputResolution, cameraPermissionState == .authorized else { return }
@@ -32,6 +63,7 @@ final class SketchCamViewModel: ObservableObject {
 
     private let store = PipelineStateStore()
     private let captureService = CameraCaptureService()
+    private let movieSource = MoviePlaybackSource()
     // One CIContext for the whole pipeline (processor + preview): separate
     // contexts mean separate Metal queues/caches and extra GPU sync.
     private static let sharedCIContext = CIContext(options: [.cacheIntermediates: true])
@@ -66,6 +98,53 @@ final class SketchCamViewModel: ObservableObject {
         captureService.onSampleBuffer = { [weak self] sampleBuffer in
             self?.handleCameraSample(sampleBuffer)
         }
+        movieSource.onPixelBuffer = { [weak self] pixelBuffer in
+            self?.handleMovieFrame(pixelBuffer)
+        }
+    }
+
+    func openMoviePanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a movie to use as the frame source"
+        if panel.runModal() == .OK, let url = panel.url {
+            movieURL = url
+            frameSource = .movie
+        }
+    }
+
+    func openMovieURL(_ string: String) {
+        guard let url = URL(string: string), url.scheme?.hasPrefix("http") == true else { return }
+        movieURL = url
+        frameSource = .movie
+    }
+
+    private func applyFrameSource() {
+        switch frameSource {
+        case .camera:
+            movieSource.stop()
+            if cameraPermissionState == .authorized {
+                captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+            }
+        case .movie:
+            captureService.stop()
+            if let movieURL {
+                movieSource.play(url: movieURL, rate: Float(movieRate))
+                DispatchQueue.main.async {
+                    self.stats.cameraResolution = .zero
+                }
+            }
+        }
+    }
+
+    private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
+        guard beginCameraFrame() else { return }
+        process(
+            pixelBuffer: pixelBuffer,
+            timestamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            originalPixelBuffer: pixelBuffer
+        )
     }
 
     func start() {

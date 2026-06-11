@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var model = SketchCamViewModel()
+    @State private var movieURLField = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -43,13 +44,38 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 SectionHeader("SketchCam")
 
-                Picker("Camera", selection: Binding(
-                    get: { model.selectedDeviceID ?? "" },
-                    set: { model.selectCamera($0.isEmpty ? nil : $0) }
-                )) {
-                    ForEach(model.cameraDevices) { device in
-                        Text(device.name).tag(device.id)
+                Picker("Source", selection: $model.frameSource) {
+                    ForEach(SketchCamViewModel.FrameSource.allCases) { source in
+                        Text(source.title).tag(source)
                     }
+                }
+                .pickerStyle(.segmented)
+
+                if model.frameSource == .camera {
+                    Picker("Camera", selection: Binding(
+                        get: { model.selectedDeviceID ?? "" },
+                        set: { model.selectCamera($0.isEmpty ? nil : $0) }
+                    )) {
+                        ForEach(model.cameraDevices) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                } else {
+                    HStack {
+                        Button("Open Movie…") { model.openMoviePanel() }
+                        Text(model.movieURL?.lastPathComponent ?? "No movie selected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    HStack {
+                        TextField("https://… (stream or media URL)", text: $movieURLField)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Load") { model.openMovieURL(movieURLField) }
+                            .disabled(movieURLField.isEmpty)
+                    }
+                    SliderRow(title: "Speed", value: $model.movieRate, range: 0.1...2)
                 }
 
                 Picker("Output", selection: $model.outputFormat) {
