@@ -7,6 +7,7 @@ import SketchCamShared
 public final class CoreImageFrameProcessor: FrameProcessor {
     private let context: CIContext
     private let thresholdKernel: CIColorKernel
+    private let edgeMaskKernel: CIColorKernel
     private let edgeColorKernel: CIColorKernel
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     // Pooled output buffers + cached format description: per-frame
@@ -29,10 +30,23 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             }
             """
         )!
+        // Binarize the raw edge response BEFORE dilation: any edge above the
+        // sensitivity cutoff becomes a solid stroke (narrow smoothstep band
+        // for antialiasing). Without this, stroke opacity tracks edge
+        // intensity and soft edges render as a washy translucent blur.
+        self.edgeMaskKernel = CIColorKernel(source:
+            """
+            kernel vec4 sketchcam_edge_mask(__sample edge, float cutoff) {
+                float luminance = dot(edge.rgb, vec3(0.333, 0.333, 0.333));
+                float v = smoothstep(cutoff - 0.04, cutoff + 0.04, luminance);
+                return vec4(v, v, v, 1.0);
+            }
+            """
+        )!
         self.edgeColorKernel = CIColorKernel(source:
             """
-            kernel vec4 sketchcam_edge_color(__sample edge, vec4 strokeColor, float strength) {
-                float a = clamp(dot(edge.rgb, vec3(0.333, 0.333, 0.333)) * strength, 0.0, 1.0) * strokeColor.a;
+            kernel vec4 sketchcam_edge_color(__sample mask, vec4 strokeColor) {
+                float a = clamp(dot(mask.rgb, vec3(0.333, 0.333, 0.333)), 0.0, 1.0) * strokeColor.a;
                 return vec4(strokeColor.rgb * a, a);
             }
             """
@@ -115,7 +129,16 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 let edges = mono
                     .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: CGFloat(1 + settings.edgeStrength * 6)])
                     .cropped(to: processingRect)
-                let thickened = Self.thicken(edges, radius: settings.outlineThickness)
+                // Strength = edge sensitivity: low keeps only strong
+                // contours, high picks up fine detail. The cutoff binarizes
+                // the response so strokes are solid color, then dilation
+                // thickens the solid mask.
+                let cutoff = CGFloat(0.55 - 0.5 * min(1, max(0, settings.edgeStrength)))
+                let mask = edgeMaskKernel.apply(
+                    extent: processingRect,
+                    arguments: [edges, cutoff]
+                ) ?? edges
+                let thickened = Self.thicken(mask, radius: settings.outlineThickness)
                 strokes = edgeColorKernel.apply(
                     extent: processingRect,
                     arguments: [
@@ -125,8 +148,7 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                             y: CGFloat(settings.outlineColor.green),
                             z: CGFloat(settings.outlineColor.blue),
                             w: CGFloat(settings.outlineColor.alpha)
-                        ),
-                        CGFloat(0.5 + settings.edgeStrength * 2.5)
+                        )
                     ]
                 )
             }
