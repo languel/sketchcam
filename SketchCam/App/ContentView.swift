@@ -160,6 +160,9 @@ private struct DebugGrid: View {
             row("Frame", "\(stats.frameIndex)")
             row("Virtual", stats.virtualCameraStatus)
             row("Threshold", String(format: "%.2f", threshold))
+            ForEach(stats.stageMillis, id: \.stage) { entry in
+                row(entry.stage.displayName, String(format: "%.1f ms", entry.millis))
+            }
         }
         .font(.caption)
     }

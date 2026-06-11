@@ -8,6 +8,7 @@ struct DebugStats {
     var fps: Double = 0
     var frameIndex: Int = 0
     var virtualCameraStatus: String = "Disconnected"
+    var stageMillis: [(stage: PipelineStage, millis: Double)] = []
 
     var cameraResolutionText: String {
         guard cameraResolution != .zero else { return "Test pattern" }

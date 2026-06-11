@@ -23,6 +23,7 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
+    private let timings = PipelineTimings()
     private var frameIndex = 0
     private var fpsStartTime = CFAbsoluteTimeGetCurrent()
     private var fpsFrameCount = 0
@@ -118,17 +119,22 @@ final class SketchCamViewModel: ObservableObject {
     private func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime, originalPixelBuffer: CVPixelBuffer) {
         processingQueue.async { [weak self] in
             guard let self else { return }
-            let settings = self.settingsSnapshot()
-            let outputFormat = self.outputFormatSnapshot()
+            let frameStart = CFAbsoluteTimeGetCurrent()
+            let (settings, outputFormat) = self.timings.measure(.snapshot) {
+                (self.settingsSnapshot(), self.outputFormatSnapshot())
+            }
             do {
-                let processed = try self.processor.process(
-                    pixelBuffer: pixelBuffer,
-                    settings: settings,
-                    outputFormat: outputFormat,
-                    frameIndex: self.nextFrameIndex(),
-                    timestamp: timestamp
-                )
+                let processed = try self.timings.measure(.process) {
+                    try self.processor.process(
+                        pixelBuffer: pixelBuffer,
+                        settings: settings,
+                        outputFormat: outputFormat,
+                        frameIndex: self.nextFrameIndex(),
+                        timestamp: timestamp
+                    )
+                }
                 self.publish(frame: processed.pixelBuffer, sampleBuffer: processed.sampleBuffer, originalPixelBuffer: originalPixelBuffer)
+                self.timings.record(.total, seconds: CFAbsoluteTimeGetCurrent() - frameStart)
             } catch {
                 self.publishError(error)
             }
@@ -138,24 +144,29 @@ final class SketchCamViewModel: ObservableObject {
     private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
         let settings = settingsSnapshot()
         let outputFormat = outputFormatSnapshot()
-        let image: CGImage?
-        switch settings.previewMode {
-        case .processed:
-            image = previewRenderer.makeImage(from: pixelBuffer)
-        case .original:
-            image = previewRenderer.makeImage(from: originalPixelBuffer)
-        case .split:
-            image = previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
+        let image: CGImage? = timings.measure(.preview) {
+            switch settings.previewMode {
+            case .processed:
+                return previewRenderer.makeImage(from: pixelBuffer)
+            case .original:
+                return previewRenderer.makeImage(from: originalPixelBuffer)
+            case .split:
+                return previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
+            }
         }
 
-        publisher.publish(sampleBuffer)
+        timings.measure(.publish) {
+            publisher.publish(sampleBuffer)
+        }
         let fps = updateFPS()
+        let stageMillis = timings.snapshotMillis()
         DispatchQueue.main.async {
             self.previewImage = image
             self.stats.outputFormat = outputFormat
             self.stats.fps = fps
             self.stats.frameIndex = self.frameIndex
             self.stats.virtualCameraStatus = self.publisher.status.displayText
+            self.stats.stageMillis = stageMillis
             self.errorText = nil
         }
     }
