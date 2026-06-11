@@ -110,12 +110,13 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 }
             }
 
+            var strokes: CIImage?
             if effectsActive, settings.outlineEnabled, settings.edgeStrength > 0.001 {
                 let edges = mono
                     .applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: CGFloat(1 + settings.edgeStrength * 6)])
                     .cropped(to: processingRect)
                 let thickened = Self.thicken(edges, radius: settings.outlineThickness)
-                let strokes = edgeColorKernel.apply(
+                strokes = edgeColorKernel.apply(
                     extent: processingRect,
                     arguments: [
                         thickened,
@@ -128,45 +129,65 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                         CGFloat(0.5 + settings.edgeStrength * 2.5)
                     ]
                 )
-                if let strokes {
-                    foreground = foreground.map { strokes.composited(over: $0) } ?? strokes
-                }
+            }
+            // Without a matte the strokes are just the top of the
+            // foreground stack. With a matte they stay separate: the
+            // outline belongs to the SUBJECT, so it is masked by the
+            // person matte (never inverted) and composited on top after
+            // the key — inverting the key must not move the outline to
+            // the background region.
+            if matte == nil, let strokes {
+                foreground = foreground.map { strokes.composited(over: $0) } ?? strokes
             }
 
             let composed: CIImage
-            if let foreground {
-                if let matte {
-                    // Person key: foreground only where the matte says
-                    // "person"; background everywhere else.
-                    // Vision mattes come back at their own (often square)
-                    // resolution — stretch to the source frame's geometry
-                    // FIRST so the subsequent aspect-fill matches the video
-                    // exactly; aspect-filling the raw matte misaligns it.
-                    var matteInSourceSpace = matte.transformed(by: CGAffineTransform(
-                        scaleX: source.extent.width / max(1, matte.extent.width),
-                        y: source.extent.height / max(1, matte.extent.height)
-                    ))
-                    if settings.segmentation.inverted {
-                        matteInSourceSpace = matteInSourceSpace
-                            .applyingFilter("CIColorInvert")
-                            .cropped(to: matteInSourceSpace.extent)
-                    }
-                    let fittedMatte = Self.aspectFill(matteInSourceSpace, in: processingRect, mirrored: settings.mirror)
-                    composed = foreground.cropped(to: processingRect).applyingFilter("CIBlendWithMask", parameters: [
-                        kCIInputBackgroundImageKey: background,
-                        kCIInputMaskImageKey: fittedMatte
-                    ]).cropped(to: processingRect)
+            if let matte {
+                // Vision mattes come back at their own (often square)
+                // resolution — stretch to the source frame's geometry
+                // FIRST so the subsequent aspect-fill matches the video
+                // exactly; aspect-filling the raw matte misaligns it.
+                let matteInSourceSpace = matte.transformed(by: CGAffineTransform(
+                    scaleX: source.extent.width / max(1, matte.extent.width),
+                    y: source.extent.height / max(1, matte.extent.height)
+                ))
+                let personMatte = Self.aspectFill(matteInSourceSpace, in: processingRect, mirrored: settings.mirror)
+                let keyMatte: CIImage
+                if settings.segmentation.inverted {
+                    keyMatte = personMatte
+                        .applyingFilter("CIColorInvert")
+                        .cropped(to: personMatte.extent)
                 } else {
-                    // The video layer is opaque (raw video, or threshold in
-                    // paper mode) — skip the composite. Ink-only threshold
-                    // has real alpha and must blend over the background.
-                    let videoLayerOpaque = settings.inputLayerEnabled
-                        && !(effectsActive && settings.thresholdEnabled && settings.thresholdInkOnly)
-                    if videoLayerOpaque {
-                        composed = foreground.cropped(to: processingRect)
-                    } else {
-                        composed = foreground.composited(over: background).cropped(to: processingRect)
-                    }
+                    keyMatte = personMatte
+                }
+
+                // Person key: foreground only where the (possibly inverted)
+                // key matte allows; background everywhere else.
+                var keyed = (foreground ?? CIImage(color: .clear).cropped(to: processingRect))
+                    .cropped(to: processingRect)
+                    .applyingFilter("CIBlendWithMask", parameters: [
+                        kCIInputBackgroundImageKey: background,
+                        kCIInputMaskImageKey: keyMatte
+                    ])
+                    .cropped(to: processingRect)
+
+                if let strokes {
+                    let subjectStrokes = strokes.applyingFilter("CIBlendWithMask", parameters: [
+                        kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: processingRect),
+                        kCIInputMaskImageKey: personMatte
+                    ]).cropped(to: processingRect)
+                    keyed = subjectStrokes.composited(over: keyed).cropped(to: processingRect)
+                }
+                composed = keyed
+            } else if let foreground {
+                // The video layer is opaque (raw video, or threshold in
+                // paper mode) — skip the composite. Ink-only threshold
+                // has real alpha and must blend over the background.
+                let videoLayerOpaque = settings.inputLayerEnabled
+                    && !(effectsActive && settings.thresholdEnabled && settings.thresholdInkOnly)
+                if videoLayerOpaque {
+                    composed = foreground.cropped(to: processingRect)
+                } else {
+                    composed = foreground.composited(over: background).cropped(to: processingRect)
                 }
             } else {
                 composed = background
