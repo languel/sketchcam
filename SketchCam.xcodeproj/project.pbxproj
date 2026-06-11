@@ -32,6 +32,7 @@
 		C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
 		C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */; };
 		CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */; };
+		CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */; };
 		D4573A47D80FD6C10D3FA006 /* SketchCamCameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */; };
 		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
@@ -132,6 +133,7 @@
 		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
+		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
 		C63392630883E5E55B589354 /* SketchCamCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionActivationManager.swift; sourceTree = "<group>"; };
 		CEAB9229D624BE20FB261892 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 			children = (
 				01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */,
 				61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */,
+				BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */,
 				50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */,
 			);
 			path = SketchCamCoreTests;
@@ -558,6 +561,7 @@
 			files = (
 				117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */,
 				AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */,
+				CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */,
 				EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
