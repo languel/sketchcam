@@ -97,3 +97,61 @@ public enum PixelBufferUtils {
     }
 }
 
+
+/// Reusable CVPixelBufferPool + cached format description for one format.
+/// Replaces per-frame CVPixelBufferCreate (a fresh IOSurface allocation every
+/// frame) on the hot path. Not thread-safe; confine each instance to one queue.
+public final class PixelBufferPool {
+    private var pool: CVPixelBufferPool?
+    private var format: FrameFormat?
+    private(set) public var formatDescription: CMVideoFormatDescription?
+
+    public init() {}
+
+    public func makeBuffer(format: FrameFormat) throws -> CVPixelBuffer {
+        if pool == nil || self.format != format {
+            try rebuild(format: format)
+        }
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool!, &buffer)
+        guard status == kCVReturnSuccess, let buffer else {
+            throw PixelBufferUtils.PixelBufferError.allocationFailed(status)
+        }
+        return buffer
+    }
+
+    private func rebuild(format: FrameFormat) throws {
+        let bufferAttributes: [CFString: Any] = [
+            kCVPixelBufferWidthKey: format.width,
+            kCVPixelBufferHeightKey: format.height,
+            kCVPixelBufferPixelFormatTypeKey: format.pixelFormat,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        let poolAttributes: [CFString: Any] = [
+            kCVPixelBufferPoolMinimumBufferCountKey: 4
+        ]
+        var newPool: CVPixelBufferPool?
+        let status = CVPixelBufferPoolCreate(
+            kCFAllocatorDefault,
+            poolAttributes as CFDictionary,
+            bufferAttributes as CFDictionary,
+            &newPool
+        )
+        guard status == kCVReturnSuccess, let newPool else {
+            throw PixelBufferUtils.PixelBufferError.allocationFailed(status)
+        }
+        pool = newPool
+        self.format = format
+        // Derive the description from a real pooled buffer so it satisfies
+        // CMSampleBufferCreateForImageBuffer's buffer-match validation.
+        var probe: CVPixelBuffer?
+        let probeStatus = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, newPool, &probe)
+        guard probeStatus == kCVReturnSuccess, let probe else {
+            throw PixelBufferUtils.PixelBufferError.allocationFailed(probeStatus)
+        }
+        formatDescription = try PixelBufferUtils.makeFormatDescription(pixelBuffer: probe)
+    }
+}

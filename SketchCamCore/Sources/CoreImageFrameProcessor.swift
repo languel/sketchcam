@@ -9,8 +9,12 @@ public final class CoreImageFrameProcessor: FrameProcessor {
     private let thresholdKernel: CIColorKernel
     private let edgeBlendKernel: CIColorKernel
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    // Pooled output buffers + cached format description: per-frame
+    // CVPixelBufferCreate is a fresh IOSurface allocation each time.
+    // Confined to the processing queue (process() is not reentrant).
+    private let outputPool = PixelBufferPool()
 
-    public init(context: CIContext = CIContext(options: [.cacheIntermediates: false])) {
+    public init(context: CIContext = CIContext(options: [.cacheIntermediates: true])) {
         self.context = context
         self.thresholdKernel = CIColorKernel(source:
             """
@@ -60,9 +64,13 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             finalImage = threshold
         }
 
-        let output = try PixelBufferUtils.makePixelBuffer(format: outputFormat)
+        let output = try outputPool.makeBuffer(format: outputFormat)
         context.render(finalImage, to: output, bounds: outputRect, colorSpace: colorSpace)
-        let sampleBuffer = try PixelBufferUtils.makeSampleBuffer(pixelBuffer: output, presentationTime: timestamp)
+        let sampleBuffer = try PixelBufferUtils.makeSampleBuffer(
+            pixelBuffer: output,
+            formatDescription: outputPool.formatDescription,
+            presentationTime: timestamp
+        )
         let state = SketchCamState(
             timestamp: timestamp.seconds,
             frameIndex: frameIndex,

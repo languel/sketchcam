@@ -5,12 +5,35 @@ import Foundation
 import SketchCamShared
 
 final class PreviewRenderer {
-    private let context = CIContext(options: [.cacheIntermediates: false])
+    /// The preview is a GPU→CPU readback (createCGImage); cap its size so the
+    /// readback and the SwiftUI image update stay cheap regardless of the
+    /// published output resolution.
+    static let maxPreviewWidth: CGFloat = 960
+
+    private let context: CIContext
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
+    init(context: CIContext = CIContext(options: [.cacheIntermediates: true])) {
+        self.context = context
+    }
+
     func makeImage(from pixelBuffer: CVPixelBuffer) -> CGImage? {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let image = downscaledForPreview(CIImage(cvPixelBuffer: pixelBuffer))
         return context.createCGImage(image, from: image.extent, format: .BGRA8, colorSpace: colorSpace)
+    }
+
+    private func downscaledForPreview(_ image: CIImage) -> CIImage {
+        let width = image.extent.width
+        guard width > Self.maxPreviewWidth else { return image }
+        let scale = Self.maxPreviewWidth / width
+        return image
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .cropped(to: CGRect(
+                x: 0,
+                y: 0,
+                width: (image.extent.width * scale).rounded(.down),
+                height: (image.extent.height * scale).rounded(.down)
+            ))
     }
 
     func makeSplitImage(original: CVPixelBuffer, processed: CVPixelBuffer, outputFormat: FrameFormat) -> CGImage? {
@@ -21,8 +44,8 @@ final class PreviewRenderer {
         let fittedProcessed = fit(processedImage, in: outputRect)
         let left = fittedOriginal.cropped(to: CGRect(x: 0, y: 0, width: outputRect.width / 2, height: outputRect.height))
         let right = fittedProcessed.cropped(to: CGRect(x: outputRect.width / 2, y: 0, width: outputRect.width / 2, height: outputRect.height))
-        let combined = right.composited(over: left).cropped(to: outputRect)
-        return context.createCGImage(combined, from: outputRect, format: .BGRA8, colorSpace: colorSpace)
+        let combined = downscaledForPreview(right.composited(over: left).cropped(to: outputRect))
+        return context.createCGImage(combined, from: combined.extent, format: .BGRA8, colorSpace: colorSpace)
     }
 
     private func fit(_ image: CIImage, in outputRect: CGRect) -> CIImage {

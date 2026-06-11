@@ -9,25 +9,43 @@ import SketchCamShared
 final class SketchCamViewModel: ObservableObject {
     @Published var cameraDevices: [CameraDeviceOption] = []
     @Published var selectedDeviceID: String?
-    @Published var settings = ProcessingSettings()
-    @Published var outputFormat = SketchCamFormats.defaultFormat
+    @Published var settings = ProcessingSettings() {
+        didSet { store.settings = settings }
+    }
+    @Published var outputFormat = SketchCamFormats.defaultFormat {
+        didSet { store.outputFormat = outputFormat }
+    }
     @Published var previewImage: CGImage?
     @Published var stats = DebugStats()
-    @Published var cameraPermissionState = CameraPermissionManager.state
+    @Published var cameraPermissionState = CameraPermissionManager.state {
+        didSet { store.permission = cameraPermissionState }
+    }
     @Published var errorText: String?
 
     let activationManager = ExtensionActivationManager()
 
+    private let store = PipelineStateStore()
     private let captureService = CameraCaptureService()
-    private let processor = CoreImageFrameProcessor()
-    private let previewRenderer = PreviewRenderer()
+    // One CIContext for the whole pipeline (processor + preview): separate
+    // contexts mean separate Metal queues/caches and extra GPU sync.
+    private static let sharedCIContext = CIContext(options: [.cacheIntermediates: true])
+    private let processor = CoreImageFrameProcessor(context: SketchCamViewModel.sharedCIContext)
+    private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
     private let timings = PipelineTimings()
+    private let frameGate = NSLock()
+    private var cameraFrameInFlight = false
+    private var lastPreviewTime: CFAbsoluteTime = 0
+    private var lastStatsTime: CFAbsoluteTime = 0
     private var frameIndex = 0
     private var fpsStartTime = CFAbsoluteTimeGetCurrent()
     private var fpsFrameCount = 0
     private var testPatternTimer: DispatchSourceTimer?
+
+    /// Preview readback cadence; publishing runs at full frame rate regardless.
+    private let previewInterval: CFAbsoluteTime = 1.0 / 12.0
+    private let statsInterval: CFAbsoluteTime = 0.25
 
     init() {
         captureService.onConfigurationChanged = { [weak self] size in
@@ -89,11 +107,28 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func handleCameraSample(_ sampleBuffer: CMSampleBuffer) {
-        guard !settingsSnapshot().testPatternMode,
+        guard !store.settings.testPatternMode,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
+        // Drop frames while one is in flight instead of queueing them up —
+        // backlog on the processing queue turns into unbounded latency.
+        guard beginCameraFrame() else { return }
         process(pixelBuffer: pixelBuffer, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: pixelBuffer)
+    }
+
+    private func beginCameraFrame() -> Bool {
+        frameGate.lock()
+        defer { frameGate.unlock() }
+        guard !cameraFrameInFlight else { return false }
+        cameraFrameInFlight = true
+        return true
+    }
+
+    private func endCameraFrame() {
+        frameGate.lock()
+        cameraFrameInFlight = false
+        frameGate.unlock()
     }
 
     private func startTestPatternTimer() {
@@ -101,11 +136,11 @@ final class SketchCamViewModel: ObservableObject {
         timer.schedule(deadline: .now(), repeating: 1.0 / 30.0, leeway: .milliseconds(5))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let snapshot = self.settingsSnapshot()
-            let permission = self.permissionSnapshot()
+            let snapshot = self.store.settings
+            let permission = self.store.permission
             guard snapshot.testPatternMode || permission != .authorized else { return }
             do {
-                let format = self.outputFormatSnapshot()
+                let format = self.store.outputFormat
                 let pattern = try TestPatternGenerator.makeFrame(format: format, frameIndex: self.nextFrameIndex())
                 self.publish(frame: pattern.pixelBuffer, sampleBuffer: pattern.sampleBuffer, originalPixelBuffer: pattern.pixelBuffer)
             } catch {
@@ -119,9 +154,10 @@ final class SketchCamViewModel: ObservableObject {
     private func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime, originalPixelBuffer: CVPixelBuffer) {
         processingQueue.async { [weak self] in
             guard let self else { return }
+            defer { self.endCameraFrame() }
             let frameStart = CFAbsoluteTimeGetCurrent()
             let (settings, outputFormat) = self.timings.measure(.snapshot) {
-                (self.settingsSnapshot(), self.outputFormatSnapshot())
+                (self.store.settings, self.store.outputFormat)
             }
             do {
                 let processed = try self.timings.measure(.process) {
@@ -142,32 +178,53 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
-        let settings = settingsSnapshot()
-        let outputFormat = outputFormatSnapshot()
-        let image: CGImage? = timings.measure(.preview) {
-            switch settings.previewMode {
-            case .processed:
-                return previewRenderer.makeImage(from: pixelBuffer)
-            case .original:
-                return previewRenderer.makeImage(from: originalPixelBuffer)
-            case .split:
-                return previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
-            }
-        }
+        let settings = store.settings
+        let outputFormat = store.outputFormat
 
         timings.measure(.publish) {
             publisher.publish(sampleBuffer)
         }
         let fps = updateFPS()
+
+        // Preview and stats are decoupled from publishing: the virtual camera
+        // gets every frame; the UI gets a throttled, downscaled view of them.
+        let now = CFAbsoluteTimeGetCurrent()
+        var image: CGImage?
+        if now - lastPreviewTime >= previewInterval {
+            lastPreviewTime = now
+            image = timings.measure(.preview) {
+                switch settings.previewMode {
+                case .processed:
+                    return previewRenderer.makeImage(from: pixelBuffer)
+                case .original:
+                    return previewRenderer.makeImage(from: originalPixelBuffer)
+                case .split:
+                    return previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
+                }
+            }
+        }
+
+        let shouldUpdateStats = now - lastStatsTime >= statsInterval
+        if shouldUpdateStats {
+            lastStatsTime = now
+        }
+        guard image != nil || shouldUpdateStats else { return }
+
         let stageMillis = timings.snapshotMillis()
+        let frameIndexSnapshot = frameIndex
+        let virtualStatus = publisher.status.displayText
         DispatchQueue.main.async {
-            self.previewImage = image
-            self.stats.outputFormat = outputFormat
-            self.stats.fps = fps
-            self.stats.frameIndex = self.frameIndex
-            self.stats.virtualCameraStatus = self.publisher.status.displayText
-            self.stats.stageMillis = stageMillis
-            self.errorText = nil
+            if let image {
+                self.previewImage = image
+            }
+            if shouldUpdateStats {
+                self.stats.outputFormat = outputFormat
+                self.stats.fps = fps
+                self.stats.frameIndex = frameIndexSnapshot
+                self.stats.virtualCameraStatus = virtualStatus
+                self.stats.stageMillis = stageMillis
+                self.errorText = nil
+            }
         }
     }
 
@@ -182,29 +239,18 @@ final class SketchCamViewModel: ObservableObject {
         return frameIndex
     }
 
+    private var lastFPS: Double = 0
+
     private func updateFPS() -> Double {
         fpsFrameCount += 1
         let now = CFAbsoluteTimeGetCurrent()
         let elapsed = now - fpsStartTime
         if elapsed >= 1 {
-            let fps = Double(fpsFrameCount) / elapsed
+            lastFPS = Double(fpsFrameCount) / elapsed
             fpsStartTime = now
             fpsFrameCount = 0
-            return fps
         }
-        return stats.fps
-    }
-
-    private func settingsSnapshot() -> ProcessingSettings {
-        DispatchQueue.main.sync { settings }
-    }
-
-    private func outputFormatSnapshot() -> FrameFormat {
-        DispatchQueue.main.sync { outputFormat }
-    }
-
-    private func permissionSnapshot() -> CameraPermissionState {
-        DispatchQueue.main.sync { cameraPermissionState }
+        return lastFPS
     }
 }
 
