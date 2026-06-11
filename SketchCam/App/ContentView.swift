@@ -81,7 +81,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                ColorPicker("Background color", selection: backgroundColorBinding, supportsOpacity: false)
+                ColorPicker("Background color", selection: backgroundColorBinding, supportsOpacity: true)
                     .disabled(model.settings.backgroundMode != .solid)
                 Toggle("Person key (Vision)", isOn: $model.settings.segmentation.enabled)
                     .onChange(of: model.settings.segmentation.enabled) { _, enabled in
