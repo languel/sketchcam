@@ -57,6 +57,10 @@ public struct ProcessingSettings: Equatable, Sendable {
     /// the output format and published untouched (no filters, no kernels).
     public var effectsEnabled: Bool
     public var thresholdEnabled: Bool
+    /// "Ink only": the threshold layer's white paper becomes transparent —
+    /// black ink on alpha — so the drawing composites over any background
+    /// (and survives into an Alpha-background export).
+    public var thresholdInkOnly: Bool
     public var outlineEnabled: Bool
     /// Outline stroke dilation radius in pixels (at processing resolution).
     public var outlineThickness: Float
@@ -82,6 +86,7 @@ public struct ProcessingSettings: Equatable, Sendable {
         previewMode: PreviewMode = .processed,
         effectsEnabled: Bool = true,
         thresholdEnabled: Bool = true,
+        thresholdInkOnly: Bool = false,
         outlineEnabled: Bool = true,
         outlineThickness: Float = 1,
         outlineColor: RGBAColor = .black,
@@ -101,6 +106,7 @@ public struct ProcessingSettings: Equatable, Sendable {
         self.previewMode = previewMode
         self.effectsEnabled = effectsEnabled
         self.thresholdEnabled = thresholdEnabled
+        self.thresholdInkOnly = thresholdInkOnly
         self.outlineEnabled = outlineEnabled
         self.outlineThickness = outlineThickness
         self.outlineColor = outlineColor
@@ -260,12 +266,40 @@ public enum SegmentationQuality: String, CaseIterable, Identifiable, Sendable {
 /// layer + outline) is masked to the detected person and composited over the
 /// background. MediaPipe selfie segmentation has no official macOS runtime;
 /// Vision runs on the ANE and is the native equivalent.
+/// How the person matte is used.
+public enum SegmentationMode: String, CaseIterable, Identifiable, Sendable {
+    /// The matte masks the consecutive layers (video/threshold/outline):
+    /// they render only inside the person, background elsewhere.
+    case cutout
+    /// The matte itself is drawn as a flat colored silhouette (outline
+    /// strokes still composite on top, masked to the person).
+    case silhouette
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .cutout: return "Cutout"
+        case .silhouette: return "Silhouette"
+        }
+    }
+}
+
 public struct SegmentationSettings: Equatable, Sendable {
     public var enabled: Bool
     public var quality: SegmentationQuality
+    public var mode: SegmentationMode
+    public var silhouetteColor: RGBAColor
 
-    public init(enabled: Bool = false, quality: SegmentationQuality = .fast) {
+    public init(
+        enabled: Bool = false,
+        quality: SegmentationQuality = .fast,
+        mode: SegmentationMode = .cutout,
+        silhouetteColor: RGBAColor = .black
+    ) {
         self.enabled = enabled
         self.quality = quality
+        self.mode = mode
+        self.silhouetteColor = silhouetteColor
     }
 }

@@ -18,11 +18,14 @@ public final class CoreImageFrameProcessor: FrameProcessor {
         self.context = context
         self.thresholdKernel = CIColorKernel(source:
             """
-            kernel vec4 sketchcam_threshold(__sample pixel, float threshold, float invert) {
+            kernel vec4 sketchcam_threshold(__sample pixel, float threshold, float invert, float inkOnly) {
                 float luminance = dot(pixel.rgb, vec3(0.299, 0.587, 0.114));
                 float value = step(threshold, luminance);
                 value = mix(value, 1.0 - value, step(0.5, invert));
-                return vec4(value, value, value, 1.0);
+                // normal: opaque paper+ink; inkOnly: black ink on transparent paper
+                vec4 opaque = vec4(value, value, value, 1.0);
+                vec4 inked = vec4(0.0, 0.0, 0.0, 1.0 - value);
+                return mix(opaque, inked, step(0.5, inkOnly));
             }
             """
         )!
@@ -81,11 +84,26 @@ public final class CoreImageFrameProcessor: FrameProcessor {
 
             // Foreground stack: video layer + outline strokes.
             var foreground: CIImage?
-            if settings.inputLayerEnabled {
+            if matte != nil, settings.segmentation.mode == .silhouette {
+                // Silhouette mode: the person becomes a flat color fill
+                // (the matte itself is the visual); outline strokes still
+                // composite on top below, masked with the rest.
+                foreground = CIImage(color: CIColor(
+                    red: CGFloat(settings.segmentation.silhouetteColor.red),
+                    green: CGFloat(settings.segmentation.silhouetteColor.green),
+                    blue: CGFloat(settings.segmentation.silhouetteColor.blue),
+                    alpha: CGFloat(settings.segmentation.silhouetteColor.alpha)
+                )).cropped(to: processingRect)
+            } else if settings.inputLayerEnabled {
                 if effectsActive, settings.thresholdEnabled {
                     foreground = thresholdKernel.apply(
                         extent: processingRect,
-                        arguments: [mono, CGFloat(settings.threshold), settings.invert ? CGFloat(1) : CGFloat(0)]
+                        arguments: [
+                            mono,
+                            CGFloat(settings.threshold),
+                            settings.invert ? CGFloat(1) : CGFloat(0),
+                            settings.thresholdInkOnly ? CGFloat(1) : CGFloat(0)
+                        ]
                     ) ?? mono
                 } else {
                     foreground = fitted
@@ -133,11 +151,17 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                         kCIInputBackgroundImageKey: background,
                         kCIInputMaskImageKey: fittedMatte
                     ]).cropped(to: processingRect)
-                } else if settings.inputLayerEnabled, settings.backgroundMode == .live || (effectsActive && settings.thresholdEnabled) {
-                    // Opaque video/threshold layer fully covers the background.
-                    composed = foreground.cropped(to: processingRect)
                 } else {
-                    composed = foreground.composited(over: background).cropped(to: processingRect)
+                    // The video layer is opaque (raw video, or threshold in
+                    // paper mode) — skip the composite. Ink-only threshold
+                    // has real alpha and must blend over the background.
+                    let videoLayerOpaque = settings.inputLayerEnabled
+                        && !(effectsActive && settings.thresholdEnabled && settings.thresholdInkOnly)
+                    if videoLayerOpaque {
+                        composed = foreground.cropped(to: processingRect)
+                    } else {
+                        composed = foreground.composited(over: background).cropped(to: processingRect)
+                    }
                 }
             } else {
                 composed = background

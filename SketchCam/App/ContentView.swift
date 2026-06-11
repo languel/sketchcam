@@ -18,7 +18,10 @@ struct ContentView: View {
 
     private var previewPane: some View {
         ZStack {
-            Color.black
+            // Checkerboard backdrop so an Alpha background (or ink-only
+            // threshold) is visibly transparent in the preview instead of
+            // reading as black.
+            CheckerboardBackground()
             if !model.settings.previewEnabled {
                 Text("Preview off — still publishing")
                     .foregroundStyle(.secondary)
@@ -95,6 +98,15 @@ struct ContentView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    Picker("Key mode", selection: $model.settings.segmentation.mode) {
+                        ForEach(SegmentationMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    if model.settings.segmentation.mode == .silhouette {
+                        ColorPicker("Silhouette color", selection: silhouetteColorBinding, supportsOpacity: true)
+                    }
                 }
 
                 Divider()
@@ -103,6 +115,7 @@ struct ContentView: View {
                 Group {
                     Toggle("Threshold layer", isOn: $model.settings.thresholdEnabled)
                     SliderRow(title: "Threshold", value: thresholdBinding)
+                    Toggle("Ink only (transparent paper)", isOn: $model.settings.thresholdInkOnly)
                     Toggle("Outline layer", isOn: $model.settings.outlineEnabled)
                     SliderRow(title: "Outline", value: edgeBinding)
                     SliderRow(title: "Thickness", value: outlineThicknessBinding, range: 0...24)
@@ -206,6 +219,10 @@ struct ContentView: View {
 
     private var outlineColorBinding: Binding<Color> {
         rgbaBinding(\.outlineColor)
+    }
+
+    private var silhouetteColorBinding: Binding<Color> {
+        rgbaBinding(\.segmentation.silhouetteColor)
     }
 
     private var backgroundColorBinding: Binding<Color> {
@@ -322,3 +339,25 @@ private struct DebugGrid: View {
     }
 }
 
+
+private struct CheckerboardBackground: View {
+    var body: some View {
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.10)))
+            let square: CGFloat = 12
+            var path = Path()
+            var y: CGFloat = 0
+            var row = 0
+            while y < size.height {
+                var x: CGFloat = row.isMultiple(of: 2) ? 0 : square
+                while x < size.width {
+                    path.addRect(CGRect(x: x, y: y, width: square, height: square))
+                    x += square * 2
+                }
+                y += square
+                row += 1
+            }
+            context.fill(path, with: .color(Color(white: 0.16)))
+        }
+    }
+}
