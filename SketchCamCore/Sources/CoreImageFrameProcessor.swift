@@ -120,7 +120,15 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 if let matte {
                     // Person key: foreground only where the matte says
                     // "person"; background everywhere else.
-                    let fittedMatte = Self.aspectFill(matte, in: processingRect, mirrored: settings.mirror)
+                    // Vision mattes come back at their own (often square)
+                    // resolution — stretch to the source frame's geometry
+                    // FIRST so the subsequent aspect-fill matches the video
+                    // exactly; aspect-filling the raw matte misaligns it.
+                    let matteInSourceSpace = matte.transformed(by: CGAffineTransform(
+                        scaleX: source.extent.width / max(1, matte.extent.width),
+                        y: source.extent.height / max(1, matte.extent.height)
+                    ))
+                    let fittedMatte = Self.aspectFill(matteInSourceSpace, in: processingRect, mirrored: settings.mirror)
                     composed = foreground.cropped(to: processingRect).applyingFilter("CIBlendWithMask", parameters: [
                         kCIInputBackgroundImageKey: background,
                         kCIInputMaskImageKey: fittedMatte

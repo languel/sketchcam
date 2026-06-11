@@ -251,3 +251,26 @@ New on perf/pipeline:
   background instead of darkening the threshold image.
 - Throughput guards: keyed+solid+thick-outline 1.31 ms/frame,
   outline-on-alpha 1.28 ms/frame (both 1080p).
+
+## Next architecture step: layer stack (sketched 2026-06-11)
+
+User direction: Photoshop-style layers — an ordered stack where each layer
+has a source (live video, threshold effect, outline strokes, landmark
+doodle, solid color), per-layer params, opacity/blend, and an OPTIONAL mask
+(person matte today; face/hands region mattes later). The current
+implementation is a fixed stack (background → video/threshold → outline →
+doodle) with one global matte applied to the foreground group.
+
+Suggested model when we take this on:
+
+```swift
+struct Layer { var source: LayerSource; var enabled: Bool; var opacity: Float;
+               var mask: LayerMask?   // none | person | invertedPerson | ...
+               var params: LayerParams }
+// Pipeline folds the stack bottom-up: image = blend(layer.render(matte:), image)
+```
+
+The CI DAG composes this naturally and all sources/mattes are already
+CIImages, so the refactor is mostly settings-model + UI work, not pipeline
+work. Defer until the fixed stack stops being enough; the matte plumbing
+(scale-to-source-space then aspect-fill) is the part that must be reused.

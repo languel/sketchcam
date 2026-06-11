@@ -65,16 +65,29 @@ struct ContentView: View {
                 Divider()
                 SectionHeader("Layers")
                 Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
+                    .onChange(of: model.settings.inputLayerEnabled) { _, enabled in
+                        // With the input layer off, a "Live" background would
+                        // still show the raw video — switch to a real canvas.
+                        if !enabled, model.settings.backgroundMode == .live {
+                            model.settings.backgroundMode = .solid
+                        }
+                    }
                 Picker("Background", selection: $model.settings.backgroundMode) {
                     ForEach(BackgroundMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
-                if model.settings.backgroundMode == .solid {
-                    ColorPicker("Background color", selection: backgroundColorBinding, supportsOpacity: false)
-                }
+                ColorPicker("Background color", selection: backgroundColorBinding, supportsOpacity: false)
+                    .disabled(model.settings.backgroundMode != .solid)
                 Toggle("Person key (Vision)", isOn: $model.settings.segmentation.enabled)
+                    .onChange(of: model.settings.segmentation.enabled) { _, enabled in
+                        // Keying against a live background is a visual no-op;
+                        // default to replacing the background when enabled.
+                        if enabled, model.settings.backgroundMode == .live {
+                            model.settings.backgroundMode = .solid
+                        }
+                    }
                 if model.settings.segmentation.enabled {
                     Picker("Key quality", selection: $model.settings.segmentation.quality) {
                         ForEach(SegmentationQuality.allCases) { quality in
