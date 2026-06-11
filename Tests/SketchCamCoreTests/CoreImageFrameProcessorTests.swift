@@ -46,3 +46,42 @@ final class CoreImageFrameProcessorTests: XCTestCase {
     }
 }
 
+
+extension CoreImageFrameProcessorTests {
+    /// Ink-only threshold over an Alpha background must produce real
+    /// transparency (alpha 0) in paper regions of the published buffer.
+    func testInkOnlyThresholdProducesTransparentPaper() throws {
+        var settings = ProcessingSettings()
+        settings.thresholdInkOnly = true
+        settings.backgroundMode = .transparent
+        settings.outlineEnabled = false
+        settings.mirror = false
+        let format = SketchCamFormats.low
+        let input = try TestPatternGenerator.makeFrame(format: format, frameIndex: 0).pixelBuffer
+        let processor = CoreImageFrameProcessor()
+        let frame = try processor.process(pixelBuffer: input, settings: settings, outputFormat: format, frameIndex: 0, timestamp: .zero)
+
+        let output = frame.pixelBuffer
+        CVPixelBufferLockBaseAddress(output, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(output, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(output) else {
+            return XCTFail("no base address")
+        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(output)
+        let width = CVPixelBufferGetWidth(output)
+        let height = CVPixelBufferGetHeight(output)
+        let pixels = base.assumingMemoryBound(to: UInt8.self)
+
+        var minAlpha: UInt8 = 255
+        var maxAlpha: UInt8 = 0
+        for y in stride(from: 0, to: height, by: 8) {
+            for x in stride(from: 0, to: width, by: 8) {
+                let alpha = pixels[y * bytesPerRow + x * 4 + 3]  // BGRA
+                minAlpha = min(minAlpha, alpha)
+                maxAlpha = max(maxAlpha, alpha)
+            }
+        }
+        XCTAssertLessThan(minAlpha, 10, "paper regions must be transparent")
+        XCTAssertGreaterThan(maxAlpha, 245, "ink regions must be opaque")
+    }
+}
