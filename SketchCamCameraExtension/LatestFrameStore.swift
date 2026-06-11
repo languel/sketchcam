@@ -17,14 +17,17 @@ final class LatestFrameStore {
         lock.unlock()
     }
 
-    func latest(format: FrameFormat, maxAge: TimeInterval) -> CMSampleBuffer? {
+    /// Returns the most recent host frame regardless of its dimensions —
+    /// the provider rescales to the consumer-negotiated format when needed.
+    /// (Rejecting mismatched sizes here is what caused the fallback stripes
+    /// whenever the app's output resolution differed from what the consumer
+    /// negotiated.)
+    func latest(maxAge: TimeInterval) -> CMSampleBuffer? {
         lock.lock()
         defer { lock.unlock() }
         guard Date().timeIntervalSince(updateTime) <= maxAge,
               let sampleBuffer,
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              CVPixelBufferGetWidth(pixelBuffer) == format.width,
-              CVPixelBufferGetHeight(pixelBuffer) == format.height else {
+              CMSampleBufferGetImageBuffer(sampleBuffer) != nil else {
             return nil
         }
         return sampleBuffer

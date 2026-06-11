@@ -11,6 +11,7 @@ final class SketchCamCameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private(set) var device: CMIOExtensionDevice!
 
     private let frameStore = LatestFrameStore()
+    private let frameScaler = FrameScaler()
     private let timerQueue = DispatchQueue(label: "io.github.languel.sketchcam.camera-extension.timer", qos: .userInteractive)
     private let sinkQueue = DispatchQueue(label: "io.github.languel.sketchcam.camera-extension.sink", qos: .userInitiated)
     private var sourceStreamSource: SketchCamSourceStreamSource!
@@ -121,8 +122,12 @@ final class SketchCamCameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
         do {
             let format = activeFormat
             let sampleBuffer: CMSampleBuffer
-            if let latest = frameStore.latest(format: format, maxAge: 1.0) {
-                sampleBuffer = latest
+            if let latest = frameStore.latest(maxAge: 1.0) {
+                // The host app's output resolution and the consumer-negotiated
+                // stream format can differ (e.g. the user switches the app to
+                // 720p while QuickTime negotiated 1080p) — rescale instead of
+                // dropping to the fallback pattern.
+                sampleBuffer = try frameScaler.scaleIfNeeded(latest, to: format)
             } else {
                 sampleBuffer = try FallbackTestPatternGenerator.makeSampleBuffer(format: format, frameIndex: frameIndex)
             }
