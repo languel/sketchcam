@@ -53,3 +53,16 @@ struct LandmarkDetection {
     /// Pixel size of the frame the normalized coordinates refer to.
     var sourceSize: CGSize
 }
+
+import SketchCamCore
+
+extension LandmarkSettings {
+    func style(for region: LandmarkRegion) -> ElementStyle {
+        switch region {
+        case .face: return faceStyle
+        case .body: return bodyStyle
+        case .hands: return handsStyle
+        case .eyes: return eyesStyle
+        }
+    }
+}

@@ -62,7 +62,11 @@ final class LandmarkOverlayCompositor {
         settings: ProcessingSettings,
         outputSize: CGSize
     ) -> CIImage? {
-        let scaleDown = min(1, Self.maxOverlayHeight / max(1, outputSize.height))
+        // Labels are text: render the canvas at full output resolution when
+        // they're on so they stay crisp (the 720p cap + GPU upscale is what
+        // made them blurry); vector strokes alone tolerate the upscale.
+        let maxHeight = settings.landmarks.showIDs ? outputSize.height : Self.maxOverlayHeight
+        let scaleDown = min(1, maxHeight / max(1, outputSize.height))
         let canvasSize = CGSize(
             width: (outputSize.width * scaleDown).rounded(.down),
             height: (outputSize.height * scaleDown).rounded(.down)
@@ -111,7 +115,7 @@ final class LandmarkOverlayCompositor {
             }
 
             if landmarks.showIDs {
-                drawLabels(mapped, points: group.points, in: cgContext)
+                drawLabels(mapped, points: group.points, region: group.region, in: cgContext, landmarks: landmarks)
             }
         }
 
@@ -123,12 +127,12 @@ final class LandmarkOverlayCompositor {
     }
 
     private func drawRaw(_ points: [CGPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
-        let opacity = CGFloat(min(1, max(0, landmarks.rawLandmarkOpacity)))
-        let color = paletteColor(for: region, alpha: 0.88 * opacity)
-        context.setFillColor(color.cgColor)
+        let style = landmarks.style(for: region)
+        let opacity = CGFloat(min(1, max(0, style.color.alpha)))
+        context.setFillColor(nsColor(style.color, alphaScale: 0.95).cgColor)
         context.setStrokeColor(NSColor.black.withAlphaComponent(0.45 * opacity).cgColor)
         context.setLineWidth(0.8)
-        let radius = CGFloat(max(1.6, landmarks.rawLandmarkSize))
+        let radius = CGFloat(max(1.6, style.size * 2.2))
         for point in points {
             let rect = CGRect(x: point.x - radius / 2, y: point.y - radius / 2, width: radius, height: radius)
             context.fillEllipse(in: rect)
@@ -139,8 +143,9 @@ final class LandmarkOverlayCompositor {
     /// MediaPipe-docs-style structural rendering: connection lines (face
     /// outline, eye shapes, finger chains, body skeleton) over joint dots.
     private func drawSkeleton(_ points: [CGPoint], edges: [(Int, Int)], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
-        let width = CGFloat(max(0.7, landmarks.yarnStrokeWidth))
-        let opacity = CGFloat(min(1, max(0, landmarks.yarnStrokeOpacity)))
+        let style = landmarks.style(for: region)
+        let width = CGFloat(max(0.7, style.size))
+        let opacity = CGFloat(min(1, max(0, style.color.alpha)))
 
         let path = CGMutablePath()
         for edge in edges {
@@ -157,14 +162,14 @@ final class LandmarkOverlayCompositor {
         context.setLineWidth(width * 2.4)
         context.strokePath()
         context.addPath(path)
-        context.setStrokeColor(paletteColor(for: region, alpha: opacity).cgColor)
+        context.setStrokeColor(nsColor(style.color).cgColor)
         context.setLineWidth(width)
         context.strokePath()
 
         // joints
         let radius = max(2, width * 1.6)
         context.setFillColor(NSColor.white.withAlphaComponent(0.92 * opacity).cgColor)
-        context.setStrokeColor(paletteColor(for: region, alpha: opacity).cgColor)
+        context.setStrokeColor(nsColor(style.color).cgColor)
         context.setLineWidth(max(0.8, width * 0.4))
         for point in points {
             let rect = CGRect(x: point.x - radius / 2, y: point.y - radius / 2, width: radius, height: radius)
@@ -173,17 +178,22 @@ final class LandmarkOverlayCompositor {
         }
     }
 
-    private func drawLabels(_ mapped: [CGPoint], points: [LandmarkPoint], in context: CGContext) {
+    private func drawLabels(_ mapped: [CGPoint], points: [LandmarkPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
+        let style = landmarks.style(for: region)
+        let textColor: NSColor = landmarks.labelsMatchColor
+            ? nsColor(style.color, alphaScale: 1 / max(0.01, CGFloat(style.color.alpha))).blended(withFraction: 0.35, of: .white) ?? .white
+            : .white
         context.saveGState()
-        context.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: NSColor.black.cgColor)
+        context.setShadow(offset: CGSize(width: 0, height: -1), blur: 2.5, color: NSColor.black.cgColor)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
-            .foregroundColor: NSColor.white
+            .font: NSFont.monospacedSystemFont(ofSize: CGFloat(max(6, landmarks.labelSize)), weight: .semibold),
+            .foregroundColor: textColor
         ]
+        let offset = CGFloat(max(3, style.size * 1.8))
         for (index, point) in mapped.enumerated() {
             guard let label = points[safe: index]?.label else { continue }
             let line = CTLineCreateWithAttributedString(NSAttributedString(string: label, attributes: attributes))
-            context.textPosition = CGPoint(x: point.x + 4, y: point.y + 3)
+            context.textPosition = CGPoint(x: point.x + offset, y: point.y + offset * 0.75)
             CTLineDraw(line, context)
         }
         context.restoreGState()
@@ -191,10 +201,11 @@ final class LandmarkOverlayCompositor {
 
     private func drawYarn(_ points: [CGPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
         guard points.count > 2 else { return }
+        let style = landmarks.style(for: region)
         let ordered = LandmarkYarnWeaver.wovenOrder(points, seed: landmarks.seed + seedOffset(for: region))
-        let width = CGFloat(max(0.7, landmarks.yarnStrokeWidth))
+        let width = CGFloat(max(0.7, style.size))
         let weave = CGFloat(landmarks.yarnWeaveAmount)
-        let opacity = CGFloat(min(1, max(0, landmarks.yarnStrokeOpacity)))
+        let opacity = CGFloat(min(1, max(0, style.color.alpha)))
 
         for pass in 0..<4 {
             let path = hobbyPath(points: ordered, weave: weave, pass: pass)
@@ -205,9 +216,9 @@ final class LandmarkOverlayCompositor {
             case 0:
                 color = NSColor.black.withAlphaComponent(alpha * 0.45)
             case 1:
-                color = paletteColor(for: region, alpha: alpha * 0.38)
+                color = nsColor(style.color, alpha: alpha * 0.38)
             case 2:
-                color = paletteColor(for: region, alpha: alpha)
+                color = nsColor(style.color, alpha: alpha)
             default:
                 color = NSColor.white.withAlphaComponent(alpha * 0.48)
             }
@@ -218,6 +229,15 @@ final class LandmarkOverlayCompositor {
             context.setLineJoin(.round)
             context.strokePath()
         }
+    }
+
+    private func nsColor(_ color: RGBAColor, alpha: CGFloat? = nil, alphaScale: CGFloat = 1) -> NSColor {
+        NSColor(
+            calibratedRed: CGFloat(color.red),
+            green: CGFloat(color.green),
+            blue: CGFloat(color.blue),
+            alpha: alpha ?? min(1, CGFloat(color.alpha) * alphaScale)
+        )
     }
 
     private func hobbyPath(points: [CGPoint], weave: CGFloat, pass: Int) -> CGPath {
@@ -238,15 +258,6 @@ final class LandmarkOverlayCompositor {
         }
         path.closeSubpath()
         return path
-    }
-
-    private func paletteColor(for region: LandmarkRegion, alpha: CGFloat) -> NSColor {
-        switch region {
-        case .face: return NSColor(calibratedRed: 0.95, green: 0.33, blue: 0.48, alpha: alpha)
-        case .body: return NSColor(calibratedRed: 0.23, green: 0.78, blue: 0.64, alpha: alpha)
-        case .hands: return NSColor(calibratedRed: 0.98, green: 0.78, blue: 0.28, alpha: alpha)
-        case .eyes: return NSColor(calibratedRed: 0.42, green: 0.68, blue: 1.0, alpha: alpha)
-        }
     }
 
     private func seedOffset(for region: LandmarkRegion) -> Int {

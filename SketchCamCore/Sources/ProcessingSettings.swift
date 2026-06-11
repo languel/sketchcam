@@ -155,9 +155,22 @@ public enum LandmarkVisualizationMode: String, CaseIterable, Identifiable, Senda
     }
 }
 
+/// Generic visual style for a significant element: one color (with opacity)
+/// and one size whose meaning is contextual — stroke width for lines/yarn,
+/// dot scale for points. One UI control (StyleRow) edits any of these.
+public struct ElementStyle: Equatable, Sendable {
+    public var color: RGBAColor
+    public var size: Float
+
+    public init(color: RGBAColor, size: Float = 2.2) {
+        self.color = color
+        self.size = size
+    }
+}
+
 /// Landmark overlay settings. Detection runs off the frame hot path at
-/// `landmarkDetectionsPerSecond`; the overlay layer is re-rendered only when
-/// a detection lands and is GPU-composited into every published frame.
+/// `detectionsPerSecond`; the overlay layer is re-rendered only when a
+/// detection lands and is GPU-composited into every published frame.
 public struct LandmarkSettings: Equatable, Sendable {
     public var enabled: Bool
     public var sourceMode: LandmarkSourceMode
@@ -172,13 +185,18 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Draw each landmark's stable identifier next to it (debugging aid —
     /// hand labels use MediaPipe indices, e.g. "L4" = left thumb tip).
     public var showIDs: Bool
+    /// Label point size; labels inherit each region's style color when
+    /// `labelsMatchColor` is set, white otherwise.
+    public var labelSize: Float
+    public var labelsMatchColor: Bool
     public var seed: Int
     public var subsetRatio: Float
-    public var yarnStrokeWidth: Float
-    public var yarnStrokeOpacity: Float
     public var yarnWeaveAmount: Float
-    public var rawLandmarkSize: Float
-    public var rawLandmarkOpacity: Float
+    /// Per-region color + size (stroke width / dot scale).
+    public var faceStyle: ElementStyle
+    public var bodyStyle: ElementStyle
+    public var handsStyle: ElementStyle
+    public var eyesStyle: ElementStyle
 
     public init(
         enabled: Bool = false,
@@ -191,13 +209,15 @@ public struct LandmarkSettings: Equatable, Sendable {
         detectionsPerSecond: Double = 10,
         detectionMaxDimension: Int = 384,
         showIDs: Bool = false,
+        labelSize: Float = 11,
+        labelsMatchColor: Bool = true,
         seed: Int = 7,
         subsetRatio: Float = 0.65,
-        yarnStrokeWidth: Float = 2.2,
-        yarnStrokeOpacity: Float = 0.85,
         yarnWeaveAmount: Float = 0.7,
-        rawLandmarkSize: Float = 5,
-        rawLandmarkOpacity: Float = 0.9
+        faceStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.95, green: 0.33, blue: 0.48, alpha: 0.85)),
+        bodyStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.23, green: 0.78, blue: 0.64, alpha: 0.85)),
+        handsStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.98, green: 0.78, blue: 0.28, alpha: 0.85)),
+        eyesStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.42, green: 0.68, blue: 1.0, alpha: 0.85))
     ) {
         self.enabled = enabled
         self.sourceMode = sourceMode
@@ -209,13 +229,15 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.detectionsPerSecond = detectionsPerSecond
         self.detectionMaxDimension = detectionMaxDimension
         self.showIDs = showIDs
+        self.labelSize = labelSize
+        self.labelsMatchColor = labelsMatchColor
         self.seed = seed
         self.subsetRatio = subsetRatio
-        self.yarnStrokeWidth = yarnStrokeWidth
-        self.yarnStrokeOpacity = yarnStrokeOpacity
         self.yarnWeaveAmount = yarnWeaveAmount
-        self.rawLandmarkSize = rawLandmarkSize
-        self.rawLandmarkOpacity = rawLandmarkOpacity
+        self.faceStyle = faceStyle
+        self.bodyStyle = bodyStyle
+        self.handsStyle = handsStyle
+        self.eyesStyle = eyesStyle
     }
 }
 

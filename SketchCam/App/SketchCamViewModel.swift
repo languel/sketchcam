@@ -88,6 +88,9 @@ final class SketchCamViewModel: ObservableObject {
     private var cameraFrameInFlight = false
     private let frozenLock = NSLock()
     private var frozenFrame: CVPixelBuffer?
+    private let exportLock = NSLock()
+    private var lastPublishedFrame: CVPixelBuffer?
+    private var movieRateBeforePause: Double = 1
     private var lastPreviewTime: CFAbsoluteTime = 0
     private var lastStatsTime: CFAbsoluteTime = 0
     private var lastPerfLogTime: CFAbsoluteTime = 0
@@ -146,6 +149,58 @@ final class SketchCamViewModel: ObservableObject {
                     self.stats.cameraResolution = .zero
                 }
             }
+        }
+    }
+
+    /// One shortcut, contextual behavior: pauses/resumes the movie when it
+    /// is the source, freezes/unfreezes the live input otherwise.
+    func toggleFreezeOrPause() {
+        if frameSource == .movie {
+            if movieRate == 0 {
+                movieRate = movieRateBeforePause
+            } else {
+                movieRateBeforePause = movieRate
+                movieRate = 0
+            }
+        } else {
+            inputFrozen.toggle()
+        }
+    }
+
+    /// Export the most recently published frame (full output resolution,
+    /// PNG with alpha) via a save panel.
+    func exportCurrentFrame() {
+        let frame = exportLock.withLock { lastPublishedFrame }
+        guard let frame else {
+            errorText = "No frame to export yet."
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        panel.nameFieldStringValue = "sketchcam-\(stamp).png"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let image = CIImage(cvPixelBuffer: frame)
+        guard let cgImage = Self.sharedCIContext.createCGImage(
+            image,
+            from: image.extent,
+            format: .BGRA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        ) else {
+            errorText = "Could not render export image."
+            return
+        }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            errorText = "Could not encode PNG."
+            return
+        }
+        do {
+            try data.write(to: url)
+        } catch {
+            errorText = "Export failed: \(error.localizedDescription)"
         }
     }
 
@@ -344,6 +399,7 @@ final class SketchCamViewModel: ObservableObject {
         timings.measure(.publish) {
             publisher.publish(sampleBuffer)
         }
+        exportLock.withLock { lastPublishedFrame = pixelBuffer }
         let fps = updateFPS()
 
         // Preview and stats are decoupled from publishing: the virtual camera
