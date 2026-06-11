@@ -266,6 +266,7 @@ final class LandmarkOverlayCompositor {
         case .body: return 211
         case .hands: return 307
         case .eyes: return 409
+        case .contour: return 503
         }
     }
 }

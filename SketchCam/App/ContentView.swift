@@ -329,6 +329,13 @@ struct ContentView: View {
                 size: floatBinding(\.landmarks.eyesStyle.size),
                 range: 0.7...8
             )
+            StyleRow(
+                title: "Contour",
+                enabled: $model.settings.landmarks.trackContour,
+                color: rgbaBinding(\.landmarks.contourStyle.color),
+                size: floatBinding(\.landmarks.contourStyle.size),
+                range: 0.7...8
+            )
 
             SectionHeader("Labels")
             Toggle("Show IDs", isOn: $model.settings.landmarks.showIDs)

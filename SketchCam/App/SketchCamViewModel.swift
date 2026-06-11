@@ -354,13 +354,37 @@ final class SketchCamViewModel: ObservableObject {
             }
             do {
                 let frameIndex = self.nextFrameIndex()
+                // Segmentation runs when keying OR the silhouette contour
+                // needs it; the processor only keys when keying is on.
+                let contourWanted = settings.landmarks.enabled && settings.landmarks.trackContour
+                var segSettings = settings.segmentation
+                segSettings.enabled = settings.segmentation.enabled || contourWanted
+                let rawMatte = self.segmentationService.currentMatte(
+                    pixelBuffer: originalPixelBuffer,
+                    settings: segSettings
+                )
+                let matte = settings.segmentation.enabled ? rawMatte : nil
+                self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let overlay = self.timings.measure(.overlay) { () -> CIImage? in
                     guard settings.landmarks.enabled else { return nil }
-                    let detection = self.landmarkService.currentDetection(
+                    var detection = self.landmarkService.currentDetection(
                         pixelBuffer: originalPixelBuffer,
                         settings: settings,
                         frameIndex: frameIndex
                     )
+                    if contourWanted, let contour = self.segmentationService.currentContour() {
+                        var augmented = detection ?? LandmarkDetection(
+                            groups: [],
+                            detectionID: 0,
+                            sourceSize: CGSize(
+                                width: CVPixelBufferGetWidth(originalPixelBuffer),
+                                height: CVPixelBufferGetHeight(originalPixelBuffer)
+                            )
+                        )
+                        augmented.groups.append(contour.group)
+                        augmented.detectionID = augmented.detectionID &+ (contour.version &* 0x10_0000)
+                        detection = augmented
+                    }
                     return self.overlayCompositor.overlay(
                         detection: detection,
                         settings: settings,
@@ -368,11 +392,6 @@ final class SketchCamViewModel: ObservableObject {
                     )
                 }
                 self.timings.record(.detect, seconds: self.landmarkService.lastDetectionMillis / 1_000)
-                let matte = self.segmentationService.currentMatte(
-                    pixelBuffer: originalPixelBuffer,
-                    settings: settings.segmentation
-                )
-                self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let processed = try self.timings.measure(.process) {
                     try self.processor.process(
                         pixelBuffer: pixelBuffer,

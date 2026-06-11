@@ -189,6 +189,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// `labelsMatchColor` is set, white otherwise.
     public var labelSize: Float
     public var labelsMatchColor: Bool
+    /// Trace the person-segmentation matte into a fixed ring of contour
+    /// points (stable IDs s0..s63, s0 = top of head) around the silhouette.
+    public var trackContour: Bool
     public var seed: Int
     public var subsetRatio: Float
     public var yarnWeaveAmount: Float
@@ -197,6 +200,7 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var bodyStyle: ElementStyle
     public var handsStyle: ElementStyle
     public var eyesStyle: ElementStyle
+    public var contourStyle: ElementStyle
 
     public init(
         enabled: Bool = false,
@@ -211,13 +215,15 @@ public struct LandmarkSettings: Equatable, Sendable {
         showIDs: Bool = false,
         labelSize: Float = 11,
         labelsMatchColor: Bool = true,
+        trackContour: Bool = false,
         seed: Int = 7,
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
         faceStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.95, green: 0.33, blue: 0.48, alpha: 0.85)),
         bodyStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.23, green: 0.78, blue: 0.64, alpha: 0.85)),
         handsStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.98, green: 0.78, blue: 0.28, alpha: 0.85)),
-        eyesStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.42, green: 0.68, blue: 1.0, alpha: 0.85))
+        eyesStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.42, green: 0.68, blue: 1.0, alpha: 0.85)),
+        contourStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.92, green: 0.92, blue: 0.95, alpha: 0.85))
     ) {
         self.enabled = enabled
         self.sourceMode = sourceMode
@@ -231,6 +237,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.showIDs = showIDs
         self.labelSize = labelSize
         self.labelsMatchColor = labelsMatchColor
+        self.trackContour = trackContour
         self.seed = seed
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount
@@ -238,6 +245,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.bodyStyle = bodyStyle
         self.handsStyle = handsStyle
         self.eyesStyle = eyesStyle
+        self.contourStyle = contourStyle
     }
 }
 

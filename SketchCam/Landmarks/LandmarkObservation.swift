@@ -6,6 +6,7 @@ enum LandmarkRegion: String, CaseIterable {
     case body
     case hands
     case eyes
+    case contour
 
     var displayName: String {
         switch self {
@@ -13,6 +14,7 @@ enum LandmarkRegion: String, CaseIterable {
         case .body: return "Body"
         case .hands: return "Hands"
         case .eyes: return "Eyes"
+        case .contour: return "Contour"
         }
     }
 }
@@ -63,6 +65,7 @@ extension LandmarkSettings {
         case .body: return bodyStyle
         case .hands: return handsStyle
         case .eyes: return eyesStyle
+        case .contour: return contourStyle
         }
     }
 }
