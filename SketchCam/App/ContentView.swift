@@ -22,13 +22,19 @@ struct ContentView: View {
 
     var body: some View {
         previewPane
-            .overlay(alignment: .trailing) {
-                // Tray overlay: toggling the panel must not resize the
-                // preview/window content.
+            .overlay {
+                // Tray overlay inside a GeometryReader: GeometryReader
+                // reports no minimum size, so the 360pt panel can never
+                // constrain how small the window may shrink (PIP).
                 if windowMode.panelVisible {
-                    controlsPane
-                        .background(Color(nsColor: .windowBackgroundColor).opacity(0.92))
-                        .overlay(alignment: .leading) { Divider() }
+                    GeometryReader { _ in
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            controlsPane
+                                .background(Color(nsColor: .windowBackgroundColor).opacity(0.92))
+                                .overlay(alignment: .leading) { Divider() }
+                        }
+                    }
                 }
             }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
