@@ -21,13 +21,16 @@ struct ContentView: View {
     @State private var tab = ControlTab.input
 
     var body: some View {
-        HStack(spacing: 0) {
-            previewPane
-            if windowMode.panelVisible {
-                Divider()
-                controlsPane
+        previewPane
+            .overlay(alignment: .trailing) {
+                // Tray overlay: toggling the panel must not resize the
+                // preview/window content.
+                if windowMode.panelVisible {
+                    controlsPane
+                        .background(Color(nsColor: .windowBackgroundColor).opacity(0.92))
+                        .overlay(alignment: .leading) { Divider() }
+                }
             }
-        }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
         .onAppear {
@@ -321,12 +324,12 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.segmented)
-            Picker("Style", selection: $model.settings.landmarks.visualizationMode) {
-                ForEach(LandmarkVisualizationMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
+            HStack {
+                Toggle("Dots", isOn: $model.settings.landmarks.showDots)
+                Toggle("Yarn", isOn: $model.settings.landmarks.showYarn)
+                Toggle("Stick", isOn: $model.settings.landmarks.showStick)
             }
-            .pickerStyle(.segmented)
+            .toggleStyle(.checkbox)
 
             SectionHeader("Features")
             StyleRow(
@@ -377,8 +380,10 @@ struct ContentView: View {
                 get: { model.settings.landmarks.detectionsPerSecond },
                 set: { model.settings.landmarks.detectionsPerSecond = $0.rounded() }
             ), range: 1...15, precision: 0)
-            SliderRow(title: "Detail", value: floatBinding(\.landmarks.subsetRatio))
-            SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
+            SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4)
+            SliderRow(title: "Stick width", value: floatBinding(\.landmarks.stickScale), range: 0.2...4)
+            SliderRow(title: "Yarn detail", value: floatBinding(\.landmarks.subsetRatio))
+            SliderRow(title: "Yarn weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
         }
         .disabled(!model.settings.landmarks.enabled)
     }
@@ -446,7 +451,7 @@ struct ContentView: View {
         r.register(id: "window.panel", title: "Toggle Side Panel", category: "Window",
                    default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.panelVisible.toggle() }
         r.register(id: "window.decoration", title: "Toggle Window Decoration", category: "Window",
-                   default: KeyBinding(key: "d", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.decorated.toggle() }
+                   default: KeyBinding(key: "d", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.decorated.toggle() }
         r.register(id: "window.transparent", title: "Toggle Transparent Window", category: "Window",
                    default: KeyBinding(key: "t", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.transparent.toggle() }
         r.register(id: "window.onTop", title: "Toggle Always on Top", category: "Window",

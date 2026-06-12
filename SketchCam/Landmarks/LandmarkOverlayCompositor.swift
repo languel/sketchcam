@@ -29,6 +29,10 @@ final class LandmarkOverlayCompositor {
 
     private var cachedImage: CIImage?
     private var cachedKey: CacheKey?
+    // Reused between renders: allocating a fresh bitmap context (and its
+    // backing store) per re-render is the bulk of slider-drag cost.
+    private var reusableContext: CGContext?
+    private var reusableContextSize: CGSize = .zero
 
     func overlay(
         detection: LandmarkDetection?,
@@ -71,18 +75,20 @@ final class LandmarkOverlayCompositor {
             width: (outputSize.width * scaleDown).rounded(.down),
             height: (outputSize.height * scaleDown).rounded(.down)
         )
-        guard let cgContext = CGContext(
-            data: nil,
-            width: Int(canvasSize.width),
-            height: Int(canvasSize.height),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else {
-            return nil
+        if reusableContext == nil || reusableContextSize != canvasSize {
+            reusableContext = CGContext(
+                data: nil,
+                width: Int(canvasSize.width),
+                height: Int(canvasSize.height),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            )
+            reusableContextSize = canvasSize
         }
-
+        guard let cgContext = reusableContext else { return nil }
+        cgContext.clear(CGRect(origin: .zero, size: canvasSize))
         cgContext.setAllowsAntialiasing(true)
         cgContext.setShouldAntialias(true)
 
@@ -102,16 +108,14 @@ final class LandmarkOverlayCompositor {
                 ratio: landmarks.subsetRatio
             )
 
-            switch landmarks.visualizationMode {
-            case .raw:
-                drawRaw(mapped, region: group.region, in: cgContext, landmarks: landmarks)
-            case .yarn:
+            if landmarks.showYarn {
                 drawYarn(selected, region: group.region, in: cgContext, landmarks: landmarks)
-            case .rawAndYarn:
-                drawYarn(selected, region: group.region, in: cgContext, landmarks: landmarks)
-                drawRaw(mapped, region: group.region, in: cgContext, landmarks: landmarks)
-            case .skeleton:
+            }
+            if landmarks.showStick {
                 drawSkeleton(mapped, edges: group.edges, region: group.region, in: cgContext, landmarks: landmarks)
+            }
+            if landmarks.showDots {
+                drawRaw(mapped, region: group.region, in: cgContext, landmarks: landmarks)
             }
 
             if landmarks.showIDs {
@@ -132,7 +136,7 @@ final class LandmarkOverlayCompositor {
         context.setFillColor(nsColor(style.color, alphaScale: 0.95).cgColor)
         context.setStrokeColor(NSColor.black.withAlphaComponent(0.45 * opacity).cgColor)
         context.setLineWidth(0.8)
-        let radius = CGFloat(max(1.6, style.size * 2.2))
+        let radius = CGFloat(max(1.6, style.size * 2.2 * max(0.1, landmarks.dotScale)))
         for point in points {
             let rect = CGRect(x: point.x - radius / 2, y: point.y - radius / 2, width: radius, height: radius)
             context.fillEllipse(in: rect)
@@ -144,7 +148,7 @@ final class LandmarkOverlayCompositor {
     /// outline, eye shapes, finger chains, body skeleton) over joint dots.
     private func drawSkeleton(_ points: [CGPoint], edges: [(Int, Int)], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
         let style = landmarks.style(for: region)
-        let width = CGFloat(max(0.7, style.size))
+        let width = CGFloat(max(0.7, style.size * max(0.1, landmarks.stickScale)))
         let opacity = CGFloat(min(1, max(0, style.color.alpha)))
 
         let path = CGMutablePath()

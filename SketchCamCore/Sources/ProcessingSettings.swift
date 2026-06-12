@@ -134,27 +134,6 @@ public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum LandmarkVisualizationMode: String, CaseIterable, Identifiable, Sendable {
-    case raw
-    case yarn
-    case rawAndYarn
-    /// MediaPipe-style structural rendering: face outline, eye shapes,
-    /// articulated fingers, and a body skeleton, drawn from the per-group
-    /// edge lists supplied by the tracker.
-    case skeleton
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .raw: return "Dots"
-        case .yarn: return "Yarn"
-        case .rawAndYarn: return "Both"
-        case .skeleton: return "Stick"
-        }
-    }
-}
-
 /// Generic visual style for a significant element: one color (with opacity)
 /// and one size whose meaning is contextual — stroke width for lines/yarn,
 /// dot scale for points. One UI control (StyleRow) edits any of these.
@@ -174,7 +153,13 @@ public struct ElementStyle: Equatable, Sendable {
 public struct LandmarkSettings: Equatable, Sendable {
     public var enabled: Bool
     public var sourceMode: LandmarkSourceMode
-    public var visualizationMode: LandmarkVisualizationMode
+    /// Independent renderers — any combination can be on.
+    public var showDots: Bool
+    public var showYarn: Bool
+    public var showStick: Bool
+    /// Per-renderer size multipliers on top of each region's style.size.
+    public var dotScale: Float
+    public var stickScale: Float
     public var trackFace: Bool
     public var trackBody: Bool
     public var trackHands: Bool
@@ -205,7 +190,11 @@ public struct LandmarkSettings: Equatable, Sendable {
     public init(
         enabled: Bool = false,
         sourceMode: LandmarkSourceMode = .camera,
-        visualizationMode: LandmarkVisualizationMode = .yarn,
+        showDots: Bool = false,
+        showYarn: Bool = true,
+        showStick: Bool = false,
+        dotScale: Float = 1,
+        stickScale: Float = 1,
         trackFace: Bool = true,
         trackBody: Bool = true,
         trackHands: Bool = true,
@@ -227,7 +216,11 @@ public struct LandmarkSettings: Equatable, Sendable {
     ) {
         self.enabled = enabled
         self.sourceMode = sourceMode
-        self.visualizationMode = visualizationMode
+        self.showDots = showDots
+        self.showYarn = showYarn
+        self.showStick = showStick
+        self.dotScale = dotScale
+        self.stickScale = stickScale
         self.trackFace = trackFace
         self.trackBody = trackBody
         self.trackHands = trackHands
