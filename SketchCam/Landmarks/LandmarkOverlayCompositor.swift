@@ -27,12 +27,25 @@ final class LandmarkOverlayCompositor {
         var outputSize: CGSize
     }
 
+    // The vector render happens OFF the frame hot path: when the cache key
+    // changes, a render is scheduled on a low-priority queue and the hot
+    // path keeps compositing the previous layer until the new one lands
+    // (≤ one detection interval stale — same staleness budget as detection
+    // itself). A slow render can therefore never drop published frames.
+    private let renderQueue = DispatchQueue(label: "io.github.languel.sketchcam.overlay-render", qos: .utility)
+    private let lock = NSLock()
     private var cachedImage: CIImage?
     private var cachedKey: CacheKey?
-    // Reused between renders: allocating a fresh bitmap context (and its
-    // backing store) per re-render is the bulk of slider-drag cost.
-    private var reusableContext: CGContext?
-    private var reusableContextSize: CGSize = .zero
+    private var renderingKey: CacheKey?
+    /// Duration of the most recent async render (ms) — for the Overlay HUD row.
+    private(set) var lastRenderMillis: Double = 0
+    // Double-buffered canvases: makeImage() snapshots copy-on-write, so
+    // redrawing into the same backing store forces a full-buffer copy.
+    // Alternating two contexts means we always draw into the one whose
+    // snapshot is no longer current.
+    private var contexts: [CGContext?] = [nil, nil]
+    private var contextSizes: [CGSize] = [.zero, .zero]
+    private var contextIndex = 0
 
     func overlay(
         detection: LandmarkDetection?,
@@ -40,9 +53,11 @@ final class LandmarkOverlayCompositor {
         outputSize: CGSize
     ) -> CIImage? {
         guard settings.landmarks.enabled, let detection, !detection.groups.isEmpty else {
-            cachedImage = nil
-            cachedKey = nil
-            return nil
+            return lock.withLock {
+                cachedImage = nil
+                cachedKey = nil
+                return nil
+            }
         }
 
         let key = CacheKey(
@@ -51,14 +66,27 @@ final class LandmarkOverlayCompositor {
             mirror: settings.mirror,
             outputSize: outputSize
         )
-        if key == cachedKey, let cachedImage {
+        return lock.withLock {
+            if key != cachedKey, renderingKey == nil {
+                renderingKey = key
+                renderQueue.async { [weak self] in
+                    self?.renderAsync(detection: detection, settings: settings, outputSize: outputSize, key: key)
+                }
+            }
             return cachedImage
         }
+    }
 
+    private func renderAsync(detection: LandmarkDetection, settings: ProcessingSettings, outputSize: CGSize, key: CacheKey) {
+        let start = CFAbsoluteTimeGetCurrent()
         let image = render(detection: detection, settings: settings, outputSize: outputSize)
-        cachedImage = image
-        cachedKey = image == nil ? nil : key
-        return image
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
+        lock.withLock {
+            cachedImage = image
+            cachedKey = image == nil ? nil : key
+            renderingKey = nil
+            lastRenderMillis = elapsed
+        }
     }
 
     private func render(
@@ -75,8 +103,9 @@ final class LandmarkOverlayCompositor {
             width: (outputSize.width * scaleDown).rounded(.down),
             height: (outputSize.height * scaleDown).rounded(.down)
         )
-        if reusableContext == nil || reusableContextSize != canvasSize {
-            reusableContext = CGContext(
+        contextIndex = (contextIndex + 1) % 2
+        if contexts[contextIndex] == nil || contextSizes[contextIndex] != canvasSize {
+            contexts[contextIndex] = CGContext(
                 data: nil,
                 width: Int(canvasSize.width),
                 height: Int(canvasSize.height),
@@ -85,9 +114,9 @@ final class LandmarkOverlayCompositor {
                 space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
             )
-            reusableContextSize = canvasSize
+            contextSizes[contextIndex] = canvasSize
         }
-        guard let cgContext = reusableContext else { return nil }
+        guard let cgContext = contexts[contextIndex] else { return nil }
         cgContext.clear(CGRect(origin: .zero, size: canvasSize))
         cgContext.setAllowsAntialiasing(true)
         cgContext.setShouldAntialias(true)

@@ -14,7 +14,7 @@ import SketchCamShared
 /// mode is computed inline (it is just math).
 final class LandmarkDetectionService {
     private let tracker = VisionLandmarkTracker()
-    private let detectionQueue = DispatchQueue(label: "io.github.languel.sketchcam.landmarks", qos: .userInitiated)
+    private let detectionQueue = DispatchQueue(label: "io.github.languel.sketchcam.landmarks", qos: .utility)
     private let context: CIContext
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let downsamplePool = PixelBufferPool()

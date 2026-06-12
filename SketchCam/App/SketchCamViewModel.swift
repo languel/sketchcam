@@ -217,13 +217,11 @@ final class SketchCamViewModel: ObservableObject {
     func start() {
         refreshDevices()
         startTestPatternTimer()
-        // Dev affordance: enable the overlay at launch for headless perf
-        // verification and demo scripts. Env var works for direct exec;
-        // `defaults write io.github.languel.sketchcam SKETCHCAM_LANDMARKS camera`
-        // works for LaunchServices launches.
-        let landmarkOverride = ProcessInfo.processInfo.environment["SKETCHCAM_LANDMARKS"]
-            ?? UserDefaults.standard.string(forKey: "SKETCHCAM_LANDMARKS")
-        if let mode = landmarkOverride, !mode.isEmpty {
+        // Dev affordance: SKETCHCAM_LANDMARKS=camera|synthetic env var enables
+        // the overlay at launch (headless perf verification only). The old
+        // UserDefaults variant was removed: it persisted invisibly across
+        // launches and caused a "slow with everything off" mystery.
+        if let mode = ProcessInfo.processInfo.environment["SKETCHCAM_LANDMARKS"], !mode.isEmpty {
             settings.landmarks.enabled = true
             settings.landmarks.sourceMode = mode == "synthetic" ? .synthetic : .camera
         }
@@ -365,7 +363,7 @@ final class SketchCamViewModel: ObservableObject {
                 )
                 let matte = settings.segmentation.enabled ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
-                let overlay = self.timings.measure(.overlay) { () -> CIImage? in
+                let overlay: CIImage? = {
                     guard settings.landmarks.enabled else { return nil }
                     var detection = self.landmarkService.currentDetection(
                         pixelBuffer: originalPixelBuffer,
@@ -390,7 +388,10 @@ final class SketchCamViewModel: ObservableObject {
                         settings: settings,
                         outputSize: outputFormat.size
                     )
-                }
+                }()
+                // Overlay renders async; report the latest render duration
+                // (like detect/segment), not the ~0ms cache fetch.
+                self.timings.record(.overlay, seconds: self.overlayCompositor.lastRenderMillis / 1_000)
                 self.timings.record(.detect, seconds: self.landmarkService.lastDetectionMillis / 1_000)
                 let processed = try self.timings.measure(.process) {
                     try self.processor.process(

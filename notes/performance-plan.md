@@ -307,3 +307,26 @@ and outline pinned to the subject under inverted keying.
 Still open: release deploy of the extension rescaling fix, zero-readback
 preview, landmark interpolation between detections, per-layer mask
 mapping system.
+
+## Performance review 2 (2026-06-12): regression root causes
+
+Symptom: sluggish "even with layers off". Three compounding causes:
+
+1. A leftover `defaults write … SKETCHCAM_LANDMARKS camera` from a test
+   session silently force-enabled landmarks at every launch — detection +
+   overlay ran with "everything off". The UserDefaults variant of the
+   affordance is REMOVED (env var only now).
+2. The overlay vector render ran ON the processing queue. Any cache miss
+   (detection tick, settings change, and — before the rate-limit — every
+   contour matte at ~30 Hz) blocked the frame. Fixed structurally: renders
+   are async on a .utility queue with double-buffered canvases (CoW-free);
+   the hot path composites the previous layer until the new one lands.
+   A slow overlay can now never drop published frames.
+3. Detection/segmentation queues ran at .userInitiated — same QoS as the
+   hot path, competing head-on under system load. Both now .utility.
+
+Measured after (landmarks on, loaded system): 30 fps, frame total
+2.2–4.8 ms, detect 11–15 ms off-path, app CPU ~40%.
+
+Rule going forward: anything that renders or infers runs OFF the
+processing queue at .utility; the hot path only fetches cached results.

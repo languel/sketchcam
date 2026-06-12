@@ -12,7 +12,7 @@ import Vision
 /// the latest matte is cached. At `.fast` quality a run is a few ms, so the
 /// matte lags the video by at most a frame or two.
 final class SegmentationService {
-    private let queue = DispatchQueue(label: "io.github.languel.sketchcam.segmentation", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "io.github.languel.sketchcam.segmentation", qos: .utility)
     private let lock = NSLock()
     private var request = VNGeneratePersonSegmentationRequest()
     private var requestQuality = SegmentationQuality.fast
