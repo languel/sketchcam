@@ -10,6 +10,7 @@ final class WindowModeController: ObservableObject {
     @Published var transparent = false { didSet { apply() } }
     @Published var alwaysOnTop = false { didSet { apply() } }
     @Published private(set) var presentationMode = false
+    @Published private(set) var pipMode = false
 
     weak var window: NSWindow? {
         didSet { apply() }
@@ -23,6 +24,34 @@ final class WindowModeController: ObservableObject {
     }
 
     private var beforePresentation: Snapshot?
+    private var frameBeforePIP: NSRect?
+
+    /// Park the window as a small picture-in-picture panel in the lower
+    /// right of the current screen (~1/16 screen area); toggling back
+    /// restores the previous frame.
+    func togglePIP() {
+        guard let window else { return }
+        if pipMode {
+            pipMode = false
+            if let frame = frameBeforePIP {
+                window.setFrame(frame, display: true, animate: true)
+            }
+        } else {
+            frameBeforePIP = window.frame
+            pipMode = true
+            let screen = (window.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let width = screen.width / 4
+            let height = width * 9 / 16
+            let margin: CGFloat = 16
+            let frame = NSRect(
+                x: screen.maxX - width - margin,
+                y: screen.minY + margin,
+                width: width,
+                height: height
+            )
+            window.setFrame(frame, display: true, animate: true)
+        }
+    }
 
     /// One action into lecture mode and back: panel off, borderless,
     /// transparent, always on top — restores the prior state on exit.
@@ -65,6 +94,9 @@ final class WindowModeController: ObservableObject {
         window.backgroundColor = transparent ? .clear : .windowBackgroundColor
         window.hasShadow = !transparent
         window.level = alwaysOnTop ? .floating : .normal
+        // allow very small PIP frames
+        window.contentMinSize = NSSize(width: 120, height: 68)
+        window.minSize = NSSize(width: 120, height: 68)
         if alwaysOnTop {
             window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
         } else {

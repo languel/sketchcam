@@ -65,6 +65,7 @@ struct ContentView: View {
                     .controlSize(.large)
             }
         }
+        .frame(minWidth: 120, minHeight: 68)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -216,8 +217,13 @@ struct ContentView: View {
             Toggle("On top", isOn: $windowMode.alwaysOnTop)
         }
         .toggleStyle(.checkbox)
-        Button(windowMode.presentationMode ? "Exit Presentation Mode" : "Presentation Mode") {
-            windowMode.togglePresentationMode()
+        HStack {
+            Button(windowMode.presentationMode ? "Exit Presentation Mode" : "Presentation Mode") {
+                windowMode.togglePresentationMode()
+            }
+            Button(windowMode.pipMode ? "Exit PIP" : "PIP") {
+                windowMode.togglePIP()
+            }
         }
         .controlSize(.small)
 
@@ -456,6 +462,8 @@ struct ContentView: View {
                    default: KeyBinding(key: "t", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.transparent.toggle() }
         r.register(id: "window.onTop", title: "Toggle Always on Top", category: "Window",
                    default: KeyBinding(key: "t", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.alwaysOnTop.toggle() }
+        r.register(id: "window.pip", title: "Toggle PIP Placement", category: "Window",
+                   default: KeyBinding(key: "p", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.togglePIP() }
         r.register(id: "window.presentation", title: "Presentation Mode", category: "Window",
                    default: KeyBinding(key: "p", modifiers: .command)) { [weak windowMode] in windowMode?.togglePresentationMode() }
     }

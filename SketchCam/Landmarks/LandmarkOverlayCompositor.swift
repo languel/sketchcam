@@ -169,17 +169,7 @@ final class LandmarkOverlayCompositor {
         context.setStrokeColor(nsColor(style.color).cgColor)
         context.setLineWidth(width)
         context.strokePath()
-
-        // joints
-        let radius = max(2, width * 1.6)
-        context.setFillColor(NSColor.white.withAlphaComponent(0.92 * opacity).cgColor)
-        context.setStrokeColor(nsColor(style.color).cgColor)
-        context.setLineWidth(max(0.8, width * 0.4))
-        for point in points {
-            let rect = CGRect(x: point.x - radius / 2, y: point.y - radius / 2, width: radius, height: radius)
-            context.fillEllipse(in: rect)
-            context.strokeEllipse(in: rect)
-        }
+        // joints intentionally not drawn — enable the Dots renderer for those
     }
 
     private func drawLabels(_ mapped: [CGPoint], points: [LandmarkPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
