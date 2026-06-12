@@ -21,6 +21,7 @@ final class SegmentationService {
     fileprivate var cachedContour: LandmarkGroup?
     fileprivate var matteVersion: UInt64 = 0
     fileprivate var contourVersion: UInt64 = .max
+    fileprivate var lastContourTrace: CFAbsoluteTime = 0
     private var inFlight = false
     private(set) var lastSegmentMillis: Double = 0
 
@@ -89,12 +90,18 @@ extension SegmentationService {
     /// pixel. IDs are stable (s0 = top, clockwise on screen), so drawing
     /// algorithms can address specific stations around the body. Normalized
     /// bottom-left coordinates, same space as Vision landmarks.
-    func currentContour() -> (group: LandmarkGroup, version: UInt64)? {
+    /// Rate-limited: re-traces at most `maxPerSecond` times (default to the
+    /// landmark detection cadence). Tracing per matte (~30 Hz) invalidated
+    /// the overlay cache every frame and saturated the pipeline.
+    func currentContour(maxPerSecond: Double = 10) -> (group: LandmarkGroup, version: UInt64)? {
         lock.withLock {
             guard let buffer = cachedMatteBuffer else { return nil }
-            if contourVersion == matteVersion, let cachedContour {
+            let now = CFAbsoluteTimeGetCurrent()
+            let due = now - lastContourTrace >= 1.0 / max(1, maxPerSecond)
+            if let cachedContour, contourVersion == matteVersion || !due {
                 return (cachedContour, contourVersion)
             }
+            lastContourTrace = now
             guard let points = Self.traceContour(buffer) else { return nil }
             var edges = (0..<(points.count - 1)).map { ($0, $0 + 1) }
             edges.append((points.count - 1, 0))

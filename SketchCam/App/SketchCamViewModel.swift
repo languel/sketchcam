@@ -372,7 +372,7 @@ final class SketchCamViewModel: ObservableObject {
                         settings: settings,
                         frameIndex: frameIndex
                     )
-                    if contourWanted, let contour = self.segmentationService.currentContour() {
+                    if contourWanted, let contour = self.segmentationService.currentContour(maxPerSecond: settings.landmarks.detectionsPerSecond) {
                         var augmented = detection ?? LandmarkDetection(
                             groups: [],
                             detectionID: 0,
