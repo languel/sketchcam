@@ -2,8 +2,10 @@ import AppKit
 import CoreGraphics
 import CoreImage
 import CoreText
+import CoreVideo
 import Foundation
 import SketchCamCore
+import SketchCamShared
 
 /// Renders the landmark doodle into a transparent layer and hands it to the
 /// frame processor as a cached `CIImage` for GPU compositing.
@@ -51,6 +53,14 @@ final class LandmarkOverlayCompositor {
     /// whose `style` matches `landmarks.drawingStyle`. Register new algorithms
     /// here (and add a case to `DrawingStyle`); nothing else needs to change.
     private let algorithms: [DrawingAlgorithm] = [YarnDrawing(), LineWalkDrawing()]
+
+    // GPU drawing path (opt-in via settings.landmarks.useMetalDrawing). Created
+    // lazily on the render queue; double-buffered output so the hot path can
+    // still composite the previous overlay while the next one renders.
+    private lazy var metalRenderer: MetalLineRenderer? = MetalLineRenderer()
+    private var overlayBuffers: [CVPixelBuffer?] = [nil, nil]
+    private var overlayBufferIndex = 0
+    private var overlayBufferSize: CGSize = .zero
 
     func overlay(
         detection: LandmarkDetection?,
@@ -108,6 +118,14 @@ final class LandmarkOverlayCompositor {
             width: (outputSize.width * scaleDown).rounded(.down),
             height: (outputSize.height * scaleDown).rounded(.down)
         )
+
+        // GPU drawing path: render LineWalk strokes via Metal instead of the
+        // CPU CGContext. (Marks renderers — dots/stick/labels — stay on the CPU
+        // path and are skipped here; this is for A/B'ing the drawing cost.)
+        if settings.landmarks.useMetalDrawing, settings.landmarks.drawingStyle == .lineWalk, let metal = metalRenderer {
+            return renderMetalLineWalk(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
+        }
+
         contextIndex = (contextIndex + 1) % 2
         if contexts[contextIndex] == nil || contextSizes[contextIndex] != canvasSize {
             contexts[contextIndex] = CGContext(
@@ -163,6 +181,52 @@ final class LandmarkOverlayCompositor {
         return CIImage(cgImage: cgImage)
             .transformed(by: CGAffineTransform(scaleX: upscale, y: upscale))
             .cropped(to: CGRect(origin: .zero, size: outputSize))
+    }
+
+    /// GPU LineWalk render: map groups → canvas space, tessellate strokes, and
+    /// rasterize with Metal into an IOSurface buffer wrapped as a CIImage.
+    private func renderMetalLineWalk(
+        detection: LandmarkDetection,
+        settings: ProcessingSettings,
+        canvasSize: CGSize,
+        scaleDown: CGFloat,
+        outputSize: CGSize,
+        metal: MetalLineRenderer
+    ) -> CIImage? {
+        let mapped = detection.groups.map { group -> MappedGroup in
+            let points = group.points.map {
+                LandmarkCoordinateMapper.map($0.point, sourceSize: detection.sourceSize, outputSize: canvasSize, mirrored: settings.mirror)
+            }
+            return MappedGroup(region: group.region, points: points, edges: group.edges)
+        }
+        let strokes = LineWalkDrawing().strokes(groups: mapped, landmarks: settings.landmarks)
+
+        let width = Int(canvasSize.width), height = Int(canvasSize.height)
+        guard width > 0, height > 0, let buffer = overlayBuffer(width: width, height: height) else { return nil }
+        guard metal.render(strokes: strokes, into: buffer) else { return nil }
+
+        let upscale = 1 / scaleDown
+        return CIImage(cvPixelBuffer: buffer)
+            .transformed(by: CGAffineTransform(scaleX: upscale, y: upscale))
+            .cropped(to: CGRect(origin: .zero, size: outputSize))
+    }
+
+    /// Double-buffered IOSurface-backed BGRA buffer for the Metal overlay,
+    /// rebuilt on size change. Alternating buffers avoids overwriting the one
+    /// the hot path is still compositing.
+    private func overlayBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        let size = CGSize(width: width, height: height)
+        if overlayBufferSize != size {
+            overlayBuffers = [nil, nil]
+            overlayBufferSize = size
+        }
+        overlayBufferIndex = (overlayBufferIndex + 1) % 2
+        if overlayBuffers[overlayBufferIndex] == nil {
+            overlayBuffers[overlayBufferIndex] = try? PixelBufferUtils.makePixelBuffer(
+                format: FrameFormat(id: "metal-overlay", width: width, height: height)
+            )
+        }
+        return overlayBuffers[overlayBufferIndex]
     }
 
     private func drawRaw(_ points: [CGPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {

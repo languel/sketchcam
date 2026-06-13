@@ -545,6 +545,11 @@ struct ContentView: View {
 
     @ViewBuilder private var debugTab: some View {
         DebugGrid(stats: model.stats, permission: model.cameraPermissionState.rawValue, threshold: model.settings.threshold)
+
+        SectionHeader("Experimental")
+        Toggle("GPU drawing (Metal)", isOn: $model.settings.landmarks.useMetalDrawing)
+            .help("Render Line walk strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms.")
+
         if let error = model.errorText {
             Text(error)
                 .font(.caption)

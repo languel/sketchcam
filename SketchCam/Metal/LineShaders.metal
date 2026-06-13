@@ -2,8 +2,9 @@
 using namespace metal;
 
 // Interleaved vertex layout from StrokeTessellator: 6 floats per vertex
-// (x, y, r, g, b, a). Positions are in canvas PIXELS, origin top-left, y-down;
-// the viewport uniform maps them to NDC.
+// (x, y, r, g, b, a). Positions are in canvas PIXELS, origin BOTTOM-left, y-UP
+// (matching the overlay's CGContext convention: higher y = visually higher).
+// The viewport uniform maps them to NDC.
 
 struct VertexOut {
     float4 position [[position]];
@@ -17,8 +18,10 @@ vertex VertexOut line_vertex(uint vid [[vertex_id]],
     float2 p = float2(verts[base + 0], verts[base + 1]);
     float4 c = float4(verts[base + 2], verts[base + 3], verts[base + 4], verts[base + 5]);
 
+    // y-up: canvas y = viewport.y maps to NDC +1 (row 0 / visual top),
+    // matching the CGContext overlay so the two composite identically.
     float2 ndc = float2((p.x / viewport.x) * 2.0 - 1.0,
-                        1.0 - (p.y / viewport.y) * 2.0);
+                        (p.y / viewport.y) * 2.0 - 1.0);
 
     VertexOut out;
     out.position = float4(ndc, 0.0, 1.0);

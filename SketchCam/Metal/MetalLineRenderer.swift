@@ -146,8 +146,10 @@ extension MetalLineRenderer {
         guard let buffer = try? PixelBufferUtils.makePixelBuffer(format: FrameFormat(id: "metal-selftest", width: 64, height: 64)) else {
             return "selftest: pixel buffer alloc FAILED"
         }
+        // Horizontal line at HIGH canvas y (56 of 64). y-up ⇒ it must land near
+        // the TOP of the buffer (low row index ≈ 64-56 = 8), NOT the bottom.
         let stroke = StrokeTessellator.Stroke(
-            points: [CGPoint(x: 4, y: 32), CGPoint(x: 60, y: 32)],
+            points: [CGPoint(x: 4, y: 56), CGPoint(x: 60, y: 56)],
             color: RGBAColor(red: 1, green: 0, blue: 0, alpha: 1),
             baseWidth: 12
         )
@@ -162,12 +164,43 @@ extension MetalLineRenderer {
             let o = y * rowBytes + x * 4
             return (Int(data[o]), Int(data[o + 1]), Int(data[o + 2]), Int(data[o + 3]))
         }
-        let center = pixel(32, 32)   // on the line → red, opaque
-        let corner = pixel(2, 2)     // off the line → transparent
-        let centerOK = center.a > 200 && center.r > 200 && center.g < 60 && center.b < 60
-        let cornerOK = corner.a < 20
-        let verdict = (centerOK && cornerOK) ? "PASS" : "FAIL"
-        return "selftest: \(verdict) center(b,g,r,a)=\(center) corner(b,g,r,a)=\(corner)"
+        let top = pixel(32, 8)      // where the high-y line should be → red, opaque
+        let bottom = pixel(32, 56)  // opposite end → transparent (confirms y-up)
+        let topOK = top.a > 200 && top.r > 200 && top.g < 60 && top.b < 60
+        let bottomOK = bottom.a < 20
+        let verdict = (topOK && bottomOK) ? "PASS" : "FAIL"
+
+        let perf = perfLine(renderer: renderer)
+        return "selftest: \(verdict) (y-up) top-row8(b,g,r,a)=\(top) bottom-row56(b,g,r,a)=\(bottom)\n\(perf)"
+    }
+
+    /// Times a representative overlay render at the typical 1280×720 canvas with
+    /// a busy LineWalk-like stroke set, for direct comparison to the ~54 ms CPU
+    /// CGContext overlay this replaces.
+    private static func perfLine(renderer: MetalLineRenderer) -> String {
+        guard let buffer = try? PixelBufferUtils.makePixelBuffer(format: FrameFormat(id: "metal-perf", width: 1280, height: 720)) else {
+            return "perf: buffer alloc FAILED"
+        }
+        // 8 wavy strokes of ~200 points each (~1600 points total) — comparable
+        // to a dense multi-feature LineWalk frame.
+        var strokes: [StrokeTessellator.Stroke] = []
+        for s in 0..<8 {
+            let pts = (0..<200).map { i -> CGPoint in
+                let t = Double(i)
+                return CGPoint(x: 40 + t * 6, y: 360 + sin(t * 0.18 + Double(s)) * (120 + Double(s) * 8))
+            }
+            strokes.append(StrokeTessellator.Stroke(
+                points: pts,
+                color: RGBAColor(red: 0.9, green: 0.4, blue: 0.3, alpha: 0.95),
+                baseWidth: 6, widthVariation: 0.5, seed: s
+            ))
+        }
+        for _ in 0..<10 { _ = renderer.render(strokes: strokes, into: buffer) }  // warm up
+        let iterations = 100
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<iterations { _ = renderer.render(strokes: strokes, into: buffer) }
+        let perCall = (CFAbsoluteTimeGetCurrent() - start) / Double(iterations) * 1_000
+        return String(format: "perf: GPU overlay render (1280x720, ~1600 pts, MSAA, sync) = %.3f ms/frame (CPU CGContext was ~54 ms)", perCall)
     }
 }
 #endif

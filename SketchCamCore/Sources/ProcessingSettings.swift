@@ -272,6 +272,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Width variation along the curve (calligraphic taper / swell amount).
     public var lineWalkWidthVariation: Float
     public var lineWalkCurveFit: CurveFit
+    /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
+    /// path. Experimental opt-in for the Metal overhaul A/B.
+    public var useMetalDrawing: Bool
     /// Shared drawing color set. When `drawingMatchesLandmarkColors` is set the
     /// algorithms instead tint by each region's landmark color.
     public var drawingPalette: DrawingPalette
@@ -334,6 +337,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         lineWalkWidth: Float = 2,
         lineWalkWidthVariation: Float = 0.3,
         lineWalkCurveFit: CurveFit = .hobby,
+        useMetalDrawing: Bool = false,
         drawingPalette: DrawingPalette = .default,
         drawingMatchesLandmarkColors: Bool = false,
         jawStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.95, green: 0.33, blue: 0.48, alpha: 0.85)),
@@ -392,6 +396,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.lineWalkWidth = lineWalkWidth
         self.lineWalkWidthVariation = lineWalkWidthVariation
         self.lineWalkCurveFit = lineWalkCurveFit
+        self.useMetalDrawing = useMetalDrawing
         self.drawingPalette = drawingPalette
         self.drawingMatchesLandmarkColors = drawingMatchesLandmarkColors
         self.jawStyle = jawStyle
