@@ -158,7 +158,7 @@ public struct ProcessingSettings: Equatable, Sendable {
         segmentation: SegmentationSettings = SegmentationSettings(),
         previewEnabled: Bool = true,
         previewFPS: Double = 0,
-        useMetalPreview: Bool = true,
+        useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings()
     ) {

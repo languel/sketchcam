@@ -455,13 +455,13 @@ final class SketchCamViewModel: ObservableObject {
         let now = CFAbsoluteTimeGetCurrent()
         let previewInterval: CFAbsoluteTime = settings.previewFPS > 0 ? 1.0 / settings.previewFPS : 0
         var image: CGImage?
-        var displaySample: CMSampleBuffer?
+        var displayBuffer: CVPixelBuffer?
         if settings.previewEnabled, now - lastPreviewTime >= previewInterval {
             lastPreviewTime = now
             if settings.useMetalPreview, settings.previewMode != .split {
                 switch settings.previewMode {
-                case .processed: displaySample = sampleBuffer
-                case .original: displaySample = try? PixelBufferUtils.makeSampleBuffer(pixelBuffer: originalPixelBuffer)
+                case .processed: displayBuffer = pixelBuffer
+                case .original: displayBuffer = originalPixelBuffer
                 case .split: break
                 }
             } else {
@@ -482,7 +482,7 @@ final class SketchCamViewModel: ObservableObject {
         if shouldUpdateStats {
             lastStatsTime = now
         }
-        guard image != nil || displaySample != nil || shouldUpdateStats else { return }
+        guard image != nil || displayBuffer != nil || shouldUpdateStats else { return }
 
         let stageMillis = timings.snapshotMillis()
         let frameIndexSnapshot = frameIndex
@@ -499,8 +499,8 @@ final class SketchCamViewModel: ObservableObject {
         }
         #endif
         DispatchQueue.main.async {
-            if let displaySample {
-                self.previewDisplay.enqueue(displaySample)
+            if let displayBuffer {
+                self.previewDisplay.enqueue(displayBuffer)
             }
             if let image {
                 self.previewImage = image

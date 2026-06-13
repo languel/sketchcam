@@ -1,42 +1,45 @@
 import AVFoundation
 import CoreMedia
+import CoreVideo
+import SketchCamShared
 import SwiftUI
 
-/// Zero-readback preview/display: shows processed frames by enqueuing their
-/// `CMSampleBuffer`s straight into an `AVSampleBufferDisplayLayer` — no
-/// `createCGImage` GPU→CPU readback, GPU-composited, full frame rate. The
-/// preview pane is also the main display in presentation mode, so this is the
-/// "full-tilt" output path.
+/// Zero-readback preview/display: shows processed frames by wrapping their
+/// `CVPixelBuffer` (IOSurface, shared) in a display `CMSampleBuffer` and
+/// enqueuing it into an `AVSampleBufferDisplayLayer` — no `createCGImage`
+/// GPU→CPU readback, GPU-composited, full frame rate. The preview pane is also
+/// the main display in presentation mode, so this is the "full-tilt" path.
 final class SampleBufferDisplayController {
     let displayLayer = AVSampleBufferDisplayLayer()
 
     init() {
         displayLayer.videoGravity = .resizeAspect
-        // Display frames as soon as they arrive (live), ignoring timestamps.
-        let timebase = makeHostTimebase()
-        displayLayer.controlTimebase = timebase
-        if let timebase {
-            CMTimebaseSetTime(timebase, time: .zero)
-            CMTimebaseSetRate(timebase, rate: 1.0)
-        }
     }
 
     /// Enqueue a frame for display. Must be called on the main thread (CALayer).
-    func enqueue(_ sampleBuffer: CMSampleBuffer) {
-        if displayLayer.status == .failed {
-            displayLayer.flush()
-        }
-        if displayLayer.isReadyForMoreMediaData {
-            displayLayer.enqueue(sampleBuffer)
-        }
+    /// Uses DisplayImmediately so frames show as they arrive regardless of
+    /// timestamps (a control timebase starting at 0 vs host-time PTS left the
+    /// layer waiting for "future" frames → black).
+    func enqueue(_ pixelBuffer: CVPixelBuffer) {
+        guard let sample = makeDisplaySample(pixelBuffer) else { return }
+        if displayLayer.status == .failed { displayLayer.flush() }
+        displayLayer.enqueue(sample)
     }
 
     func flush() { displayLayer.flush() }
 
-    private func makeHostTimebase() -> CMTimebase? {
-        var timebase: CMTimebase?
-        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
-        return timebase
+    private func makeDisplaySample(_ pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
+        guard let sample = try? PixelBufferUtils.makeSampleBuffer(pixelBuffer: pixelBuffer) else { return nil }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                dict,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
+        return sample
     }
 }
 
