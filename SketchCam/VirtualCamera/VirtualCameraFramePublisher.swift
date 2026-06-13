@@ -36,8 +36,14 @@ final class VirtualCameraFramePublisher {
             connect()
         }
         guard let queue else { return }
+        // Evict stale frames when the sink queue is full (e.g. no/slow consumer).
+        // CRITICAL: each element was enqueued with passRetained (+1); dequeuing
+        // it MUST take that reference back and release it, or the CMSampleBuffer
+        // (and its 1080p IOSurface) leaks forever. Discarding the pointer here
+        // was a 125 GB IOSurface leak — one full-res surface per evicted frame.
         while CMSimpleQueueGetCount(queue) >= CMSimpleQueueGetCapacity(queue), CMSimpleQueueGetCapacity(queue) > 0 {
-            _ = CMSimpleQueueDequeue(queue)
+            guard let stale = CMSimpleQueueDequeue(queue) else { break }
+            Unmanaged<CMSampleBuffer>.fromOpaque(stale).release()
         }
 
         let retained = Unmanaged.passRetained(sampleBuffer)
@@ -84,6 +90,13 @@ final class VirtualCameraFramePublisher {
     func disconnect() {
         if deviceID != 0, streamID != 0 {
             _ = CMIODeviceStopStream(deviceID, streamID)
+        }
+        // Release any frames still retained in the sink queue (balances the
+        // passRetained in publish) before dropping our reference to it.
+        if let queue {
+            while let stale = CMSimpleQueueDequeue(queue) {
+                Unmanaged<CMSampleBuffer>.fromOpaque(stale).release()
+            }
         }
         queue = nil
         deviceID = 0
