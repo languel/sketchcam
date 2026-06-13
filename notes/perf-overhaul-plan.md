@@ -227,3 +227,28 @@ wanted. Either way: zero-readback MTKView/AVSampleBufferDisplayLayer preview.
 5. Test clip: ~/Desktop/ref/chaplin-dance.gif was NOT present this session.
    Local movie files load via the movie file picker (openMoviePanel). If a clip
    is dropped in, convert to mp4 (ffmpeg available) and open it.
+
+---
+
+# metal-engine session 2 (2026-06-13 cont.)
+
+Shipped + pushed on `metal-engine`:
+- **Zero-readback Metal preview/display** (AVSampleBufferDisplayLayer) — the
+  preview pane is now a first-class GPU display (presentation output), with a
+  **Display fps** control (0 = full-tilt) and a Metal-display toggle. Caveat:
+  alpha-background mode may show opaque (use the CGImage fallback for alpha).
+- **Choppiness fixed** (preview was 12 fps), **synthetic upside-down fixed**,
+  **App Nap disabled** (latency-critical activity ≈ the Game Mode lever).
+- **Bundled Chaplin demo clip** + Input-tab "Demo clip" loader (gif→mp4).
+- **Metal effect kernels — VERIFIED**: threshold (+invert/+ink, aspect-fill),
+  Sobel outline, dilate/erode, box blur, premultiplied composite
+  (`EffectShaders.metal` / `MetalEffects`). DEBUG self-check PASS on-device.
+
+NOT done — **live effects integration** (`useMetalEffects`): wiring a
+`MetalFrameProcessor` into the pipeline (threshold + outline + overlay
+composite + backgrounds, producing the ProcessedFrame) is the remaining piece
+to make GPU effects visible in the app. Held back deliberately: the kernels are
+unit-verified, but the *frame composite* (aspect-fill, orientation vs the y-up
+overlay, background/alpha, sample-buffer) is visual and should be verified with
+eyes on the output rather than shipped as a large blind change. Scope when done:
+threshold/outline/overlay/basic-background; matte/keying stays CoreImage for now.
