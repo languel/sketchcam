@@ -252,3 +252,40 @@ unit-verified, but the *frame composite* (aspect-fill, orientation vs the y-up
 overlay, background/alpha, sample-buffer) is visual and should be verified with
 eyes on the output rather than shipped as a large blind change. Scope when done:
 threshold/outline/overlay/basic-background; matte/keying stays CoreImage for now.
+
+---
+
+# metal-engine session 3 (2026-06-13) — tracking + contours
+
+Shipped + pushed:
+- **Predictive tracking** (`landmarks.predictiveTracking`, default on): the detection
+  service keeps the last 2 detections and extrapolates each landmark (matched by
+  region+label, clamped ≤1 interval) to the current frame, stamping a per-frame id
+  so the overlay re-renders EVERY frame. Fixes the drawing stutter/lag (it stepped
+  at the ~10 Hz detection cadence). Verified live: FPS 30, overlay ~6 ms/frame async,
+  frame total ~3 ms. Detection Rate range raised to 1–30 Hz.
+- **"Contour" → "Person"** (the segmentation silhouette), with help noting it's
+  independent of Layers keying (traces the outline without the keying composite).
+- **Zero-readback Metal preview** (AVSampleBufferDisplayLayer) + Display-fps + the
+  preview-timebase black-screen fix.
+
+KEY MEASURED FINDING — **detection input resolution does NOT speed up Vision**.
+Apple's body/hand/face models resize the input to a fixed internal resolution, so a
+smaller frame only loses precision (measured: 384px→15.6ms, 128px→18.3ms, no drop).
+Removed the misleading "Input px" knob. Real detection levers: **track fewer
+categories** (Face/Body/Hands are each a separate Vision request) and **rate +
+predictive tracking** (keep rate low, prediction keeps the drawing smooth).
+Detection is OFF the hot path — it doesn't lower FPS, only caps the rate.
+
+## Planned next (this session)
+- **Seg-free landmark contour** ("Hull"): convex hull of body/hand/face landmarks —
+  a person outline with NO segmentation cost. Independent toggle from "Person"
+  (silhouette); both usable at once.
+- Defaults: Eyes ON, Head OFF.
+- Re-expose detection input size (honest tooltip: precision, not speed) + hover
+  tips on all the resolution controls (Camera / Output / Processing / Detection).
+- Clarify "Edges": whole-frame edge tracking = the Outline EFFECT (Effect tab); the
+  landmark contour was always the person silhouette. May surface an "Edges" overlay.
+- DEFER (yarn revisit): toggle to draw yarn only inside the person/contour
+  (proximity sampling → "wrapped in yarn"); yarn noise controls like LineWalk but
+  **linear vs circular** (loops/tangles, local winding >1) instead of along/ortho.
