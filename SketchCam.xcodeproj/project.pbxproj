@@ -12,6 +12,7 @@
 		1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */; };
 		1734FE250B280600E8BDF382 /* YarnDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4087DC25AE092E9D32327B08 /* YarnDrawing.swift */; };
 		1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A62B38FB62959937129F6F /* ProcessingSettings.swift */; };
+		1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = D92A8604968462AFE800148A /* LineShaders.metal */; };
 		1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */; };
 		27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
@@ -31,9 +32,12 @@
 		8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C5A560087A8027F400A91B /* LineWalkTests.swift */; };
 		869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */; };
 		88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
+		89EBEF89BCCC6E1D80FFA504 /* StrokeTessellator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C69066333DBFA2348E74580 /* StrokeTessellator.swift */; };
 		8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */; };
+		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
 		A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */; };
 		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
+		AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */; };
 		AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */; };
 		AE0591748979F51E8055BFFD /* FrameScaler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ADDC344946874669A1BA2DD /* FrameScaler.swift */; };
 		B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53093F3EB6121C4B7899971 /* SegmentationService.swift */; };
@@ -142,9 +146,11 @@
 		43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
+		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
 		63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraExtensionProvider.swift; sourceTree = "<group>"; };
 		69372C0E7B99EADDD8731E11 /* SketchCamState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamState.swift; sourceTree = "<group>"; };
+		6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLineRenderer.swift; sourceTree = "<group>"; };
 		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
 		7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviePlaybackSource.swift; sourceTree = "<group>"; };
@@ -169,10 +175,12 @@
 		CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkDrawing.swift; sourceTree = "<group>"; };
 		D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingAlgorithm.swift; sourceTree = "<group>"; };
 		D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackTestPatternGenerator.swift; sourceTree = "<group>"; };
+		D92A8604968462AFE800148A /* LineShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = LineShaders.metal; sourceTree = "<group>"; };
 		E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCameraFramePublisher.swift; sourceTree = "<group>"; };
 		EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugStats.swift; sourceTree = "<group>"; };
 		ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateStore.swift; sourceTree = "<group>"; };
 		F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestFrameStore.swift; sourceTree = "<group>"; };
+		FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -288,6 +296,7 @@
 				61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */,
 				52C5A560087A8027F400A91B /* LineWalkTests.swift */,
 				BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */,
+				FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */,
 				50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */,
 			);
 			path = SketchCamCoreTests;
@@ -313,6 +322,15 @@
 			path = SketchCamCameraExtension;
 			sourceTree = "<group>";
 		};
+		6FA417AF7C43DA00705B2F7C /* Metal */ = {
+			isa = PBXGroup;
+			children = (
+				D92A8604968462AFE800148A /* LineShaders.metal */,
+				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
+			);
+			path = Metal;
+			sourceTree = "<group>";
+		};
 		76AE06D218CFA9453EC92B71 /* Preview */ = {
 			isa = PBXGroup;
 			children = (
@@ -329,6 +347,7 @@
 				43EBB7984D99D48928D716A0 /* Debug */,
 				5673C2E23C8D68622A1808E0 /* Diagnostics */,
 				C0045440A55F23B6F41D6D01 /* Landmarks */,
+				6FA417AF7C43DA00705B2F7C /* Metal */,
 				76AE06D218CFA9453EC92B71 /* Preview */,
 				0E332C77645CE3D351493FA8 /* Resources */,
 				F1F23FD48ADC73BC4FA7E170 /* VirtualCamera */,
@@ -398,6 +417,7 @@
 				2836CF880DAF3F0A8928640F /* LineWalk.swift */,
 				33A62B38FB62959937129F6F /* ProcessingSettings.swift */,
 				69372C0E7B99EADDD8731E11 /* SketchCamState.swift */,
+				5C69066333DBFA2348E74580 /* StrokeTessellator.swift */,
 				B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */,
 			);
 			path = Sources;
@@ -604,7 +624,9 @@
 				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
 				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,
 				EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */,
+				1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */,
 				3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */,
+				AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */,
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
@@ -630,6 +652,7 @@
 				D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */,
 				1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */,
 				E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */,
+				89EBEF89BCCC6E1D80FFA504 /* StrokeTessellator.swift in Sources */,
 				A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -642,6 +665,7 @@
 				AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */,
 				8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */,
 				CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */,
+				8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */,
 				EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
