@@ -259,6 +259,11 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Contour granularity: 0 = coarse (few points, loose) → 1 = fine (many
     /// points, hugs the silhouette including concavities).
     public var contourDetail: Float
+    /// Predict landmark motion between detections and re-render the overlay
+    /// every frame, so the drawing tracks at frame rate (not the slower
+    /// detection cadence) and lags the body less. Off = render at detection
+    /// cadence (the old stepping behavior).
+    public var predictiveTracking: Bool
     /// Seeds the PRNG behind the drawing algorithms; a fixed seed keeps the
     /// generated shape stable while the subject moves.
     public var seed: Int
@@ -336,6 +341,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         labelsMatchColor: Bool = true,
         trackContour: Bool = false,
         contourDetail: Float = 0.4,
+        predictiveTracking: Bool = true,
         seed: Int = 7,
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
@@ -395,6 +401,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.labelsMatchColor = labelsMatchColor
         self.trackContour = trackContour
         self.contourDetail = contourDetail
+        self.predictiveTracking = predictiveTracking
         self.seed = seed
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount

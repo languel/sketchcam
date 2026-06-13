@@ -403,7 +403,9 @@ struct ContentView: View {
             SliderRow(title: "Rate (Hz)", value: Binding(
                 get: { model.settings.landmarks.detectionsPerSecond },
                 set: { model.settings.landmarks.detectionsPerSecond = $0.rounded() }
-            ), range: 1...15, precision: 0)
+            ), range: 1...30, precision: 0)
+            Toggle("Predict motion (smooth tracking)", isOn: $model.settings.landmarks.predictiveTracking)
+                .help("Extrapolate landmark motion and redraw every frame so the drawing tracks at frame rate and lags the body less — without raising the detection rate.")
             SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4)
             SliderRow(title: "Stick width", value: floatBinding(\.landmarks.stickScale), range: 0.2...4)
         }
