@@ -36,7 +36,9 @@
 		88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */; };
 		89EBEF89BCCC6E1D80FFA504 /* StrokeTessellator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C69066333DBFA2348E74580 /* StrokeTessellator.swift */; };
 		8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */; };
+		8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F2A2598E845123A35AB7F0C /* MetalEffects.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
+		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
 		A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */; };
 		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
 		AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */; };
@@ -134,6 +136,7 @@
 		013A76E6492A58B8DFFD7542 /* SketchCamCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SketchCamCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreImageFrameProcessorTests.swift; sourceTree = "<group>"; };
 		0C7E204A325423D92D191A3B /* SketchCamShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		11D744A99E5D781B4E282BB4 /* EffectShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = EffectShaders.metal; sourceTree = "<group>"; };
 		145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = SketchCamCameraExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamViewModel.swift; sourceTree = "<group>"; };
 		1ADDC344946874669A1BA2DD /* FrameScaler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameScaler.swift; sourceTree = "<group>"; };
@@ -146,6 +149,7 @@
 		4087DC25AE092E9D32327B08 /* YarnDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YarnDrawing.swift; sourceTree = "<group>"; };
 		4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionLandmarkTracker.swift; sourceTree = "<group>"; };
 		43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
+		4F2A2598E845123A35AB7F0C /* MetalEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalEffects.swift; sourceTree = "<group>"; };
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
 		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
@@ -338,7 +342,9 @@
 		6FA417AF7C43DA00705B2F7C /* Metal */ = {
 			isa = PBXGroup;
 			children = (
+				11D744A99E5D781B4E282BB4 /* EffectShaders.metal */,
 				D92A8604968462AFE800148A /* LineShaders.metal */,
+				4F2A2598E845123A35AB7F0C /* MetalEffects.swift */,
 				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
 			);
 			path = Metal;
@@ -635,12 +641,14 @@
 				DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */,
 				3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */,
 				A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */,
+				96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */,
 				1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */,
 				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
 				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,
 				EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */,
 				1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */,
 				3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */,
+				8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */,
 				AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */,
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,

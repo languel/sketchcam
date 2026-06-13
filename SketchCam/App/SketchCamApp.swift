@@ -4,8 +4,11 @@ import SwiftUI
 struct SketchCamApp: App {
     init() {
         #if DEBUG
-        // One-shot GPU renderer smoke check (writes result to container tmp).
-        DispatchQueue.global(qos: .utility).async { MetalLineRenderer.runSelfCheck() }
+        // One-shot GPU smoke checks (write results to container tmp).
+        DispatchQueue.global(qos: .utility).async {
+            MetalLineRenderer.runSelfCheck()
+            MetalEffects.runSelfCheck()
+        }
         #endif
     }
 
