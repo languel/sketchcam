@@ -387,9 +387,9 @@ struct ContentView: View {
 
             SectionHeader("Other")
             featureRow("Hands", track: \.landmarks.trackHands, style: \.landmarks.handsStyle)
-            featureRow("Contour", track: \.landmarks.trackContour, style: \.landmarks.contourStyle)
+            featureRow("Person", track: \.landmarks.trackContour, style: \.landmarks.contourStyle)
             SliderRow(title: "Detail", value: floatBinding(\.landmarks.contourDetail),
-                      hint: "Coarse (loose ring) → fine (hugs the silhouette incl. concavities)")
+                      hint: "Person silhouette contour (Vision segmentation). Independent of Layers keying — tracks the outline without the keying composite. Coarse → fine (hugs concavities).")
                 .disabled(!model.settings.landmarks.trackContour)
 
             SectionHeader("Labels")
