@@ -21,7 +21,17 @@ enum SyntheticLandmarkGenerator {
 
         groups.append(contentsOf: faceGroups(t: t, settings: settings.landmarks))
 
-        return groups
+        // The synthetic layout is authored y-down (head at low y); Vision and the
+        // overlay use y-up (head at high y). Flip so the figure is upright.
+        return groups.map { group in
+            LandmarkGroup(
+                region: group.region,
+                points: group.points.map {
+                    LandmarkPoint(point: CGPoint(x: $0.point.x, y: 1 - $0.point.y), confidence: $0.confidence, label: $0.label)
+                },
+                edges: group.edges
+            )
+        }
     }
 
     // Synthetic body layout (13 points):

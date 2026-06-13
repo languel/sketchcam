@@ -86,6 +86,10 @@ final class SketchCamViewModel: ObservableObject {
     private let timings = PipelineTimings()
     private let frameGate = NSLock()
     private var cameraFrameInFlight = false
+    /// Keeps the OS from throttling us (App Nap / timer coalescing / QoS
+    /// clamping) while live — the closest real lever to Apple's "Game Mode"
+    /// for a non-fullscreen app. Held for the capture session's lifetime.
+    private var realtimeActivity: NSObjectProtocol?
     private let frozenLock = NSLock()
     private var frozenFrame: CVPixelBuffer?
     private let exportLock = NSLock()
@@ -100,7 +104,11 @@ final class SketchCamViewModel: ObservableObject {
     private var testPatternTimer: DispatchSourceTimer?
 
     /// Preview readback cadence; publishing runs at full frame rate regardless.
-    private let previewInterval: CFAbsoluteTime = 1.0 / 12.0
+    // Preview at the full capture rate — the 12 Hz throttle made the in-app
+    // preview look choppy next to the smooth live camera (the published stream
+    // was always 30 fps). The readback is ~1 ms; a zero-readback MTKView preview
+    // in the Metal overhaul removes the cost entirely.
+    private let previewInterval: CFAbsoluteTime = 1.0 / 30.0
     private let statsInterval: CFAbsoluteTime = 0.25
 
     init() {
@@ -215,6 +223,12 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     func start() {
+        if realtimeActivity == nil {
+            realtimeActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "Real-time camera processing"
+            )
+        }
         refreshDevices()
         startTestPatternTimer()
         // Dev affordance: SKETCHCAM_LANDMARKS=camera|synthetic env var enables
@@ -245,6 +259,10 @@ final class SketchCamViewModel: ObservableObject {
         testPatternTimer?.cancel()
         testPatternTimer = nil
         publisher.disconnect()
+        if let realtimeActivity {
+            ProcessInfo.processInfo.endActivity(realtimeActivity)
+            self.realtimeActivity = nil
+        }
     }
 
     func refreshDevices() {
