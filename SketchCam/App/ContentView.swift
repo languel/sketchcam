@@ -74,6 +74,9 @@ struct ContentView: View {
             if !model.settings.previewEnabled {
                 Text("Preview off — still publishing")
                     .foregroundStyle(.secondary)
+            } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
+                // Zero-readback GPU display (also the presentation-mode output).
+                SampleBufferDisplayView(controller: model.previewDisplay)
             } else if let previewImage = model.previewImage {
                 Image(previewImage, scale: 1, label: Text("SketchCam preview"))
                     .resizable()
@@ -227,6 +230,12 @@ struct ContentView: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         Toggle("Show preview", isOn: $model.settings.previewEnabled)
+        Toggle("Metal display (zero readback)", isOn: $model.settings.useMetalPreview)
+            .help("Display frames directly on the GPU — no CGImage readback, full rate. The preview is also the presentation-mode output. Split mode falls back to the CPU image.")
+        SliderRow(title: "Display fps", value: Binding(
+            get: { model.settings.previewFPS },
+            set: { model.settings.previewFPS = $0.rounded() }
+        ), range: 0...60, precision: 0, hint: "0 = full-tilt (every published frame)")
 
         SectionHeader("Window")
         HStack {

@@ -32,6 +32,7 @@
 		8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C5A560087A8027F400A91B /* LineWalkTests.swift */; };
 		869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */; };
 		88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
+		88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */; };
 		89EBEF89BCCC6E1D80FFA504 /* StrokeTessellator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C69066333DBFA2348E74580 /* StrokeTessellator.swift */; };
 		8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
@@ -151,6 +152,7 @@
 		63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraExtensionProvider.swift; sourceTree = "<group>"; };
 		69372C0E7B99EADDD8731E11 /* SketchCamState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamState.swift; sourceTree = "<group>"; };
 		6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLineRenderer.swift; sourceTree = "<group>"; };
+		70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferPreview.swift; sourceTree = "<group>"; };
 		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
 		7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviePlaybackSource.swift; sourceTree = "<group>"; };
@@ -335,6 +337,7 @@
 			isa = PBXGroup;
 			children = (
 				43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */,
+				70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */,
 			);
 			path = Preview;
 			sourceTree = "<group>";
@@ -631,6 +634,7 @@
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
+				88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */,
 				B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */,
 				27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */,
 				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,

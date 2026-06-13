@@ -78,6 +78,8 @@ final class SketchCamViewModel: ObservableObject {
     private static let sharedCIContext = CIContext(options: [.cacheIntermediates: true])
     private let processor = CoreImageFrameProcessor(context: SketchCamViewModel.sharedCIContext)
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
+    /// Zero-readback display path (the preview pane / presentation output).
+    let previewDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let segmentationService = SegmentationService()
@@ -104,11 +106,6 @@ final class SketchCamViewModel: ObservableObject {
     private var testPatternTimer: DispatchSourceTimer?
 
     /// Preview readback cadence; publishing runs at full frame rate regardless.
-    // Preview at the full capture rate — the 12 Hz throttle made the in-app
-    // preview look choppy next to the smooth live camera (the published stream
-    // was always 30 fps). The readback is ~1 ms; a zero-readback MTKView preview
-    // in the Metal overhaul removes the cost entirely.
-    private let previewInterval: CFAbsoluteTime = 1.0 / 30.0
     private let statsInterval: CFAbsoluteTime = 0.25
 
     init() {
@@ -440,20 +437,32 @@ final class SketchCamViewModel: ObservableObject {
         exportLock.withLock { lastPublishedFrame = pixelBuffer }
         let fps = updateFPS()
 
-        // Preview and stats are decoupled from publishing: the virtual camera
-        // gets every frame; the UI gets a throttled, downscaled view of them.
+        // Preview/display is decoupled from publishing: the virtual camera gets
+        // every frame; the display refreshes at previewFPS (0 = full-tilt). The
+        // Metal path enqueues the frame's CMSampleBuffer with zero readback; the
+        // CGImage path is the fallback (and handles split mode).
         let now = CFAbsoluteTimeGetCurrent()
+        let previewInterval: CFAbsoluteTime = settings.previewFPS > 0 ? 1.0 / settings.previewFPS : 0
         var image: CGImage?
+        var displaySample: CMSampleBuffer?
         if settings.previewEnabled, now - lastPreviewTime >= previewInterval {
             lastPreviewTime = now
-            image = timings.measure(.preview) {
+            if settings.useMetalPreview, settings.previewMode != .split {
                 switch settings.previewMode {
-                case .processed:
-                    return previewRenderer.makeImage(from: pixelBuffer)
-                case .original:
-                    return previewRenderer.makeImage(from: originalPixelBuffer)
-                case .split:
-                    return previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
+                case .processed: displaySample = sampleBuffer
+                case .original: displaySample = try? PixelBufferUtils.makeSampleBuffer(pixelBuffer: originalPixelBuffer)
+                case .split: break
+                }
+            } else {
+                image = timings.measure(.preview) {
+                    switch settings.previewMode {
+                    case .processed:
+                        return previewRenderer.makeImage(from: pixelBuffer)
+                    case .original:
+                        return previewRenderer.makeImage(from: originalPixelBuffer)
+                    case .split:
+                        return previewRenderer.makeSplitImage(original: originalPixelBuffer, processed: pixelBuffer, outputFormat: outputFormat)
+                    }
                 }
             }
         }
@@ -462,7 +471,7 @@ final class SketchCamViewModel: ObservableObject {
         if shouldUpdateStats {
             lastStatsTime = now
         }
-        guard image != nil || shouldUpdateStats else { return }
+        guard image != nil || displaySample != nil || shouldUpdateStats else { return }
 
         let stageMillis = timings.snapshotMillis()
         let frameIndexSnapshot = frameIndex
@@ -479,6 +488,9 @@ final class SketchCamViewModel: ObservableObject {
         }
         #endif
         DispatchQueue.main.async {
+            if let displaySample {
+                self.previewDisplay.enqueue(displaySample)
+            }
             if let image {
                 self.previewImage = image
             }

@@ -129,6 +129,13 @@ public struct ProcessingSettings: Equatable, Sendable {
     public var segmentation: SegmentationSettings
     /// When false, no preview readback happens at all; publishing continues.
     public var previewEnabled: Bool
+    /// Preview/display refresh cap in fps. 0 = full-tilt (every published
+    /// frame). The preview pane doubles as the main display (presentation
+    /// mode), so this is a real output rate, not a throttle-to-save-cost.
+    public var previewFPS: Double
+    /// Display the preview via a zero-readback Metal layer (AVSampleBufferDisplayLayer)
+    /// instead of a per-frame CGImage readback. The "full-tilt" display path.
+    public var useMetalPreview: Bool
     public var processingQuality: ProcessingQuality
     public var landmarks: LandmarkSettings
 
@@ -150,6 +157,8 @@ public struct ProcessingSettings: Equatable, Sendable {
         backgroundColor: RGBAColor = .chromaGreen,
         segmentation: SegmentationSettings = SegmentationSettings(),
         previewEnabled: Bool = true,
+        previewFPS: Double = 0,
+        useMetalPreview: Bool = true,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings()
     ) {
@@ -170,6 +179,8 @@ public struct ProcessingSettings: Equatable, Sendable {
         self.backgroundColor = backgroundColor
         self.segmentation = segmentation
         self.previewEnabled = previewEnabled
+        self.previewFPS = previewFPS
+        self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality
         self.landmarks = landmarks
     }
