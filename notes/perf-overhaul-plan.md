@@ -172,3 +172,58 @@ WebGPU only if the project later targets the browser/cross-platform.
 6. How aggressively to cut: are you open to **dropping / simplifying effects**
    (e.g. the CoreImage filter chain) in favor of a few Metal shaders, or must
    current visual output be preserved bit-for-bit?
+
+---
+
+# metal-engine branch — session progress (2026-06-13)
+
+## Shipped (branch `metal-engine`, pushed)
+- **GPU stroke renderer** (`StrokeTessellator` in Core + `LineShaders.metal` +
+  `MetalLineRenderer`): LineWalk strokes → triangles → 4× MSAA render into an
+  IOSurface BGRA `CVPixelBuffer`. **Measured 5.56 ms/frame** for a busy
+  1280×720 / ~1600-pt frame (synchronous + MSAA) vs **~54 ms** CPU CGContext —
+  **~10×**, and the live async path should be cheaper. On-device self-check
+  (DEBUG, writes container tmp/sketchcam-metal-selftest.txt) verifies pipeline,
+  y-up orientation, premultiplied blend, IOSurface readback: PASS.
+- **Opt-in wire-up**: Debug tab "GPU drawing (Metal)" toggle →
+  `settings.landmarks.useMetalDrawing`. When on (and style = Line walk) the
+  overlay is rendered on the GPU. Marks (dots/stick/labels) still CPU.
+  ⚠️ Needs one visual check: confirm the Metal overlay isn't vertically flipped
+  vs the CPU path (CIImage(cvPixelBuffer:) vs CIImage(cgImage:)). If flipped,
+  it's a one-line shader change.
+- **Preview choppiness FIXED**: preview was throttled to 12 fps (looked choppy
+  vs the smooth live cam / 30 fps published stream). Raised to 30 fps.
+- **Synthetic upside-down FIXED**: synthetic source was y-down; flipped to y-up.
+- **App Nap disabled** while live (latency-critical ProcessInfo activity) — the
+  practical "Game Mode" lever for a non-fullscreen app.
+
+## Findings / diagnosis
+- **Threshold "choppiness" was the preview throttle, NOT CoreImage.** CoreImage
+  threshold/effects cost only ~1.7 ms/frame (HUD "Process"). So dropping
+  CoreImage is a *strategic* full-GPU choice, not a perf emergency.
+- **Overlay lag** ("drawing trails the body by fractions of a second") has three
+  additive sources: (1) detection cadence (100 ms at 10 Hz — raise the Rate
+  slider); (2) the tracker's one-pole smoothing (blend 0.45 trails motion);
+  (3) overlay render time (54 ms CPU → 5.6 ms Metal). Metal drawing + higher
+  detection rate shrink it; the structural fix is **landmark velocity
+  extrapolation** (predict to the current frame time) — needs visual tuning.
+
+## DECISION NEEDED (effects strategy)
+User said effects are optional and they'd drop them for great drawings. Two paths:
+- **(A) Drop effects → lean GPU pipeline**: camera → optional simple background
+  (solid/alpha/live) → GPU LineWalk drawing → output. Smallest, fastest, all
+  Metal. No CoreImage.
+- **(B) Port effects to Metal**: reimplement threshold (incl. ink-only), outline
+  (edges+dilation+colored strokes), person keying/masks, layers, invert as Metal
+  shaders. Large, visual, but preserves current looks.
+Recommend (A) first (it's the product per the user), add Metal effects later if
+wanted. Either way: zero-readback MTKView/AVSampleBufferDisplayLayer preview.
+
+## Next (when user is back to verify visually)
+1. Flip on "GPU drawing (Metal)"; confirm orientation/quality; check Overlay ms.
+2. Decide effects strategy (A vs B above).
+3. Zero-readback preview.
+4. Landmark extrapolation to kill the tracking lag.
+5. Test clip: ~/Desktop/ref/chaplin-dance.gif was NOT present this session.
+   Local movie files load via the movie file picker (openMoviePanel). If a clip
+   is dropped in, convert to mp4 (ffmpeg available) and open it.
