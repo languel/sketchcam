@@ -14,6 +14,7 @@
 		1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A62B38FB62959937129F6F /* ProcessingSettings.swift */; };
 		1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = D92A8604968462AFE800148A /* LineShaders.metal */; };
 		1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */; };
+		252A7093E9997987BFABE110 /* chaplin-dance.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */; };
 		27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
@@ -161,6 +162,7 @@
 		8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineTimings.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
+		9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */ = {isa = PBXFileReference; path = "chaplin-dance.mp4"; sourceTree = "<group>"; };
 		A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRegistry.swift; sourceTree = "<group>"; };
 		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
 		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
@@ -219,6 +221,7 @@
 			isa = PBXGroup;
 			children = (
 				CEAB9229D624BE20FB261892 /* Assets.xcassets */,
+				44ED73AB95D2008C2D45B80D /* Samples */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -289,6 +292,14 @@
 				EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */,
 			);
 			path = Debug;
+			sourceTree = "<group>";
+		};
+		44ED73AB95D2008C2D45B80D /* Samples */ = {
+			isa = PBXGroup;
+			children = (
+				9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */,
+			);
+			path = Samples;
 			sourceTree = "<group>";
 		};
 		50676D07EAB270878D130BAD /* SketchCamCoreTests */ = {
@@ -586,6 +597,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */,
+				252A7093E9997987BFABE110 /* chaplin-dance.mp4 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

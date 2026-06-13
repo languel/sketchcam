@@ -193,6 +193,7 @@ struct ContentView: View {
         } else {
             HStack {
                 Button("Open Movie…") { model.openMoviePanel() }
+                Button("Demo clip") { model.loadDemoClip() }
                 Text(model.movieURL?.lastPathComponent ?? "No movie selected")
                     .font(.caption)
                     .foregroundStyle(.secondary)

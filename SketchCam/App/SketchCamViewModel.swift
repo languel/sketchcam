@@ -139,6 +139,17 @@ final class SketchCamViewModel: ObservableObject {
         frameSource = .movie
     }
 
+    /// Loads the bundled public-domain test clip (Chaplin) — a moving figure for
+    /// detection/drawing tests without a person in front of the camera.
+    func loadDemoClip() {
+        guard let url = Bundle.main.url(forResource: "chaplin-dance", withExtension: "mp4") else {
+            errorText = "Demo clip not found in app bundle."
+            return
+        }
+        movieURL = url
+        frameSource = .movie
+    }
+
     private func applyFrameSource() {
         switch frameSource {
         case .camera:
