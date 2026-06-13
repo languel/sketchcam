@@ -330,3 +330,39 @@ Measured after (landmarks on, loaded system): 30 fps, frame total
 
 Rule going forward: anything that renders or infers runs OFF the
 processing queue at .utility; the hot path only fetches cached results.
+
+## Checkpoint 3 (2026-06-13): Marks/Drawing split + LineWalk
+
+Art-side feature arc (no hot-path changes — all rendering stays off the
+processing queue at .utility):
+
+- **Tab split**: "Marks" (raw sensor data) vs new "Drawing" (art). Tab bar is
+  now SF Symbol icons + tooltips so 7 tabs fit the 360pt panel.
+- **Modular drawing algorithms** (`SketchCam/Landmarks/Drawing/`): a
+  `DrawingAlgorithm` protocol; the compositor renders exactly one (selected by
+  `DrawingStyle`). `DrawingSupport` holds shared primitives (curve fits,
+  variable-width stroke, color/seed helpers). Adding an algorithm = one file +
+  one enum case.
+- **LineWalk** (`SketchCamCore/Sources/LineWalk.swift`, pure/testable):
+  generalizes the unicursal one-line drawing. Pipeline: extract semantic
+  features from edge chains → curvature-biased density sampling → partition
+  into K paths (Continuity) → seeded nearest-neighbor tour → 2-D value-noise
+  perturbation (along/orthogonal × local/global Scale). Render fits a curve
+  (Polyline / Catmull / Hobby-ish / Bezier) and strokes with calligraphic
+  variable width. Deterministic from `seed`. Build < 0.2 ms/call.
+- **Region granularity**: face → Jaw/Nose/Mouth/L+R Brow/L+R Eye; body →
+  Head/Torso/L+R Arm/L+R Leg (15 regions total). Each independently
+  toggleable + styleable (e.g. drop Head when Face is tracked).
+- **Contour**: replaced the radial ray-cast (star-convex, missed concavities)
+  with Moore boundary tracing + arc-length resample to a Detail-driven point
+  count — now hugs the silhouette including armpits/between-legs.
+- Shared editable **drawing palette** (defaults to one solid color) + a global
+  **seed** (stepper + shuffle). 24 unit/perf tests green.
+
+### Known perf issues to address next
+Performance regressed on this branch and needs a dedicated pass (the art work
+prioritized correctness/structure over cost). Suspects to profile: the contour
+boundary trace + high Detail point counts, LineWalk perturbation/curve
+sampling at high Density, per-sub-segment variable-width stroking (many
+`strokePath` calls), and the now-15-region detection/group overhead. The
+per-stage HUD + `ProcessorThroughputTests` are the instruments.

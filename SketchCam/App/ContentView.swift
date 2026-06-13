@@ -8,10 +8,23 @@ struct ContentView: View {
         case layers = "Layers"
         case effect = "Effect"
         case marks = "Marks"
+        case drawing = "Drawing"
         case keys = "Keys"
         case debug = "Debug"
 
         var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .input: "video"
+            case .layers: "square.3.layers.3d"
+            case .effect: "wand.and.stars"
+            case .marks: "point.3.connected.trianglepath.dotted"
+            case .drawing: "scribble.variable"
+            case .keys: "keyboard"
+            case .debug: "ladybug"
+            }
+        }
     }
 
     @StateObject private var model = SketchCamViewModel()
@@ -85,7 +98,9 @@ struct ContentView: View {
             Divider()
             Picker("", selection: $tab) {
                 ForEach(ControlTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+                    Image(systemName: tab.icon)
+                        .help(tab.rawValue)
+                        .tag(tab)
                 }
             }
             .pickerStyle(.segmented)
@@ -99,6 +114,7 @@ struct ContentView: View {
                     case .layers: layersTab
                     case .effect: effectTab
                     case .marks: marksTab
+                    case .drawing: drawingTab
                     case .keys: keysTab
                     case .debug: debugTab
                     }
@@ -338,47 +354,33 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             HStack {
                 Toggle("Dots", isOn: $model.settings.landmarks.showDots)
-                Toggle("Yarn", isOn: $model.settings.landmarks.showYarn)
                 Toggle("Stick", isOn: $model.settings.landmarks.showStick)
             }
             .toggleStyle(.checkbox)
 
-            SectionHeader("Features")
-            StyleRow(
-                title: "Face",
-                enabled: $model.settings.landmarks.trackFace,
-                color: rgbaBinding(\.landmarks.faceStyle.color),
-                size: floatBinding(\.landmarks.faceStyle.size),
-                range: 0.7...8
-            )
-            StyleRow(
-                title: "Body",
-                enabled: $model.settings.landmarks.trackBody,
-                color: rgbaBinding(\.landmarks.bodyStyle.color),
-                size: floatBinding(\.landmarks.bodyStyle.size),
-                range: 0.7...8
-            )
-            StyleRow(
-                title: "Hands",
-                enabled: $model.settings.landmarks.trackHands,
-                color: rgbaBinding(\.landmarks.handsStyle.color),
-                size: floatBinding(\.landmarks.handsStyle.size),
-                range: 0.7...8
-            )
-            StyleRow(
-                title: "Eyes",
-                enabled: $model.settings.landmarks.trackEyesAndIrises,
-                color: rgbaBinding(\.landmarks.eyesStyle.color),
-                size: floatBinding(\.landmarks.eyesStyle.size),
-                range: 0.7...8
-            )
-            StyleRow(
-                title: "Contour",
-                enabled: $model.settings.landmarks.trackContour,
-                color: rgbaBinding(\.landmarks.contourStyle.color),
-                size: floatBinding(\.landmarks.contourStyle.size),
-                range: 0.7...8
-            )
+            SectionHeader("Face")
+            featureRow("Jaw", track: \.landmarks.trackJaw, style: \.landmarks.jawStyle)
+            featureRow("Nose", track: \.landmarks.trackNose, style: \.landmarks.noseStyle)
+            featureRow("Mouth", track: \.landmarks.trackMouth, style: \.landmarks.mouthStyle)
+            featureRow("L Brow", track: \.landmarks.trackLeftBrow, style: \.landmarks.leftBrowStyle)
+            featureRow("R Brow", track: \.landmarks.trackRightBrow, style: \.landmarks.rightBrowStyle)
+            featureRow("L Eye", track: \.landmarks.trackLeftEye, style: \.landmarks.leftEyeStyle)
+            featureRow("R Eye", track: \.landmarks.trackRightEye, style: \.landmarks.rightEyeStyle)
+
+            SectionHeader("Body")
+            featureRow("Head", track: \.landmarks.trackHead, style: \.landmarks.headStyle)
+            featureRow("Torso", track: \.landmarks.trackTorso, style: \.landmarks.torsoStyle)
+            featureRow("L Arm", track: \.landmarks.trackLeftArm, style: \.landmarks.leftArmStyle)
+            featureRow("R Arm", track: \.landmarks.trackRightArm, style: \.landmarks.rightArmStyle)
+            featureRow("L Leg", track: \.landmarks.trackLeftLeg, style: \.landmarks.leftLegStyle)
+            featureRow("R Leg", track: \.landmarks.trackRightLeg, style: \.landmarks.rightLegStyle)
+
+            SectionHeader("Other")
+            featureRow("Hands", track: \.landmarks.trackHands, style: \.landmarks.handsStyle)
+            featureRow("Contour", track: \.landmarks.trackContour, style: \.landmarks.contourStyle)
+            SliderRow(title: "Detail", value: floatBinding(\.landmarks.contourDetail),
+                      hint: "Coarse (loose ring) → fine (hugs the silhouette incl. concavities)")
+                .disabled(!model.settings.landmarks.trackContour)
 
             SectionHeader("Labels")
             Toggle("Show IDs", isOn: $model.settings.landmarks.showIDs)
@@ -394,10 +396,149 @@ struct ContentView: View {
             ), range: 1...15, precision: 0)
             SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4)
             SliderRow(title: "Stick width", value: floatBinding(\.landmarks.stickScale), range: 0.2...4)
-            SliderRow(title: "Yarn detail", value: floatBinding(\.landmarks.subsetRatio))
-            SliderRow(title: "Yarn weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
         }
         .disabled(!model.settings.landmarks.enabled)
+    }
+
+    // MARK: - Drawing tab
+    //
+    // Marks visualizes the raw sensor data (dots, stick, labels); Drawing
+    // hosts artistic interpretations of the same landmarks. Yarn is the
+    // first algorithm; one-line, cubist, and ink-wash styles slot in here.
+
+    @ViewBuilder private var drawingTab: some View {
+        Picker("Algorithm", selection: $model.settings.landmarks.drawingStyle) {
+            ForEach(DrawingStyle.allCases) { style in
+                Text(style.title).tag(style)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+
+        Group {
+            // Shared across algorithms.
+            SectionHeader("Palette")
+            paletteEditor
+            Toggle("Match landmark colors", isOn: $model.settings.landmarks.drawingMatchesLandmarkColors)
+
+            SectionHeader("Seed")
+            HStack {
+                Stepper(value: $model.settings.landmarks.seed, in: 0...99_999) {
+                    Text("Seed \(model.settings.landmarks.seed)")
+                        .monospacedDigit()
+                }
+                Button("Shuffle") { model.settings.landmarks.seed = Int.random(in: 0..<100_000) }
+            }
+
+            // Per-algorithm controls.
+            switch model.settings.landmarks.drawingStyle {
+            case .off:
+                EmptyView()
+            case .yarn:
+                SectionHeader("Yarn")
+                SliderRow(title: "Detail", value: floatBinding(\.landmarks.subsetRatio))
+                SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
+                SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
+            case .lineWalk:
+                SectionHeader("Line walk")
+                SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
+                          hint: "One continuous line → separate semantic paths → fragmented segments")
+                SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity),
+                          hint: "Few points (minimal) → dense sampling with subdivided lines")
+                Picker("Curve", selection: $model.settings.landmarks.lineWalkCurveFit) {
+                    ForEach(CurveFit.allCases) { fit in
+                        Text(fit.title).tag(fit)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                SectionHeader("Wildness")
+                HStack(alignment: .top, spacing: 10) {
+                    XYPad(
+                        x: floatBinding(\.landmarks.lineWalkWildnessAlong),
+                        y: floatBinding(\.landmarks.lineWalkWildnessOrtho)
+                    )
+                    .frame(width: 96, height: 96)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("→ along path")
+                        Text("↑ orthogonal")
+                        Text("drag the dot")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                SliderRow(title: "Scale", value: floatBinding(\.landmarks.lineWalkScale),
+                          hint: "Local (fine, per sub-stroke) → global (coarse, whole-line drift)")
+
+                SectionHeader("Stroke")
+                SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8)
+                SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
+                          hint: "Width modulation along the curve (calligraphic swell)")
+            }
+        }
+        .disabled(model.settings.landmarks.drawingStyle == .off)
+
+        if !model.settings.landmarks.enabled {
+            Text("Landmark overlay is off — enable it in Marks to draw.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Editable color list for the active drawing algorithm. Starts as one
+    /// solid color; "+" adds more (algorithms cycle through them per feature).
+    @ViewBuilder private var paletteEditor: some View {
+        let colors = model.settings.landmarks.drawingPalette.colors
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(colors.indices, id: \.self) { index in
+                HStack {
+                    ColorPicker("", selection: paletteColorBinding(index), supportsOpacity: true)
+                        .labelsHidden()
+                    Text("Color \(index + 1)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if colors.count > 1 {
+                        Button {
+                            model.settings.landmarks.drawingPalette.colors.remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+            Button {
+                let last = model.settings.landmarks.drawingPalette.colors.last ?? .ink
+                model.settings.landmarks.drawingPalette.colors.append(last)
+            } label: {
+                Label("Add color", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+        }
+        .disabled(model.settings.landmarks.drawingMatchesLandmarkColors)
+    }
+
+    private func paletteColorBinding(_ index: Int) -> Binding<Color> {
+        Binding(
+            get: {
+                let colors = model.settings.landmarks.drawingPalette.colors
+                guard colors.indices.contains(index) else { return .black }
+                let c = colors[index]
+                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+            },
+            set: { newValue in
+                guard model.settings.landmarks.drawingPalette.colors.indices.contains(index),
+                      let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                model.settings.landmarks.drawingPalette.colors[index] = RGBAColor(
+                    red: Float(converted.redComponent),
+                    green: Float(converted.greenComponent),
+                    blue: Float(converted.blueComponent),
+                    alpha: Float(converted.alphaComponent)
+                )
+            }
+        )
     }
 
     // MARK: - Debug tab
@@ -476,6 +617,29 @@ struct ContentView: View {
 
     // MARK: - Bindings
 
+    /// A landmark feature row (enable + color + size), keyed off a track flag
+    /// and an ElementStyle on the settings.
+    private func featureRow(
+        _ title: String,
+        track: WritableKeyPath<ProcessingSettings, Bool>,
+        style: WritableKeyPath<ProcessingSettings, ElementStyle>
+    ) -> some View {
+        StyleRow(
+            title: title,
+            enabled: boolBinding(track),
+            color: rgbaBinding(style.appending(path: \.color)),
+            size: floatBinding(style.appending(path: \.size)),
+            range: 0.7...8
+        )
+    }
+
+    private func boolBinding(_ keyPath: WritableKeyPath<ProcessingSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { model.settings[keyPath: keyPath] },
+            set: { model.settings[keyPath: keyPath] = $0 }
+        )
+    }
+
     private func floatBinding(_ keyPath: WritableKeyPath<ProcessingSettings, Float>) -> Binding<Double> {
         Binding(
             get: { Double(model.settings[keyPath: keyPath]) },
@@ -540,6 +704,43 @@ private struct SliderRow: View {
                 .frame(width: 38, alignment: .trailing)
         }
         .help(hint ?? title)
+    }
+}
+
+/// A 2D pad: drag the dot to set two normalized values at once (x = →, y = ↑,
+/// both 0…1). Used for LineWalk's along-path × orthogonal wildness.
+private struct XYPad: View {
+    @Binding var x: Double
+    @Binding var y: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                // crosshair
+                Path { p in
+                    p.move(to: CGPoint(x: CGFloat(x) * size.width, y: 0))
+                    p.addLine(to: CGPoint(x: CGFloat(x) * size.width, y: size.height))
+                    p.move(to: CGPoint(x: 0, y: (1 - CGFloat(y)) * size.height))
+                    p.addLine(to: CGPoint(x: size.width, y: (1 - CGFloat(y)) * size.height))
+                }
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 12, height: 12)
+                    .position(x: CGFloat(x) * size.width, y: (1 - CGFloat(y)) * size.height)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0).onChanged { value in
+                    x = min(1, max(0, Double(value.location.x / max(1, size.width))))
+                    y = min(1, max(0, Double(1 - value.location.y / max(1, size.height))))
+                }
+            )
+        }
     }
 }
 

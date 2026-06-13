@@ -51,18 +51,6 @@ final class VisionLandmarkTracker {
         "Lkne", "Rkne", "Lank", "Rank"
     ]
 
-    /// Skeleton connections over the canonical body joints (by canonical
-    /// index; remapped to emitted indices per detection since dropped
-    /// joints shift positions).
-    private static let bodyEdges: [(Int, Int)] = [
-        (0, 1), (0, 2), (1, 3), (2, 4),          // head
-        (0, 5),                                   // nose-neck
-        (5, 6), (5, 7),                           // neck-shoulders
-        (6, 8), (8, 10), (7, 9), (9, 11),         // arms
-        (5, 12), (12, 13), (12, 14),              // spine-hips
-        (13, 15), (15, 17), (14, 16), (16, 18)    // legs
-    ]
-
     /// MediaPipe hand connections — `handJointOrder` matches MediaPipe's
     /// 0–20 hand-landmark indexing, so these are the documented pairs.
     private static let handEdges: [(Int, Int)] = [
@@ -83,10 +71,12 @@ final class VisionLandmarkTracker {
     ]
 
     func detect(in pixelBuffer: CVPixelBuffer, settings: LandmarkSettings) -> [LandmarkGroup] {
+        let tracksBody = LandmarkRegion.bodyParts.contains { settings.tracks($0) }
         var requests: [VNRequest] = []
-        if settings.trackBody { requests.append(bodyRequest) }
+        if tracksBody { requests.append(bodyRequest) }
         if settings.trackHands { requests.append(handRequest) }
-        if settings.trackFace || settings.trackEyesAndIrises { requests.append(faceRequest) }
+        let tracksFace = LandmarkRegion.faceParts.contains { settings.tracks($0) }
+        if tracksFace { requests.append(faceRequest) }
         guard !requests.isEmpty else { return [] }
 
         do {
@@ -97,13 +87,13 @@ final class VisionLandmarkTracker {
 
         var nextPoints: [String: CGPoint] = [:]
         var groups: [LandmarkGroup] = []
-        if settings.trackBody {
-            groups.append(contentsOf: bodyGroups(into: &nextPoints))
+        if tracksBody {
+            groups.append(contentsOf: bodyGroups(settings: settings, into: &nextPoints))
         }
         if settings.trackHands {
             groups.append(contentsOf: handGroups(into: &nextPoints))
         }
-        if settings.trackFace || settings.trackEyesAndIrises {
+        if tracksFace {
             groups.append(contentsOf: faceGroups(settings: settings, into: &nextPoints))
         }
         previousPoints = nextPoints
@@ -112,15 +102,34 @@ final class VisionLandmarkTracker {
 
     // MARK: - Body
 
-    private func bodyGroups(into nextPoints: inout [String: CGPoint]) -> [LandmarkGroup] {
+    /// Partition of the canonical body joints into independently toggleable
+    /// subparts. `joints` are canonical indices; `edges` are positions within
+    /// that joint list.
+    private struct BodySubpart {
+        let region: LandmarkRegion
+        let joints: [Int]
+        let edges: [(Int, Int)]
+    }
+
+    private static let bodySubparts: [BodySubpart] = [
+        BodySubpart(region: .head, joints: [0, 1, 2, 3, 4], edges: [(0, 1), (0, 2), (1, 3), (2, 4)]),
+        BodySubpart(region: .torso, joints: [5, 6, 7, 12, 13, 14], edges: [(0, 1), (0, 2), (0, 3), (3, 4), (3, 5)]),
+        BodySubpart(region: .leftArm, joints: [6, 8, 10], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .rightArm, joints: [7, 9, 11], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .leftLeg, joints: [13, 15, 17], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .rightLeg, joints: [14, 16, 18], edges: [(0, 1), (1, 2)])
+    ]
+
+    private func bodyGroups(settings: LandmarkSettings, into nextPoints: inout [String: CGPoint]) -> [LandmarkGroup] {
         // Sort multi-person observations left-to-right so person slots are stable.
         let observations = (bodyRequest.results ?? []).sorted {
             centerX(of: $0) < centerX(of: $1)
         }
-        return observations.enumerated().compactMap { index, observation in
-            guard let recognized = try? observation.recognizedPoints(.all) else { return nil }
-            var points: [LandmarkPoint] = []
-            var emittedIndex: [Int: Int] = [:]  // canonical index → emitted index
+        var groups: [LandmarkGroup] = []
+        for (index, observation) in observations.enumerated() {
+            guard let recognized = try? observation.recognizedPoints(.all) else { continue }
+            // Resolve (smooth) every canonical joint once, keyed by stable label.
+            var resolved: [Int: LandmarkPoint] = [:]
             for (canonicalIndex, joint) in Self.bodyJointOrder.enumerated() {
                 let label = Self.bodyJointLabels[canonicalIndex]
                 let key = "body\(index).\(label)"
@@ -129,17 +138,29 @@ final class VisionLandmarkTracker {
                     candidate: recognized[joint].flatMap { $0.confidence > minimumConfidence ? ($0.location, $0.confidence) : nil }
                 ) {
                     smoothed.label = label
-                    emittedIndex[canonicalIndex] = points.count
-                    points.append(smoothed)
+                    resolved[canonicalIndex] = smoothed
                     nextPoints[key] = smoothed.point
                 }
             }
-            let edges = Self.bodyEdges.compactMap { edge -> (Int, Int)? in
-                guard let a = emittedIndex[edge.0], let b = emittedIndex[edge.1] else { return nil }
-                return (a, b)
+            // Emit one group per tracked subpart that has any resolved joints.
+            for part in Self.bodySubparts where settings.tracks(part.region) {
+                var points: [LandmarkPoint] = []
+                var local: [Int: Int] = [:]   // canonical index → position in `points`
+                for canonical in part.joints {
+                    if let p = resolved[canonical] {
+                        local[canonical] = points.count
+                        points.append(p)
+                    }
+                }
+                guard !points.isEmpty else { continue }
+                let edges = part.edges.compactMap { edge -> (Int, Int)? in
+                    guard let a = local[part.joints[edge.0]], let b = local[part.joints[edge.1]] else { return nil }
+                    return (a, b)
+                }
+                groups.append(LandmarkGroup(region: part.region, points: points, edges: edges))
             }
-            return points.isEmpty ? nil : LandmarkGroup(region: .body, points: points, edges: edges)
         }
+        return groups
     }
 
     private func centerX(of observation: VNHumanBodyPoseObservation) -> CGFloat {
@@ -208,31 +229,27 @@ final class VisionLandmarkTracker {
             guard let landmarks = observation.landmarks else { return [] }
             var groups: [LandmarkGroup] = []
 
-            if settings.trackFace {
-                var facePoints: [LandmarkPoint] = []
-                var faceEdges: [(Int, Int)] = []
-                appendRegion(landmarks.faceContour, short: "c", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.nose, short: "n", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.outerLips, short: "oL", chain: .closed, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.innerLips, short: "iL", chain: .closed, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.leftEyebrow, short: "bL", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightEyebrow, short: "bR", chain: .open, faceIndex: index, observation: observation, to: &facePoints, edges: &faceEdges, nextPoints: &nextPoints)
-                if !facePoints.isEmpty {
-                    groups.append(LandmarkGroup(region: .face, points: facePoints, edges: faceEdges))
+            // One group per tracked face subpart, each from its own Vision
+            // landmark region(s). Pupils ride with their eye.
+            func subgroup(_ region: LandmarkRegion, _ parts: [(VNFaceLandmarkRegion2D?, String, ChainStyle)]) {
+                guard settings.tracks(region) else { return }
+                var points: [LandmarkPoint] = []
+                var edges: [(Int, Int)] = []
+                for (landmarkRegion, short, chain) in parts {
+                    appendRegion(landmarkRegion, short: short, chain: chain, faceIndex: index, observation: observation, to: &points, edges: &edges, nextPoints: &nextPoints)
+                }
+                if !points.isEmpty {
+                    groups.append(LandmarkGroup(region: region, points: points, edges: edges))
                 }
             }
 
-            if settings.trackEyesAndIrises {
-                var eyePoints: [LandmarkPoint] = []
-                var eyeEdges: [(Int, Int)] = []
-                appendRegion(landmarks.leftEye, short: "eL", chain: .closed, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightEye, short: "eR", chain: .closed, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.leftPupil, short: "pL", chain: .none, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
-                appendRegion(landmarks.rightPupil, short: "pR", chain: .none, faceIndex: index, observation: observation, to: &eyePoints, edges: &eyeEdges, nextPoints: &nextPoints)
-                if !eyePoints.isEmpty {
-                    groups.append(LandmarkGroup(region: .eyes, points: eyePoints, edges: eyeEdges))
-                }
-            }
+            subgroup(.jaw, [(landmarks.faceContour, "c", .open)])
+            subgroup(.nose, [(landmarks.nose, "n", .open)])
+            subgroup(.mouth, [(landmarks.outerLips, "oL", .closed), (landmarks.innerLips, "iL", .closed)])
+            subgroup(.leftBrow, [(landmarks.leftEyebrow, "bL", .open)])
+            subgroup(.rightBrow, [(landmarks.rightEyebrow, "bR", .open)])
+            subgroup(.leftEye, [(landmarks.leftEye, "eL", .closed), (landmarks.leftPupil, "pL", .none)])
+            subgroup(.rightEye, [(landmarks.rightEye, "eR", .closed), (landmarks.rightPupil, "pR", .none)])
 
             return groups
         }

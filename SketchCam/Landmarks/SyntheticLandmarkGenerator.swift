@@ -7,8 +7,11 @@ enum SyntheticLandmarkGenerator {
         let t = CGFloat(frameIndex) * 0.045
         var groups: [LandmarkGroup] = []
 
-        if settings.landmarks.trackBody {
-            groups.append(LandmarkGroup(region: .body, points: bodyPoints(t: t), edges: bodyEdges))
+        let pts = bodyPoints(t: t)
+        for part in bodySubparts where settings.landmarks.tracks(part.region) {
+            let points = part.joints.map { pts[$0] }
+            let edges = part.edges
+            groups.append(LandmarkGroup(region: part.region, points: points, edges: edges))
         }
 
         if settings.landmarks.trackHands {
@@ -16,23 +19,26 @@ enum SyntheticLandmarkGenerator {
             groups.append(handGroup(center: CGPoint(x: 0.72, y: 0.56), phase: -t, prefix: "R"))
         }
 
-        if settings.landmarks.trackFace {
-            groups.append(faceGroup(t: t))
-        }
-
-        if settings.landmarks.trackEyesAndIrises {
-            groups.append(eyeGroup(t: t))
-        }
+        groups.append(contentsOf: faceGroups(t: t, settings: settings.landmarks))
 
         return groups
     }
 
-    // 0 head, 1/2 shoulders, 3/4 elbows, 5/6 wrists, 7/8 hips, 9/10 knees, 11/12 ankles
-    private static let bodyEdges: [(Int, Int)] = [
-        (0, 1), (0, 2), (1, 2),
-        (1, 3), (3, 5), (2, 4), (4, 6),
-        (1, 7), (2, 8), (7, 8),
-        (7, 9), (9, 11), (8, 10), (10, 12)
+    // Synthetic body layout (13 points):
+    // 0 head, 1/2 shoulders, 3/4 elbows, 5/6 wrists, 7/8 hips, 9/10 knees, 11/12 ankles.
+    private struct BodySubpart {
+        let region: LandmarkRegion
+        let joints: [Int]        // indices into bodyPoints
+        let edges: [(Int, Int)]  // positions within `joints`
+    }
+
+    private static let bodySubparts: [BodySubpart] = [
+        BodySubpart(region: .head, joints: [0], edges: []),
+        BodySubpart(region: .torso, joints: [1, 2, 8, 7], edges: [(0, 1), (1, 2), (2, 3), (3, 0)]),
+        BodySubpart(region: .leftArm, joints: [1, 3, 5], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .rightArm, joints: [2, 4, 6], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .leftLeg, joints: [7, 9, 11], edges: [(0, 1), (1, 2)]),
+        BodySubpart(region: .rightLeg, joints: [8, 10, 12], edges: [(0, 1), (1, 2)])
     ]
 
     private static func bodyPoints(t: CGFloat) -> [LandmarkPoint] {
@@ -55,43 +61,50 @@ enum SyntheticLandmarkGenerator {
         return points.enumerated().map { LandmarkPoint(point: $1, confidence: 1, label: "b\($0)") }
     }
 
-    private static func faceGroup(t: CGFloat) -> LandmarkGroup {
+    /// Builds the tracked face subparts as separate groups (mirrors the Vision
+    /// breakdown: jaw, nose, mouth, brows, eyes).
+    private static func faceGroups(t: CGFloat, settings: LandmarkSettings) -> [LandmarkGroup] {
         let center = CGPoint(x: 0.5 + sin(t) * 0.018, y: 0.23)
-        var points: [CGPoint] = []
-        for index in 0..<44 {
-            let angle = CGFloat(index) / 44 * .pi * 2
-            let radiusX = 0.072 + sin(angle * 3 + t) * 0.006
-            let radiusY = 0.096 + cos(angle * 2 - t) * 0.004
-            points.append(CGPoint(x: center.x + cos(angle) * radiusX, y: center.y + sin(angle) * radiusY))
+        var groups: [LandmarkGroup] = []
+        func emit(_ region: LandmarkRegion, _ make: () -> LandmarkGroup) {
+            if settings.tracks(region) { groups.append(make()) }
         }
-        for index in 0..<16 {
-            let angle = CGFloat(index) / 16 * .pi * 2
-            points.append(CGPoint(x: center.x + cos(angle) * 0.025, y: center.y + 0.025 + sin(angle) * 0.018))
-        }
-        var edges = loopEdges(start: 0, count: 44)
-        edges.append(contentsOf: loopEdges(start: 44, count: 16))
-        let landmarkPoints = points.enumerated().map { LandmarkPoint(point: $1, confidence: 1, label: "f\($0)") }
-        return LandmarkGroup(region: .face, points: landmarkPoints, edges: edges)
+        emit(.jaw) { closedLoop(.jaw, center: center, rx: 0.072, ry: 0.096, count: 44, short: "c", t: t) }
+        emit(.nose) { openArc(.nose, center: CGPoint(x: center.x, y: center.y + 0.02), width: 0.02, dip: -0.04, count: 5, short: "n") }
+        emit(.mouth) { closedLoop(.mouth, center: CGPoint(x: center.x, y: center.y + 0.055), rx: 0.03, ry: 0.012, count: 12, short: "m", t: t) }
+        emit(.leftBrow) { openArc(.leftBrow, center: CGPoint(x: center.x - 0.03, y: center.y - 0.045), width: 0.03, dip: 0.012, count: 5, short: "bL") }
+        emit(.rightBrow) { openArc(.rightBrow, center: CGPoint(x: center.x + 0.03, y: center.y - 0.045), width: 0.03, dip: 0.012, count: 5, short: "bR") }
+        emit(.leftEye) { eyeRing(.leftEye, center: CGPoint(x: center.x - 0.03, y: center.y - 0.015), t: t, short: "eL") }
+        emit(.rightEye) { eyeRing(.rightEye, center: CGPoint(x: center.x + 0.03, y: center.y - 0.015), t: t, short: "eR") }
+        return groups
     }
 
-    private static func eyeGroup(t: CGFloat) -> LandmarkGroup {
-        let centers = [
-            CGPoint(x: 0.47 + sin(t) * 0.018, y: 0.215),
-            CGPoint(x: 0.53 + sin(t) * 0.018, y: 0.215)
-        ]
-        var points: [CGPoint] = []
-        var edges: [(Int, Int)] = []
-        for center in centers {
-            let start = points.count
-            for index in 0..<12 {
-                let angle = CGFloat(index) / 12 * .pi * 2
-                points.append(CGPoint(x: center.x + cos(angle) * 0.021, y: center.y + sin(angle) * 0.011))
-            }
-            edges.append(contentsOf: loopEdges(start: start, count: 12))
-            points.append(CGPoint(x: center.x + cos(t) * 0.004, y: center.y + sin(t * 0.7) * 0.003))
+    private static func closedLoop(_ region: LandmarkRegion, center: CGPoint, rx: CGFloat, ry: CGFloat, count: Int, short: String, t: CGFloat) -> LandmarkGroup {
+        let points = (0..<count).map { index -> LandmarkPoint in
+            let angle = CGFloat(index) / CGFloat(count) * .pi * 2
+            return LandmarkPoint(point: CGPoint(x: center.x + cos(angle) * rx, y: center.y + sin(angle) * ry), confidence: 1, label: "\(short)\(index)")
         }
-        let landmarkPoints = points.enumerated().map { LandmarkPoint(point: $1, confidence: 1, label: "e\($0)") }
-        return LandmarkGroup(region: .eyes, points: landmarkPoints, edges: edges)
+        return LandmarkGroup(region: region, points: points, edges: loopEdges(start: 0, count: count))
+    }
+
+    private static func openArc(_ region: LandmarkRegion, center: CGPoint, width: CGFloat, dip: CGFloat, count: Int, short: String) -> LandmarkGroup {
+        let points = (0..<count).map { index -> LandmarkPoint in
+            let f = CGFloat(index) / CGFloat(count - 1)
+            return LandmarkPoint(point: CGPoint(x: center.x - width / 2 + width * f, y: center.y - sin(f * .pi) * dip), confidence: 1, label: "\(short)\(index)")
+        }
+        let edges = (0..<(count - 1)).map { ($0, $0 + 1) }
+        return LandmarkGroup(region: region, points: points, edges: edges)
+    }
+
+    private static func eyeRing(_ region: LandmarkRegion, center: CGPoint, t: CGFloat, short: String) -> LandmarkGroup {
+        var points: [LandmarkPoint] = []
+        for index in 0..<12 {
+            let angle = CGFloat(index) / 12 * .pi * 2
+            points.append(LandmarkPoint(point: CGPoint(x: center.x + cos(angle) * 0.021, y: center.y + sin(angle) * 0.011), confidence: 1, label: "\(short)\(index)"))
+        }
+        let edges = loopEdges(start: 0, count: 12)
+        points.append(LandmarkPoint(point: CGPoint(x: center.x + cos(t) * 0.004, y: center.y + sin(t * 0.7) * 0.003), confidence: 1, label: "\(short)p"))
+        return LandmarkGroup(region: region, points: points, edges: edges)
     }
 
     private static func handGroup(center: CGPoint, phase: CGFloat, prefix: String) -> LandmarkGroup {

@@ -22,6 +22,7 @@ final class SegmentationService {
     fileprivate var matteVersion: UInt64 = 0
     fileprivate var contourVersion: UInt64 = .max
     fileprivate var lastContourTrace: CFAbsoluteTime = 0
+    fileprivate var lastContourDetail: Float = -1
     private var inFlight = false
     private(set) var lastSegmentMillis: Double = 0
 
@@ -85,24 +86,25 @@ final class SegmentationService {
 // MARK: - Silhouette contour
 
 extension SegmentationService {
-    /// Traces the latest matte into a fixed ring of contour points: 64 rays
-    /// cast from the silhouette centroid, each keeping the OUTERMOST person
-    /// pixel. IDs are stable (s0 = top, clockwise on screen), so drawing
-    /// algorithms can address specific stations around the body. Normalized
-    /// bottom-left coordinates, same space as Vision landmarks.
-    /// Rate-limited: re-traces at most `maxPerSecond` times (default to the
-    /// landmark detection cadence). Tracing per matte (~30 Hz) invalidated
-    /// the overlay cache every frame and saturated the pipeline.
-    func currentContour(maxPerSecond: Double = 10) -> (group: LandmarkGroup, version: UInt64)? {
+    /// Traces the latest matte into a ring of contour points that follows the
+    /// silhouette BOUNDARY (Moore-neighbor tracing) — so it hugs concavities
+    /// (armpits, between fingers/legs) the old radial ray-cast could not — then
+    /// resamples to a point count set by `detail`. IDs are stable (s0 = top of
+    /// head, walking the boundary), normalized bottom-left like Vision points.
+    /// Rate-limited to `maxPerSecond` (the detection cadence): tracing per matte
+    /// (~30 Hz) invalidated the overlay cache every frame.
+    func currentContour(maxPerSecond: Double = 10, detail: Float = 0.4) -> (group: LandmarkGroup, version: UInt64)? {
         lock.withLock {
             guard let buffer = cachedMatteBuffer else { return nil }
             let now = CFAbsoluteTimeGetCurrent()
             let due = now - lastContourTrace >= 1.0 / max(1, maxPerSecond)
-            if let cachedContour, contourVersion == matteVersion || !due {
+            if let cachedContour, lastContourDetail == detail, (contourVersion == matteVersion || !due) {
                 return (cachedContour, contourVersion)
             }
             lastContourTrace = now
-            guard let points = Self.traceContour(buffer) else { return nil }
+            lastContourDetail = detail
+            let pointCount = Int((24 + (240 - 24) * max(0, min(1, detail))).rounded())
+            guard let points = Self.traceContour(buffer, pointCount: pointCount) else { return nil }
             var edges = (0..<(points.count - 1)).map { ($0, $0 + 1) }
             edges.append((points.count - 1, 0))
             let group = LandmarkGroup(region: .contour, points: points, edges: edges)
@@ -112,7 +114,7 @@ extension SegmentationService {
         }
     }
 
-    private static func traceContour(_ buffer: CVPixelBuffer, pointCount: Int = 64) -> [LandmarkPoint]? {
+    private static func traceContour(_ buffer: CVPixelBuffer, pointCount: Int) -> [LandmarkPoint]? {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
@@ -121,44 +123,88 @@ extension SegmentationService {
         let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
         let data = base.assumingMemoryBound(to: UInt8.self)
 
-        // centroid of person pixels (coarse scan)
-        var sumX = 0.0, sumY = 0.0
-        var count = 0
-        for y in stride(from: 0, to: height, by: 3) {
-            let row = y * rowBytes
-            for x in stride(from: 0, to: width, by: 3) where data[row + x] > 127 {
-                sumX += Double(x)
-                sumY += Double(y)
-                count += 1
-            }
+        @inline(__always) func isPerson(_ x: Int, _ y: Int) -> Bool {
+            x >= 0 && y >= 0 && x < width && y < height && data[y * rowBytes + x] > 127
         }
-        guard count > 24 else { return nil }
-        let cx = sumX / Double(count)
-        let cy = sumY / Double(count)
-        let maxRadius = Double(max(width, height)) * 1.5
 
-        var points: [LandmarkPoint] = []
-        points.reserveCapacity(pointCount)
-        for index in 0..<pointCount {
-            // start at screen-top, clockwise (pixel rows are top-down)
-            let angle = -Double.pi / 2 + 2 * .pi * Double(index) / Double(pointCount)
-            let dx = cos(angle), dy = sin(angle)
-            var last: (Double, Double)?
-            var r = 1.0
-            while r < maxRadius {
-                let x = cx + dx * r
-                let y = cy + dy * r
-                if x < 0 || y < 0 || x >= Double(width) || y >= Double(height) { break }
-                if data[Int(y) * rowBytes + Int(x)] > 127 { last = (x, y) }
-                r += 1.25
+        // Start at the topmost-leftmost person pixel (a guaranteed boundary
+        // pixel reached scanning top→bottom, left→right).
+        var start: (x: Int, y: Int)?
+        scan: for y in 0..<height {
+            let row = y * rowBytes
+            for x in 0..<width where data[row + x] > 127 {
+                start = (x, y); break scan
             }
-            let (px, py) = last ?? (cx, cy)
-            points.append(LandmarkPoint(
-                point: CGPoint(x: px / Double(width), y: 1 - py / Double(height)),
-                confidence: last == nil ? 0.1 : 1,
-                label: "s\(index)"
-            ))
         }
-        return points
+        guard let start else { return nil }
+
+        // Moore-neighbor boundary tracing, clockwise (y is downward on screen).
+        let off = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)]
+        var boundary: [(Int, Int)] = [start]
+        var current = start
+        // We arrived at `start` from its left (background); begin searching one
+        // step clockwise from that backtrack direction.
+        var searchStart = (7 + 1) % 8   // 7 = (-1,0) = left
+        let maxSteps = (width + height) * 4 + 16
+        var steps = 0
+        while steps < maxSteps {
+            steps += 1
+            var moved = false
+            for k in 0..<8 {
+                let i = (searchStart + k) % 8
+                let nx = current.x + off[i].0
+                let ny = current.y + off[i].1
+                if isPerson(nx, ny) {
+                    boundary.append((nx, ny))
+                    let backFromNew = (i + 4) % 8        // direction new→current
+                    searchStart = (backFromNew + 1) % 8  // resume clockwise after it
+                    current = (nx, ny)
+                    moved = true
+                    break
+                }
+            }
+            if !moved { break }                          // isolated pixel
+            if current == start && boundary.count > 2 { break }
+        }
+        guard boundary.count >= 8 else { return nil }
+
+        // Arc-length resample the closed boundary to `pointCount` even stations.
+        let perimeter = (0..<boundary.count).reduce(0.0) { acc, i in
+            let a = boundary[i], b = boundary[(i + 1) % boundary.count]
+            return acc + hypot(Double(b.0 - a.0), Double(b.1 - a.1))
+        }
+        guard perimeter > 1 else { return nil }
+        let step = perimeter / Double(pointCount)
+
+        var sampled: [(Double, Double)] = []
+        sampled.reserveCapacity(pointCount)
+        var accumulated = 0.0
+        var target = 0.0
+        var i = 0
+        while sampled.count < pointCount && i < boundary.count {
+            let a = boundary[i], b = boundary[(i + 1) % boundary.count]
+            let segLen = hypot(Double(b.0 - a.0), Double(b.1 - a.1))
+            while target <= accumulated + segLen && sampled.count < pointCount {
+                let f = segLen > 1e-6 ? (target - accumulated) / segLen : 0
+                sampled.append((Double(a.0) + (Double(b.0 - a.0)) * f,
+                                Double(a.1) + (Double(b.1 - a.1)) * f))
+                target += step
+            }
+            accumulated += segLen
+            i += 1
+        }
+        guard sampled.count >= 3 else { return nil }
+
+        // Rotate so s0 is the topmost station (smallest screen-y = top of head).
+        let topIndex = sampled.indices.min { sampled[$0].1 < sampled[$1].1 } ?? 0
+        let ring = Array(sampled[topIndex...] + sampled[..<topIndex])
+
+        return ring.enumerated().map { index, p in
+            LandmarkPoint(
+                point: CGPoint(x: p.0 / Double(width), y: 1 - p.1 / Double(height)),
+                confidence: 1,
+                label: "s\(index)"
+            )
+        }
     }
 }
