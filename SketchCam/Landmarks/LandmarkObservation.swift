@@ -19,7 +19,8 @@ enum LandmarkRegion: String, CaseIterable {
     case leftLeg
     case rightLeg
     case hands
-    case contour
+    case contour      // person silhouette (Vision segmentation)
+    case bodyHull     // seg-free person outline (convex hull of landmarks)
 
     var displayName: String {
         switch self {
@@ -37,7 +38,8 @@ enum LandmarkRegion: String, CaseIterable {
         case .leftLeg: return "L Leg"
         case .rightLeg: return "R Leg"
         case .hands: return "Hands"
-        case .contour: return "Contour"
+        case .contour: return "Person"
+        case .bodyHull: return "Hull"
         }
     }
 
@@ -104,6 +106,7 @@ extension LandmarkSettings {
         case .rightLeg: return rightLegStyle
         case .hands: return handsStyle
         case .contour: return contourStyle
+        case .bodyHull: return bodyHullStyle
         }
     }
 
@@ -125,6 +128,7 @@ extension LandmarkSettings {
         case .rightLeg: return trackRightLeg
         case .hands: return trackHands
         case .contour: return trackContour
+        case .bodyHull: return trackBodyHull
         }
     }
 }

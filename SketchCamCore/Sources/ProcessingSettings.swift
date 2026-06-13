@@ -259,6 +259,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Contour granularity: 0 = coarse (few points, loose) → 1 = fine (many
     /// points, hugs the silhouette including concavities).
     public var contourDetail: Float
+    /// Seg-free person outline: convex hull of the landmarks (no segmentation
+    /// cost). Independent of `trackContour`; both can be on.
+    public var trackBodyHull: Bool
     /// Predict landmark motion between detections and re-render the overlay
     /// every frame, so the drawing tracks at frame rate (not the slower
     /// detection cadence) and lags the body less. Off = render at detection
@@ -311,6 +314,7 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var rightLegStyle: ElementStyle
     public var handsStyle: ElementStyle
     public var contourStyle: ElementStyle
+    public var bodyHullStyle: ElementStyle
 
     public init(
         enabled: Bool = false,
@@ -325,9 +329,9 @@ public struct LandmarkSettings: Equatable, Sendable {
         trackMouth: Bool = true,
         trackLeftBrow: Bool = true,
         trackRightBrow: Bool = true,
-        trackLeftEye: Bool = false,
-        trackRightEye: Bool = false,
-        trackHead: Bool = true,
+        trackLeftEye: Bool = true,
+        trackRightEye: Bool = true,
+        trackHead: Bool = false,
         trackTorso: Bool = true,
         trackLeftArm: Bool = true,
         trackRightArm: Bool = true,
@@ -341,6 +345,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         labelsMatchColor: Bool = true,
         trackContour: Bool = false,
         contourDetail: Float = 0.4,
+        trackBodyHull: Bool = false,
         predictiveTracking: Bool = true,
         seed: Int = 7,
         subsetRatio: Float = 0.65,
@@ -371,7 +376,8 @@ public struct LandmarkSettings: Equatable, Sendable {
         leftLegStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.22, green: 0.64, blue: 0.78, alpha: 0.85)),
         rightLegStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.30, green: 0.58, blue: 0.82, alpha: 0.85)),
         handsStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.98, green: 0.78, blue: 0.28, alpha: 0.85)),
-        contourStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.92, green: 0.92, blue: 0.95, alpha: 0.85))
+        contourStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.92, green: 0.92, blue: 0.95, alpha: 0.85)),
+        bodyHullStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.55, green: 0.9, blue: 0.95, alpha: 0.85))
     ) {
         self.enabled = enabled
         self.sourceMode = sourceMode
@@ -401,6 +407,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.labelsMatchColor = labelsMatchColor
         self.trackContour = trackContour
         self.contourDetail = contourDetail
+        self.trackBodyHull = trackBodyHull
         self.predictiveTracking = predictiveTracking
         self.seed = seed
         self.subsetRatio = subsetRatio
@@ -432,6 +439,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.rightLegStyle = rightLegStyle
         self.handsStyle = handsStyle
         self.contourStyle = contourStyle
+        self.bodyHullStyle = bodyHullStyle
     }
 }
 

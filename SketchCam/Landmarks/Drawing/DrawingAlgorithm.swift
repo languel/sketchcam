@@ -93,6 +93,7 @@ enum DrawingSupport {
         case .rightLeg: return 239
         case .hands: return 307
         case .contour: return 503
+        case .bodyHull: return 521
         }
     }
 

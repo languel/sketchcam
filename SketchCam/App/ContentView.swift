@@ -190,6 +190,7 @@ struct ContentView: View {
                     Text(resolution.title).tag(resolution)
                 }
             }
+            .help("Capture resolution requested from the camera. Higher = more detail into effects/detection but more bandwidth.")
         } else {
             HStack {
                 Button("Open Movie…") { model.openMoviePanel() }
@@ -215,12 +216,14 @@ struct ContentView: View {
                 Text(format.displayName).tag(format)
             }
         }
+        .help("Resolution published to the virtual camera and shown in the preview. This is the final output size.")
         Picker("Processing", selection: $model.settings.processingQuality) {
             ForEach(ProcessingQuality.allCases) { quality in
                 Text(quality.title).tag(quality)
             }
         }
         .pickerStyle(.segmented)
+        .help("Resolution the effect chain renders at, then upscaled to Output. Lower (540p) = cheaper effects, softer detail. Detection uses its own input size and is unaffected by this.")
 
         SectionHeader("Preview")
         Picker("Mode", selection: $model.settings.previewMode) {
@@ -391,6 +394,8 @@ struct ContentView: View {
             SliderRow(title: "Detail", value: floatBinding(\.landmarks.contourDetail),
                       hint: "Person silhouette contour (Vision segmentation). Independent of Layers keying — tracks the outline without the keying composite. Coarse → fine (hugs concavities).")
                 .disabled(!model.settings.landmarks.trackContour)
+            featureRow("Hull", track: \.landmarks.trackBodyHull, style: \.landmarks.bodyHullStyle)
+                .help("Seg-free person outline: convex hull of the tracked landmarks. No segmentation cost, cruder than Person (can't enter concavities). Use alongside Person or on its own.")
 
             SectionHeader("Labels")
             Toggle("Show IDs", isOn: $model.settings.landmarks.showIDs)
@@ -404,6 +409,11 @@ struct ContentView: View {
                 get: { model.settings.landmarks.detectionsPerSecond },
                 set: { model.settings.landmarks.detectionsPerSecond = $0.rounded() }
             ), range: 1...30, precision: 0)
+            SliderRow(title: "Input px", value: Binding(
+                get: { Double(model.settings.landmarks.detectionMaxDimension) },
+                set: { model.settings.landmarks.detectionMaxDimension = max(96, Int(($0 / 32).rounded()) * 32) }
+            ), range: 128...512, precision: 0,
+               hint: "Longest side of the frame handed to Vision (snaps to /32; e.g. 256). NOTE: Vision resizes to a fixed internal size, so this mainly affects precision, NOT speed — to cut detection cost, track fewer categories or lower Rate.")
             Toggle("Predict motion (smooth tracking)", isOn: $model.settings.landmarks.predictiveTracking)
                 .help("Extrapolate landmark motion and redraw every frame so the drawing tracks at frame rate and lags the body less — without raising the detection rate.")
             SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4)

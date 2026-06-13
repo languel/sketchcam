@@ -334,6 +334,21 @@ final class SketchCamViewModel: ObservableObject {
         return copy
     }
 
+    /// Convex hull of all detected landmark points (excluding silhouette/hull
+    /// groups) → a seg-free person outline group.
+    private static func makeHullGroup(from groups: [LandmarkGroup]) -> LandmarkGroup? {
+        let points = groups
+            .filter { $0.region != .contour && $0.region != .bodyHull }
+            .flatMap { $0.points.map(\.point) }
+        guard points.count >= 3 else { return nil }
+        let hull = BodyHull.convexHull(points)
+        guard hull.count >= 3 else { return nil }
+        let landmarkPoints = hull.enumerated().map { LandmarkPoint(point: $1, confidence: 1, label: "h\($0)") }
+        var edges = (0..<(hull.count - 1)).map { ($0, $0 + 1) }
+        edges.append((hull.count - 1, 0))
+        return LandmarkGroup(region: .bodyHull, points: landmarkPoints, edges: edges)
+    }
+
     private func beginCameraFrame() -> Bool {
         frameGate.lock()
         defer { frameGate.unlock() }
@@ -408,6 +423,13 @@ final class SketchCamViewModel: ObservableObject {
                         augmented.groups.append(contour.group)
                         augmented.detectionID = augmented.detectionID &+ (contour.version &* 0x10_0000)
                         detection = augmented
+                    }
+                    // Seg-free person outline: convex hull of the detected
+                    // landmarks (no segmentation). Rides the detection's id so it
+                    // tracks at frame rate with the rest when predictive.
+                    if settings.landmarks.trackBodyHull, var d = detection, let hull = Self.makeHullGroup(from: d.groups) {
+                        d.groups.append(hull)
+                        detection = d
                     }
                     return self.overlayCompositor.overlay(
                         detection: detection,
