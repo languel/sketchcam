@@ -24,7 +24,7 @@ struct YarnDrawing: DrawingAlgorithm {
                 clip.closeSubpath()
                 context.addPath(clip)
                 context.clip()
-                drawYarn(wrap.points, region: .bodyHull, in: context, landmarks: landmarks)
+                drawWrapWire(interior: wrap.points, boundary: wrap.boundary, landmarks: landmarks, in: context)
                 context.restoreGState()
             }
             return
@@ -42,31 +42,28 @@ struct YarnDrawing: DrawingAlgorithm {
     private func drawYarn(_ points: [CGPoint], region: LandmarkRegion, in context: CGContext, landmarks: LandmarkSettings) {
         guard points.count > 2 else { return }
         let stroke = DrawingSupport.stroke(for: region, landmarks: landmarks, width: landmarks.yarnWidth)
-        let ordered = LandmarkYarnWeaver.wovenOrder(points, seed: landmarks.seed + DrawingSupport.seedOffset(for: region))
-        // Add coil/zigzag path noise (no-op when both amounts are 0).
-        let path0 = LandmarkYarnWeaver.coilPath(
-            ordered,
-            linear: landmarks.yarnLinear, circular: landmarks.yarnCircular,
-            winding: landmarks.yarnWinding, seed: landmarks.seed + DrawingSupport.seedOffset(for: region)
-        )
-        let width = stroke.width
-        let weave = CGFloat(landmarks.yarnWeaveAmount)
-        let opacity = CGFloat(min(1, max(0, stroke.color.alpha)))
+        let seed = landmarks.seed + DrawingSupport.seedOffset(for: region)
+        let ordered = LandmarkYarnWeaver.wovenOrder(points, seed: seed)
+        let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
+        strokePasses(coiled, closed: true, stroke: stroke, weave: CGFloat(landmarks.yarnWeaveAmount), in: context)
+    }
 
+    /// The yarn look: four overlapping strokes (dark halo, soft fill, core,
+    /// white highlight). Shared by the per-region and wrap renderers.
+    private func strokePasses(_ points: [CGPoint], closed: Bool, stroke: (color: RGBAColor, width: CGFloat), weave: CGFloat, in context: CGContext) {
+        guard points.count >= 2 else { return }
+        let width = stroke.width
+        let opacity = CGFloat(min(1, max(0, stroke.color.alpha)))
         for pass in 0..<4 {
-            let path = DrawingSupport.hobbyPath(points: path0, weave: weave, pass: pass)
+            let path = DrawingSupport.hobbyPath(points: points, weave: weave, pass: pass, closed: closed)
             let alpha = CGFloat([0.18, 0.22, 0.84, 0.46][pass]) * opacity
             let passWidth = width * CGFloat([7.5, 4.2, 1.0, 2.0][pass])
             let color: NSColor
             switch pass {
-            case 0:
-                color = NSColor.black.withAlphaComponent(alpha * 0.45)
-            case 1:
-                color = DrawingSupport.nsColor(stroke.color, alpha: alpha * 0.38)
-            case 2:
-                color = DrawingSupport.nsColor(stroke.color, alpha: alpha)
-            default:
-                color = NSColor.white.withAlphaComponent(alpha * 0.48)
+            case 0: color = NSColor.black.withAlphaComponent(alpha * 0.45)
+            case 1: color = DrawingSupport.nsColor(stroke.color, alpha: alpha * 0.38)
+            case 2: color = DrawingSupport.nsColor(stroke.color, alpha: alpha)
+            default: color = NSColor.white.withAlphaComponent(alpha * 0.48)
             }
             context.addPath(path)
             context.setStrokeColor(color.cgColor)
@@ -79,10 +76,72 @@ struct YarnDrawing: DrawingAlgorithm {
 
     // MARK: - Wrap (yarn inside the person)
 
-    /// Seeded interior samples (+ boundary loop) of the person region for the
-    /// weave, plus the boundary polygon used to CLIP the result inside the
-    /// figure. Prefers the Person silhouette (body-shaped), then the Hull, then
-    /// an on-the-fly hull of all landmarks (so wrap works regardless).
+    /// Wire that winds through the person: order interior points by PROXIMITY
+    /// (short segments, not radial spokes), then break the path wherever a
+    /// segment would leave the silhouette — so it stays inside by construction,
+    /// not by cropping. Each contiguous run gets the coil noise + yarn passes.
+    private func drawWrapWire(interior: [CGPoint], boundary: [CGPoint], landmarks: LandmarkSettings, in context: CGContext) {
+        guard interior.count >= 2 else { return }
+        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, width: landmarks.yarnWidth)
+        let seed = landmarks.seed + DrawingSupport.seedOffset(for: .bodyHull)
+        let ordered = Self.nearestNeighborOrder(interior)
+        let runs = Self.splitAtExits(ordered, boundary: boundary)
+        for run in runs where run.count >= 2 {
+            let coiled = LandmarkYarnWeaver.coilPath(run, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: false)
+            strokePasses(coiled, closed: false, stroke: stroke, weave: CGFloat(landmarks.yarnWeaveAmount), in: context)
+        }
+    }
+
+    /// Greedy nearest-neighbour ordering so consecutive points are close.
+    private static func nearestNeighborOrder(_ points: [CGPoint]) -> [CGPoint] {
+        guard points.count > 2 else { return points }
+        var remaining = points
+        var order = [remaining.removeFirst()]
+        while !remaining.isEmpty {
+            let last = order[order.count - 1]
+            var bestIndex = 0
+            var bestDist = CGFloat.greatestFiniteMagnitude
+            for (i, p) in remaining.enumerated() {
+                let dx = p.x - last.x, dy = p.y - last.y
+                let d = dx * dx + dy * dy
+                if d < bestDist { bestDist = d; bestIndex = i }
+            }
+            order.append(remaining.remove(at: bestIndex))
+        }
+        return order
+    }
+
+    /// Splits an ordered point run wherever the segment to the next point would
+    /// exit the silhouette (checked at interior samples), so no drawn segment
+    /// jumps outside.
+    private static func splitAtExits(_ points: [CGPoint], boundary: [CGPoint]) -> [[CGPoint]] {
+        guard points.count >= 2 else { return points.isEmpty ? [] : [points] }
+        var runs: [[CGPoint]] = []
+        var current: [CGPoint] = [points[0]]
+        for i in 1..<points.count {
+            if segmentInside(points[i - 1], points[i], boundary) {
+                current.append(points[i])
+            } else {
+                if current.count >= 2 { runs.append(current) }
+                current = [points[i]]
+            }
+        }
+        if current.count >= 2 { runs.append(current) }
+        return runs
+    }
+
+    private static func segmentInside(_ a: CGPoint, _ b: CGPoint, _ boundary: [CGPoint]) -> Bool {
+        let samples = 6
+        for k in 1..<samples {
+            let t = CGFloat(k) / CGFloat(samples)
+            let p = CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+            if !pointInPolygon(p, boundary) { return false }
+        }
+        return true
+    }
+
+    /// Seeded interior samples of the person region (the wire winds through
+    /// these), plus the boundary polygon (for clipping + the exit test).
     private func wrapData(groups: [MappedGroup], landmarks: LandmarkSettings) -> (points: [CGPoint], boundary: [CGPoint])? {
         let boundary: [CGPoint]
         if let contour = groups.first(where: { $0.region == .contour }), contour.points.count >= 3 {
@@ -93,15 +152,11 @@ struct YarnDrawing: DrawingAlgorithm {
             boundary = BodyHull.convexHull(groups.flatMap { $0.points })
         }
         guard boundary.count >= 3 else { return nil }
-        // Sparse by default — fewer interior anchors read like bent wire, not a
-        // dense mat, and keep the weave cheap. Detail scales it up.
-        let count = max(5, Int(5 + landmarks.subsetRatio * 45))
+        // Sparse by default — the wire winds through these interior anchors;
+        // proximity ordering keeps segments short and inside. Density scales it.
+        let count = max(6, Int(6 + landmarks.subsetRatio * 50))
         let interior = interiorSamples(boundary: boundary, count: count, seed: landmarks.seed)
-        // Don't weave the whole silhouette rim (it can be 240 pts) — subsample
-        // a handful so the loops reach the body edges without exploding cost.
-        let step = max(1, boundary.count / 12)
-        let rim = stride(from: 0, to: boundary.count, by: step).map { boundary[$0] }
-        return (interior + rim, boundary)
+        return (interior, boundary)
     }
 
     private func interiorSamples(boundary: [CGPoint], count: Int, seed: Int) -> [CGPoint] {
@@ -156,7 +211,7 @@ enum LandmarkYarnWeaver {
     /// perpendicular zigzag amplitude; `circular` = coil radius (drifting circle
     /// per segment → loops); `winding` = loops per segment (>1 = local tangles).
     /// No-op when both amplitudes are ~0.
-    static func coilPath(_ points: [CGPoint], linear: Float, circular: Float, winding: Float, seed: Int) -> [CGPoint] {
+    static func coilPath(_ points: [CGPoint], linear: Float, circular: Float, winding: Float, seed: Int, closed: Bool = true) -> [CGPoint] {
         let lin = CGFloat(max(0, linear)), circ = CGFloat(max(0, circular))
         guard points.count >= 2, lin > 0.001 || circ > 0.001 else { return points }
         let wind = CGFloat(max(1, winding))
@@ -166,7 +221,8 @@ enum LandmarkYarnWeaver {
         var dense: [CGPoint] = []
         dense.reserveCapacity(points.count * samplesPerSegment)
         let n = points.count
-        for i in 0..<n {
+        let segments = closed ? n : n - 1
+        for i in 0..<segments {
             let p0 = points[i], p1 = points[(i + 1) % n]
             let dx = p1.x - p0.x, dy = p1.y - p0.y
             let len = max(1, hypot(dx, dy))
@@ -185,6 +241,7 @@ enum LandmarkYarnWeaver {
                 ))
             }
         }
+        if !closed, let last = points.last { dense.append(last) }
         return dense
     }
 
