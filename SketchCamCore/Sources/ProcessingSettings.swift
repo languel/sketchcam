@@ -80,6 +80,46 @@ public struct DrawingPalette: Equatable, Sendable, Codable {
     public static let `default` = DrawingPalette(colors: [.ink])
 }
 
+/// Where the web layer composites relative to the drawing overlay (both sit
+/// above the video/effects).
+public enum WebLayerPlacement: String, CaseIterable, Identifiable, Sendable, Codable {
+    case behindDrawing
+    case aboveDrawing
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .behindDrawing: return "Behind drawing"
+        case .aboveDrawing: return "Above drawing"
+        }
+    }
+}
+
+/// A web page composited as a layer: an off-screen WKWebView (sized to output)
+/// snapshotted into the frame. `transparentBackground` strips the page's own
+/// background (CSS) and the web view's, so it composites as a transparent layer.
+public struct WebLayerSettings: Equatable, Sendable, Codable {
+    public var enabled: Bool
+    public var urlString: String
+    public var transparentBackground: Bool
+    public var placement: WebLayerPlacement
+    public var opacity: Float
+
+    public init(
+        enabled: Bool = false,
+        urlString: String = "",
+        transparentBackground: Bool = true,
+        placement: WebLayerPlacement = .aboveDrawing,
+        opacity: Float = 1
+    ) {
+        self.enabled = enabled
+        self.urlString = urlString
+        self.transparentBackground = transparentBackground
+        self.placement = placement
+        self.opacity = opacity
+    }
+}
+
 public struct ProcessingSettings: Equatable, Sendable, Codable {
     public var threshold: Float
     public var edgeStrength: Float
@@ -119,6 +159,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     public var useMetalPreview: Bool
     public var processingQuality: ProcessingQuality
     public var landmarks: LandmarkSettings
+    public var web: WebLayerSettings
 
     public init(
         threshold: Float = 0.52,
@@ -141,7 +182,8 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewFPS: Double = 0,
         useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,
-        landmarks: LandmarkSettings = LandmarkSettings()
+        landmarks: LandmarkSettings = LandmarkSettings(),
+        web: WebLayerSettings = WebLayerSettings()
     ) {
         self.threshold = threshold
         self.edgeStrength = edgeStrength
@@ -164,6 +206,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality
         self.landmarks = landmarks
+        self.web = web
     }
 }
 

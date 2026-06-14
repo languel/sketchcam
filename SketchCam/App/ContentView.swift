@@ -11,6 +11,7 @@ struct ContentView: View {
         case yarn = "Yarn"
         case wrap = "Wrap"
         case lineWalk = "Line walk"
+        case web = "Web"
         case presets = "Presets"
         case keys = "Keys"
         case debug = "Debug"
@@ -26,6 +27,7 @@ struct ContentView: View {
             case .yarn: "scribble.variable"
             case .wrap: "figure.stand"
             case .lineWalk: "lasso"
+            case .web: "globe"
             case .presets: "bookmark"
             case .keys: "keyboard"
             case .debug: "ladybug"
@@ -38,6 +40,7 @@ struct ContentView: View {
     @StateObject private var presetStore = PresetStore()
     @State private var newPresetName = ""
     @State private var recallWholeState = false
+    @State private var webURLField = ""
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
@@ -129,6 +132,7 @@ struct ContentView: View {
                     case .yarn: yarnTab
                     case .wrap: wrapTab
                     case .lineWalk: lineWalkTab
+                    case .web: webTab
                     case .presets: presetsTab
                     case .keys: keysTab
                     case .debug: debugTab
@@ -658,6 +662,41 @@ struct ContentView: View {
                 )
             }
         )
+    }
+
+    // MARK: - Web tab
+    //
+    // Renders a web page (remote/local URL) as a compositing layer with an
+    // optional transparent background, ordered behind or above the drawing.
+
+    @ViewBuilder private var webTab: some View {
+        Toggle("Enable web layer", isOn: $model.settings.web.enabled)
+            .font(.headline)
+
+        Group {
+            SectionHeader("URL")
+            HStack {
+                TextField("https://… or local path", text: $webURLField)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { model.settings.web.urlString = webURLField }
+                Button("Load") { model.settings.web.urlString = webURLField }
+            }
+            Text("Remote URL, file:// URL, or a local path. A code-snippet box (HTML/CSS/JS) is coming later.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            SectionHeader("Layer")
+            Toggle("Transparent background", isOn: $model.settings.web.transparentBackground)
+                .help("Strip the page's and the web view's background so it composites as a transparent layer.")
+            Picker("Order", selection: $model.settings.web.placement) {
+                ForEach(WebLayerPlacement.allCases) { p in Text(p.title).tag(p) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            SliderRow(title: "Opacity", value: floatBinding(\.web.opacity))
+        }
+        .disabled(!model.settings.web.enabled)
+        .onAppear { if webURLField.isEmpty { webURLField = model.settings.web.urlString } }
     }
 
     // MARK: - Presets tab

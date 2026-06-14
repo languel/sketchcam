@@ -82,6 +82,9 @@ final class SketchCamViewModel: ObservableObject {
     let previewDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
+    private let webController = WebLayerController()
+    private var lastWebSettings: WebLayerSettings?
+    private var lastWebOutputSize: CGSize = .zero
     private let segmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
@@ -391,6 +394,16 @@ final class SketchCamViewModel: ObservableObject {
             let (settings, outputFormat) = self.timings.measure(.snapshot) {
                 (self.store.settings, self.store.outputFormat)
             }
+            // Web layer: push config changes to the (main-thread) web view only
+            // when they change; the snapshot is read back below thread-safely.
+            if settings.web != self.lastWebSettings || outputFormat.size != self.lastWebOutputSize {
+                self.lastWebSettings = settings.web
+                self.lastWebOutputSize = outputFormat.size
+                let web = settings.web
+                let size = outputFormat.size
+                DispatchQueue.main.async { self.webController.update(settings: web, outputSize: size) }
+            }
+            let webLayer = settings.web.enabled ? self.webController.currentImage() : nil
             do {
                 let frameIndex = self.nextFrameIndex()
                 // Segmentation runs when keying OR the silhouette contour
@@ -449,7 +462,9 @@ final class SketchCamViewModel: ObservableObject {
                         frameIndex: frameIndex,
                         timestamp: timestamp,
                         overlay: overlay,
-                        matte: matte
+                        matte: matte,
+                        webLayer: webLayer,
+                        webAboveDrawing: settings.web.placement == .aboveDrawing
                     )
                 }
                 self.publish(frame: processed.pixelBuffer, sampleBuffer: processed.sampleBuffer, originalPixelBuffer: originalPixelBuffer)

@@ -53,7 +53,7 @@ public final class CoreImageFrameProcessor: FrameProcessor {
         )!
     }
 
-    public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?) throws -> ProcessedFrame {
+    public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, webAboveDrawing: Bool) throws -> ProcessedFrame {
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
         var finalImage: CIImage
@@ -218,8 +218,15 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             finalImage = Self.upscale(composed, from: processingRect, to: outputRect)
         }
 
+        // Layer order (above the video/effects): web-behind → drawing → web-above.
+        if let webLayer, !webAboveDrawing {
+            finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
+        }
         if let overlay {
             finalImage = overlay.composited(over: finalImage).cropped(to: outputRect)
+        }
+        if let webLayer, webAboveDrawing {
+            finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
         }
 
         let output = try outputPool.makeBuffer(format: outputFormat)
