@@ -252,8 +252,11 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// cadence (the old stepping behavior).
     public var predictiveTracking: Bool
     /// Seeds the PRNG behind the drawing algorithms; a fixed seed keeps the
-    /// generated shape stable while the subject moves.
-    public var seed: Int
+    /// generated shape stable while the subject moves. One seed per algorithm
+    /// (each tab is fully independent).
+    public var yarnSeed: Int
+    public var wrapSeed: Int
+    public var lineWalkSeed: Int
     // Yarn parameters (per-region weave).
     public var subsetRatio: Float
     public var yarnWeaveAmount: Float
@@ -299,10 +302,14 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
-    /// Shared drawing color set. When `drawingMatchesLandmarkColors` is set the
-    /// algorithms instead tint by each region's landmark color.
-    public var drawingPalette: DrawingPalette
-    public var drawingMatchesLandmarkColors: Bool
+    /// Per-algorithm color set. When the matching `*MatchesLandmarkColors` flag
+    /// is set, that algorithm instead tints by each region's landmark color.
+    public var yarnPalette: DrawingPalette
+    public var yarnMatchesLandmarkColors: Bool
+    public var wrapPalette: DrawingPalette
+    public var wrapMatchesLandmarkColors: Bool
+    public var lineWalkPalette: DrawingPalette
+    public var lineWalkMatchesLandmarkColors: Bool
     /// Per-region color + size (stroke width / dot scale).
     public var jawStyle: ElementStyle
     public var noseStyle: ElementStyle
@@ -354,7 +361,9 @@ public struct LandmarkSettings: Equatable, Sendable {
         contourDetail: Float = 0.4,
         trackBodyHull: Bool = false,
         predictiveTracking: Bool = true,
-        seed: Int = 7,
+        yarnSeed: Int = 7,
+        wrapSeed: Int = 7,
+        lineWalkSeed: Int = 7,
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
         yarnWidth: Float = 2.2,
@@ -378,8 +387,12 @@ public struct LandmarkSettings: Equatable, Sendable {
         lineWalkWidthVariation: Float = 0.3,
         lineWalkCurveFit: CurveFit = .hobby,
         useMetalDrawing: Bool = false,
-        drawingPalette: DrawingPalette = .default,
-        drawingMatchesLandmarkColors: Bool = false,
+        yarnPalette: DrawingPalette = .default,
+        yarnMatchesLandmarkColors: Bool = false,
+        wrapPalette: DrawingPalette = .default,
+        wrapMatchesLandmarkColors: Bool = false,
+        lineWalkPalette: DrawingPalette = .default,
+        lineWalkMatchesLandmarkColors: Bool = false,
         jawStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.95, green: 0.33, blue: 0.48, alpha: 0.85)),
         noseStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.90, green: 0.45, blue: 0.55, alpha: 0.85)),
         mouthStyle: ElementStyle = ElementStyle(color: RGBAColor(red: 0.92, green: 0.30, blue: 0.42, alpha: 0.85)),
@@ -429,7 +442,9 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.contourDetail = contourDetail
         self.trackBodyHull = trackBodyHull
         self.predictiveTracking = predictiveTracking
-        self.seed = seed
+        self.yarnSeed = yarnSeed
+        self.wrapSeed = wrapSeed
+        self.lineWalkSeed = lineWalkSeed
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount
         self.yarnWidth = yarnWidth
@@ -453,8 +468,12 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.lineWalkWidthVariation = lineWalkWidthVariation
         self.lineWalkCurveFit = lineWalkCurveFit
         self.useMetalDrawing = useMetalDrawing
-        self.drawingPalette = drawingPalette
-        self.drawingMatchesLandmarkColors = drawingMatchesLandmarkColors
+        self.yarnPalette = yarnPalette
+        self.yarnMatchesLandmarkColors = yarnMatchesLandmarkColors
+        self.wrapPalette = wrapPalette
+        self.wrapMatchesLandmarkColors = wrapMatchesLandmarkColors
+        self.lineWalkPalette = lineWalkPalette
+        self.lineWalkMatchesLandmarkColors = lineWalkMatchesLandmarkColors
         self.jawStyle = jawStyle
         self.noseStyle = noseStyle
         self.mouthStyle = mouthStyle

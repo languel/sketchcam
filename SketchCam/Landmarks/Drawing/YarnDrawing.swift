@@ -14,12 +14,12 @@ struct YarnDrawing: DrawingAlgorithm {
         for group in groups {
             let selected = LandmarkYarnWeaver.seededSubset(
                 group.points,
-                seed: landmarks.seed + DrawingSupport.seedOffset(for: group.region),
+                seed: landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region),
                 ratio: landmarks.subsetRatio
             )
             guard selected.count > 2 else { continue }
-            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, width: landmarks.yarnWidth)
-            let seed = landmarks.seed + DrawingSupport.seedOffset(for: group.region)
+            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, matchColors: landmarks.yarnMatchesLandmarkColors, palette: landmarks.yarnPalette, width: landmarks.yarnWidth)
+            let seed = landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region)
             let ordered = LandmarkYarnWeaver.wovenOrder(selected, seed: seed)
             let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
             YarnDrawing.strokePasses(coiled, closed: true, stroke: stroke, weave: CGFloat(landmarks.yarnWeaveAmount), in: context)

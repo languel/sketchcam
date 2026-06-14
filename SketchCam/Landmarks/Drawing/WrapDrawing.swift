@@ -18,10 +18,10 @@ struct WrapDrawing: DrawingAlgorithm {
 
         // Heavily sample the interior — density scales the anchor count up.
         let count = max(10, min(160, Int(10 + landmarks.wrapDensity * 150)))
-        let interior = Self.interiorSamples(boundary: boundary, count: count, seed: landmarks.seed)
+        let interior = Self.interiorSamples(boundary: boundary, count: count, seed: landmarks.wrapSeed)
         guard interior.count >= 2 else { return }
 
-        let seed = landmarks.seed + DrawingSupport.seedOffset(for: .bodyHull)
+        let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
         // Proximity order → short segments that stay near the body.
         let ordered = Self.nearestNeighborOrder(interior)
 
@@ -42,7 +42,7 @@ struct WrapDrawing: DrawingAlgorithm {
         )
         let curve = DrawingSupport.curvePoints(coiled, fit: landmarks.wrapCurveFit)
 
-        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, width: landmarks.wrapWidth)
+        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
         YarnDrawing.strokePasses(curve, closed: false, stroke: stroke, weave: 0, in: context)
     }
 

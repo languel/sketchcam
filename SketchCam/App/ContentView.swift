@@ -8,7 +8,9 @@ struct ContentView: View {
         case layers = "Layers"
         case effect = "Effect"
         case marks = "Marks"
-        case drawing = "Drawing"
+        case yarn = "Yarn"
+        case wrap = "Wrap"
+        case lineWalk = "Line walk"
         case keys = "Keys"
         case debug = "Debug"
 
@@ -20,7 +22,9 @@ struct ContentView: View {
             case .layers: "square.3.layers.3d"
             case .effect: "wand.and.stars"
             case .marks: "point.3.connected.trianglepath.dotted"
-            case .drawing: "scribble.variable"
+            case .yarn: "scribble.variable"
+            case .wrap: "figure.stand"
+            case .lineWalk: "lasso"
             case .keys: "keyboard"
             case .debug: "ladybug"
             }
@@ -117,7 +121,9 @@ struct ContentView: View {
                     case .layers: layersTab
                     case .effect: effectTab
                     case .marks: marksTab
-                    case .drawing: drawingTab
+                    case .yarn: yarnTab
+                    case .wrap: wrapTab
+                    case .lineWalk: lineWalkTab
                     case .keys: keysTab
                     case .debug: debugTab
                     }
@@ -428,43 +434,29 @@ struct ContentView: View {
     // hosts artistic interpretations of the same landmarks. Yarn is the
     // first algorithm; one-line, cubist, and ink-wash styles slot in here.
 
-    @ViewBuilder private var drawingTab: some View {
-        // Each algorithm toggles independently and they layer on top of each
-        // other (back-to-front: Wrap, Yarn, Line walk).
-        SectionHeader("Algorithms")
-        Toggle("Yarn", isOn: $model.settings.landmarks.yarnEnabled)
+    // Each algorithm is its own tab with an enable checkbox and a fully
+    // independent palette / match / seed. Enabled algorithms layer on the
+    // canvas (back-to-front: Wrap, Yarn, Line walk).
+
+    @ViewBuilder private var yarnTab: some View {
+        Toggle("Enable Yarn", isOn: $model.settings.landmarks.yarnEnabled)
+            .font(.headline)
             .help("Weave each feature's points into a many-pass tangle.")
-        Toggle("Wrap the body", isOn: $model.settings.landmarks.wrapEnabled)
-            .help("A continuous yarn-wire that winds through the inside of the person (Gormley-style).")
-        Toggle("Line walk", isOn: $model.settings.landmarks.lineWalkEnabled)
-            .help("One continuous line taken for a walk through the landmarks.")
+        overlayOffHint
+        Group {
+            SectionHeader("Palette")
+            paletteEditor(\.landmarks.yarnPalette, match: \.landmarks.yarnMatchesLandmarkColors)
+            Toggle("Match landmark colors", isOn: $model.settings.landmarks.yarnMatchesLandmarkColors)
+            seedRow(\.landmarks.yarnSeed)
 
-        // Shared across algorithms.
-        SectionHeader("Palette")
-        paletteEditor
-        Toggle("Match landmark colors", isOn: $model.settings.landmarks.drawingMatchesLandmarkColors)
-
-        SectionHeader("Seed")
-        HStack {
-            Stepper(value: $model.settings.landmarks.seed, in: 0...99_999) {
-                Text("Seed \(model.settings.landmarks.seed)")
-                    .monospacedDigit()
-            }
-            Button("Shuffle") { model.settings.landmarks.seed = Int.random(in: 0..<100_000) }
-        }
-
-        if model.settings.landmarks.yarnEnabled {
             SectionHeader("Yarn")
             SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio),
                       hint: "How many points are woven — higher = denser/heavier, lower = sparser.")
             SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
             SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
             HStack(alignment: .top, spacing: 10) {
-                XYPad(
-                    x: floatBinding(\.landmarks.yarnLinear),
-                    y: floatBinding(\.landmarks.yarnCircular)
-                )
-                .frame(width: 96, height: 96)
+                XYPad(x: floatBinding(\.landmarks.yarnLinear), y: floatBinding(\.landmarks.yarnCircular))
+                    .frame(width: 96, height: 96)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("→ linear (zigzag)")
                     Text("↑ circular (loops)")
@@ -476,25 +468,32 @@ struct ContentView: View {
             SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1,
                       hint: "Loops per segment for the circular noise — >1 makes local tangles/coils.")
         }
+        .disabled(!model.settings.landmarks.yarnEnabled)
+    }
 
-        if model.settings.landmarks.wrapEnabled {
+    @ViewBuilder private var wrapTab: some View {
+        Toggle("Enable Wrap the body", isOn: $model.settings.landmarks.wrapEnabled)
+            .font(.headline)
+            .help("A continuous yarn-wire that winds through the inside of the person (Gormley-style).")
+        overlayOffHint
+        Group {
+            SectionHeader("Palette")
+            paletteEditor(\.landmarks.wrapPalette, match: \.landmarks.wrapMatchesLandmarkColors)
+            Toggle("Match landmark colors", isOn: $model.settings.landmarks.wrapMatchesLandmarkColors)
+            seedRow(\.landmarks.wrapSeed)
+
             SectionHeader("Wrap the body")
             SliderRow(title: "Density", value: floatBinding(\.landmarks.wrapDensity),
                       hint: "How densely the wire samples inside the body — higher = woven mat, lower = sparse bent-wire.")
             Picker("Curve", selection: $model.settings.landmarks.wrapCurveFit) {
-                ForEach(CurveFit.allCases) { fit in
-                    Text(fit.title).tag(fit)
-                }
+                ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
             }
             .pickerStyle(.segmented)
 
             SectionHeader("Wildness")
             HStack(alignment: .top, spacing: 10) {
-                XYPad(
-                    x: floatBinding(\.landmarks.wrapWildnessAlong),
-                    y: floatBinding(\.landmarks.wrapWildnessOrtho)
-                )
-                .frame(width: 96, height: 96)
+                XYPad(x: floatBinding(\.landmarks.wrapWildnessAlong), y: floatBinding(\.landmarks.wrapWildnessOrtho))
+                    .frame(width: 96, height: 96)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("→ along path")
                     Text("↑ orthogonal")
@@ -513,27 +512,34 @@ struct ContentView: View {
                       hint: "Loops per segment — >1 makes tangles.")
             SliderRow(title: "Width", value: floatBinding(\.landmarks.wrapWidth), range: 0.7...8)
         }
+        .disabled(!model.settings.landmarks.wrapEnabled)
+    }
 
-        if model.settings.landmarks.lineWalkEnabled {
+    @ViewBuilder private var lineWalkTab: some View {
+        Toggle("Enable Line walk", isOn: $model.settings.landmarks.lineWalkEnabled)
+            .font(.headline)
+            .help("One continuous line taken for a walk through the landmarks.")
+        overlayOffHint
+        Group {
+            SectionHeader("Palette")
+            paletteEditor(\.landmarks.lineWalkPalette, match: \.landmarks.lineWalkMatchesLandmarkColors)
+            Toggle("Match landmark colors", isOn: $model.settings.landmarks.lineWalkMatchesLandmarkColors)
+            seedRow(\.landmarks.lineWalkSeed)
+
             SectionHeader("Line walk")
             SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
                       hint: "One continuous line → separate semantic paths → fragmented segments")
             SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity),
                       hint: "Few points (minimal) → dense sampling with subdivided lines")
             Picker("Curve", selection: $model.settings.landmarks.lineWalkCurveFit) {
-                ForEach(CurveFit.allCases) { fit in
-                    Text(fit.title).tag(fit)
-                }
+                ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
             }
             .pickerStyle(.segmented)
 
             SectionHeader("Wildness")
             HStack(alignment: .top, spacing: 10) {
-                XYPad(
-                    x: floatBinding(\.landmarks.lineWalkWildnessAlong),
-                    y: floatBinding(\.landmarks.lineWalkWildnessOrtho)
-                )
-                .frame(width: 96, height: 96)
+                XYPad(x: floatBinding(\.landmarks.lineWalkWildnessAlong), y: floatBinding(\.landmarks.lineWalkWildnessOrtho))
+                    .frame(width: 96, height: 96)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("→ along path")
                     Text("↑ orthogonal")
@@ -550,7 +556,10 @@ struct ContentView: View {
             SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
                       hint: "Width modulation along the curve (calligraphic swell)")
         }
+        .disabled(!model.settings.landmarks.lineWalkEnabled)
+    }
 
+    @ViewBuilder private var overlayOffHint: some View {
         if !model.settings.landmarks.enabled {
             Text("Landmark overlay is off — enable it in Marks to draw.")
                 .font(.caption)
@@ -558,14 +567,30 @@ struct ContentView: View {
         }
     }
 
-    /// Editable color list for the active drawing algorithm. Starts as one
-    /// solid color; "+" adds more (algorithms cycle through them per feature).
-    @ViewBuilder private var paletteEditor: some View {
-        let colors = model.settings.landmarks.drawingPalette.colors
+    @ViewBuilder private func seedRow(_ keyPath: WritableKeyPath<ProcessingSettings, Int>) -> some View {
+        SectionHeader("Seed")
+        HStack {
+            Stepper(
+                value: Binding(get: { model.settings[keyPath: keyPath] }, set: { model.settings[keyPath: keyPath] = $0 }),
+                in: 0...99_999
+            ) {
+                Text("Seed \(model.settings[keyPath: keyPath])").monospacedDigit()
+            }
+            Button("Shuffle") { model.settings[keyPath: keyPath] = Int.random(in: 0..<100_000) }
+        }
+    }
+
+    /// Editable color list for one algorithm's palette. Starts as one solid
+    /// color; "+" adds more (algorithms cycle through them per feature).
+    @ViewBuilder private func paletteEditor(
+        _ keyPath: WritableKeyPath<ProcessingSettings, DrawingPalette>,
+        match: WritableKeyPath<ProcessingSettings, Bool>
+    ) -> some View {
+        let colors = model.settings[keyPath: keyPath].colors
         VStack(alignment: .leading, spacing: 6) {
             ForEach(colors.indices, id: \.self) { index in
                 HStack {
-                    ColorPicker("", selection: paletteColorBinding(index), supportsOpacity: true)
+                    ColorPicker("", selection: paletteColorBinding(keyPath, index), supportsOpacity: true)
                         .labelsHidden()
                     Text("Color \(index + 1)")
                         .font(.caption)
@@ -573,7 +598,7 @@ struct ContentView: View {
                     Spacer()
                     if colors.count > 1 {
                         Button {
-                            model.settings.landmarks.drawingPalette.colors.remove(at: index)
+                            model.settings[keyPath: keyPath].colors.remove(at: index)
                         } label: {
                             Image(systemName: "minus.circle")
                         }
@@ -582,28 +607,28 @@ struct ContentView: View {
                 }
             }
             Button {
-                let last = model.settings.landmarks.drawingPalette.colors.last ?? .ink
-                model.settings.landmarks.drawingPalette.colors.append(last)
+                let last = model.settings[keyPath: keyPath].colors.last ?? .ink
+                model.settings[keyPath: keyPath].colors.append(last)
             } label: {
                 Label("Add color", systemImage: "plus")
             }
             .buttonStyle(.borderless)
         }
-        .disabled(model.settings.landmarks.drawingMatchesLandmarkColors)
+        .disabled(model.settings[keyPath: match])
     }
 
-    private func paletteColorBinding(_ index: Int) -> Binding<Color> {
+    private func paletteColorBinding(_ keyPath: WritableKeyPath<ProcessingSettings, DrawingPalette>, _ index: Int) -> Binding<Color> {
         Binding(
             get: {
-                let colors = model.settings.landmarks.drawingPalette.colors
+                let colors = model.settings[keyPath: keyPath].colors
                 guard colors.indices.contains(index) else { return .black }
                 let c = colors[index]
                 return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
             },
             set: { newValue in
-                guard model.settings.landmarks.drawingPalette.colors.indices.contains(index),
+                guard model.settings[keyPath: keyPath].colors.indices.contains(index),
                       let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
-                model.settings.landmarks.drawingPalette.colors[index] = RGBAColor(
+                model.settings[keyPath: keyPath].colors[index] = RGBAColor(
                     red: Float(converted.redComponent),
                     green: Float(converted.greenComponent),
                     blue: Float(converted.blueComponent),

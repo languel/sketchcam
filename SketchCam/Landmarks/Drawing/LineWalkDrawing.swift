@@ -52,12 +52,12 @@ struct LineWalkDrawing: DrawingAlgorithm {
             wildnessAlong: landmarks.lineWalkWildnessAlong,
             wildnessOrtho: landmarks.lineWalkWildnessOrtho,
             scale: landmarks.lineWalkScale,
-            seed: landmarks.seed
+            seed: landmarks.lineWalkSeed
         )
         guard !paths.isEmpty else { return [] }
 
         let width = max(0.4, landmarks.lineWalkWidth)
-        let palette = landmarks.drawingPalette.colors
+        let palette = landmarks.lineWalkPalette.colors
         var result: [StrokeTessellator.Stroke] = []
         result.reserveCapacity(paths.count)
         for (pathIndex, path) in paths.enumerated() {
@@ -70,14 +70,14 @@ struct LineWalkDrawing: DrawingAlgorithm {
                 color: color,
                 baseWidth: width,
                 widthVariation: landmarks.lineWalkWidthVariation,
-                seed: landmarks.seed &+ pathIndex &* 131
+                seed: landmarks.lineWalkSeed &+ pathIndex &* 131
             ))
         }
         return result
     }
 
     private func pathColor(index: Int, tag: Int, palette: [RGBAColor], landmarks: LandmarkSettings) -> RGBAColor {
-        if landmarks.drawingMatchesLandmarkColors {
+        if landmarks.lineWalkMatchesLandmarkColors {
             let region = LandmarkRegion.allCases[safe: tag] ?? .torso
             return landmarks.style(for: region).color
         }

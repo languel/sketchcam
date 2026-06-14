@@ -43,12 +43,12 @@ enum DrawingSupport {
     /// Resolves a drawing stroke: per-region landmark style when "match
     /// landmark colors" is set, otherwise the shared palette's primary color
     /// with the algorithm's own width.
-    static func stroke(for region: LandmarkRegion, landmarks: LandmarkSettings, width: Float) -> (color: RGBAColor, width: CGFloat) {
-        if landmarks.drawingMatchesLandmarkColors {
+    static func stroke(for region: LandmarkRegion, landmarks: LandmarkSettings, matchColors: Bool, palette: DrawingPalette, width: Float) -> (color: RGBAColor, width: CGFloat) {
+        if matchColors {
             let style = landmarks.style(for: region)
             return (style.color, CGFloat(max(0.7, style.size)))
         }
-        return (landmarks.drawingPalette.primary, CGFloat(max(0.7, width)))
+        return (palette.primary, CGFloat(max(0.7, width)))
     }
 
     /// Smooth Catmull-style path through `points`. Closed paths curve through
