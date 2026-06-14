@@ -289,3 +289,31 @@ Detection is OFF the hot path — it doesn't lower FPS, only caps the rate.
 - DEFER (yarn revisit): toggle to draw yarn only inside the person/contour
   (proximity sampling → "wrapped in yarn"); yarn noise controls like LineWalk but
   **linear vs circular** (loops/tangles, local winding >1) instead of along/ortho.
+
+## Done since (Drawing engine + GPU + presets)
+- **Layerable drawing algorithms**: replaced the single-select `drawingStyle`
+  with per-algorithm toggles (`yarn/wrap/lineWalkEnabled`); the compositor renders
+  every enabled one, layered. Each is its own tab (Yarn / Wrap / Line walk) with a
+  **fully independent** palette, match-colors, and seed.
+- **Wrap** extracted as its own algorithm: a continuous yarn-wire through the
+  person interior (heavy interior sampling, proximity/nearest-neighbour order,
+  reuses `LineWalk.perturb` for wildness + coil/winding loops). Interior-biased,
+  not silhouette-clipped (allowed to spill a little).
+- **GPU drawing for all algorithms**: every `DrawingAlgorithm` emits
+  `[StrokeTessellator.Stroke]`; `renderMetalOverlay` gathers strokes from all
+  enabled algorithms and rasterizes them in one Metal pass. Measured ~24→15 ms
+  overlay on a dense yarn+wrap scene (lighter scenes: CPU already fine, GPU ≈ wash).
+- **Ribbon rendering** (transparency fix): strokes are now single filled ribbons
+  (two miter-offset boundaries → triangle strip), not per-segment quads + per-vertex
+  discs — kills the bead/spine/splotch artifacts under alpha. Shared
+  `StrokeTessellator.ribbonBoundary` drives both the GPU strip and the CPU fill, so
+  CPU and GPU run the same stroke list. Legacy beads kept as a toggle.
+- **Continuous coil**: `coilPath` phase accumulates along the whole wire (uniform
+  pitch) instead of resetting per segment.
+- **Settings panel**: first tab renamed Input → **Settings** (gearshape); GPU
+  drawing + Bead-stroke toggles moved there under "Rendering" (out of Debug).
+- **Presets**: named snapshots of the entire `ProcessingSettings` (Codable),
+  persisted to UserDefaults; recall scope picker (render-style-only vs whole state).
+
+REMAINING / DEFERRED: wire Metal *effects* live (drop CoreImage); wrap spine bias;
+trim the yarn-weave perturbation cost; starter presets.

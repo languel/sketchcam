@@ -11,11 +11,14 @@ A macOS app captures a webcam, runs a GPU compositing pipeline, previews it, and
 - **Layers**: live input layer toggle; background = live video, solid color (color + opacity picker), or true alpha; the published BGRA frames carry a real alpha channel for downstream compositing (TouchDesigner etc.).
 - **Person keying**: Vision person segmentation (fast/balanced/accurate) masks the layer stack to the person — Cutout or flat-color Silhouette mode, invertible (the outline always stays on the subject).
 - **Marks** (raw landmark data): Apple Vision backend (synthetic source for tuning), tracked as fine-grained regions — face split into Jaw / Nose / Mouth / L+R Brow / L+R Eye, body into Head / Torso / L+R Arm / L+R Leg, plus Hands and a silhouette Contour — each independently toggleable with its own color + size. Rendered as dots and/or a MediaPipe-style stick figure (eye shapes, articulated fingers, body skeleton); stable IDs with adjustable color-matched labels (hands use MediaPipe 0–20 indices), detection rate 1–15 Hz. Jitter-stable: canonical joint ordering, chirality-locked hands, identity-keyed smoothing with dropout carry-over. The **Contour** follows the silhouette boundary (Moore tracing) with an adjustable Detail (granularity) so it hugs concavities.
-- **Drawing** (art from the landmark data): a modular set of algorithms (one active at a time) over a shared editable color palette + seed.
-  - **Yarn** — seeded woven tangle.
-  - **Line walk** — "taking a line for a walk": one or more continuous lines planned through the semantic features. Controls: Continuity (one unicursal line → separate paths → fragments), Density, a Curve picker (Polyline / Spline / Hobby / Bezier), a 2-D Wildness pad (along-path × orthogonal perturbation), Scale (local↔global), and calligraphic variable-width strokes. Deterministic from the seed, so the shape stays stable under motion.
-- **UI**: tabbed controls (Input / Layers / Effect / Marks / Drawing / Keys / Debug) with compact one-line style rows (color + size per visual element).
-- **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, per-stage ms HUD.
+- **Drawing** (art from the landmark data): modular algorithms that each toggle independently and **layer** on the canvas, each with its **own** color palette, "match landmark colors" option, and seed. Deterministic from the seed, so shapes stay stable under motion.
+  - **Yarn** — seeded woven tangle per feature; Weave (waviness), coil/loop Noise (linear × circular) and Winding.
+  - **Wrap** — a continuous yarn-wire that winds through the *inside* of the person (Gormley-style): heavy interior sampling, proximity-ordered, with LineWalk-style Wildness/Scale and coil/winding Loops.
+  - **Line walk** — "taking a line for a walk": one or more continuous lines planned through the semantic features. Continuity (one unicursal line → separate paths → fragments), Density, a Curve picker (Polyline / Spline / Hobby / Bezier), a 2-D Wildness pad (along-path × orthogonal), Scale (local↔global).
+  - All algorithms render as smooth variable-width **ribbons** (calligraphic taper/swell) with an optional glow **Halo**; an optional **GPU (Metal)** path tessellates every enabled algorithm in one pass.
+- **Presets**: save the entire app state (effects, threshold, background + the full drawing/detection config) as named, persistent presets; recall either just the render style (Marks/Drawing/Detection) or the whole state.
+- **UI**: tabbed controls (Settings / Layers / Effect / Marks / Yarn / Wrap / Line walk / Presets / Keys / Debug) with compact one-line style rows (color + size per visual element).
+- **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, GPU drawing + stroke style toggles (Settings ▸ Rendering), per-stage ms HUD.
 - The pipeline sustains 30 fps at 1080p with all features enabled (~2–5 ms/frame on the hot path; detection and segmentation run off-path on their own queues). See `notes/performance-plan.md` for the audit, architecture, and measured numbers.
 
 ## Current Status
@@ -128,6 +131,6 @@ If no host frames are arriving, the extension should keep outputting its generat
 - App-side product logic lives in `SketchCam` and `SketchCamCore`.
 - The camera extension stays thin: it consumes app-provided frames on a CMIO sink stream, republishes them on a CMIO source stream, and generates fallback frames.
 - The default output preset is 1920x1080 at 30 FPS; 1280x720 and 640x360 are also exposed.
-- Core Image is the first processor backend, but the `FrameProcessor` boundary is intended to allow Metal or other renderers later.
+- Core Image is the first processor backend; the `FrameProcessor` boundary allows Metal or other renderers. The Drawing overlay already has a Metal path (`StrokeTessellator` → `MetalLineRenderer`, tessellated ribbons into an IOSurface) opt-in via Settings ▸ Rendering ▸ GPU drawing.
 
 See `notes/architecture.md`, `notes/phase-1-test-plan.md`, and `notes/troubleshooting.md` for more detail.
