@@ -87,27 +87,45 @@ enum LandmarkYarnWeaver {
         let phase = CGFloat(seed % 360) * (.pi / 180)
         // Cap sub-samples so high winding can't explode the geometry.
         let samplesPerSegment = min(20, max(3, Int((wind * 6).rounded())))
-        var dense: [CGPoint] = []
-        dense.reserveCapacity(points.count * samplesPerSegment)
         let n = points.count
         let segments = closed ? n : n - 1
+        guard segments >= 1 else { return points }
+
+        // Constant coil radius from the mean segment length so the helix has a
+        // uniform pitch instead of fat loops on long segments / pinched ones on
+        // short. (Per-segment scaling made the coil read as random tangles.)
+        var totalLen: CGFloat = 0
+        for i in 0..<segments {
+            let p1 = points[(i + 1) % n]
+            totalLen += hypot(p1.x - points[i].x, p1.y - points[i].y)
+        }
+        let avgLen = max(1, totalLen / CGFloat(segments))
+        let circR = circ * avgLen * 0.6
+        let linAmp = lin * avgLen * 0.5
+
+        var dense: [CGPoint] = []
+        dense.reserveCapacity(segments * samplesPerSegment + 1)
+        // `u` advances continuously across the whole wire (1 per segment) so the
+        // coil phase never resets at an anchor — one flowing helix, not a chain
+        // of independent loops.
+        var sampleIndex = 0
         for i in 0..<segments {
             let p0 = points[i], p1 = points[(i + 1) % n]
             let dx = p1.x - p0.x, dy = p1.y - p0.y
             let len = max(1, hypot(dx, dy))
             let tx = dx / len, ty = dy / len
             let nx = -ty, ny = tx
-            let linAmp = lin * len * 0.4
-            let circR = circ * len * 0.5
             for s in 0..<samplesPerSegment {
                 let f = CGFloat(s) / CGFloat(samplesPerSegment)
-                let theta = 2 * .pi * wind * f + phase
-                let alongN = circR * sin(theta) + linAmp * sin(f * .pi * 3 + phase)
+                let u = CGFloat(sampleIndex) / CGFloat(samplesPerSegment)
+                let theta = 2 * .pi * wind * u + phase
+                let alongN = circR * sin(theta) + linAmp * sin(.pi * 3 * u + phase)
                 let alongT = circR * cos(theta)
                 dense.append(CGPoint(
                     x: p0.x + dx * f + nx * alongN + tx * alongT,
                     y: p0.y + dy * f + ny * alongN + ty * alongT
                 ))
+                sampleIndex += 1
             }
         }
         if !closed, let last = points.last { dense.append(last) }
