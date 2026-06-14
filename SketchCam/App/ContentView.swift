@@ -694,6 +694,12 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             SliderRow(title: "Opacity", value: floatBinding(\.web.opacity))
+            SliderRow(title: "Refresh fps", value: floatBinding(\.web.refreshFPS), range: 1...60, precision: 0,
+                      hint: "How often the page is re-snapshotted into the frame (independent of output fps).")
+
+            SectionHeader("Interact")
+            Toggle("Browser window", isOn: $model.settings.web.interactive)
+                .help("Open the page as a real window you can click / scroll / type in. It keeps compositing into the frame; closing the window turns this off.")
         }
         .disabled(!model.settings.web.enabled)
         .onAppear { if webURLField.isEmpty { webURLField = model.settings.web.urlString } }

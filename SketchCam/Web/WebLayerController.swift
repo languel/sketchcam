@@ -7,7 +7,7 @@ import WebKit
 /// snapshots it on a timer into a `CIImage` the frame pipeline composites as a
 /// layer. The web view lives on the main thread; `currentImage()` is read from
 /// the processing queue under a lock.
-final class WebLayerController: NSObject {
+final class WebLayerController: NSObject, NSWindowDelegate {
     private var webView: WKWebView?
     private var window: NSWindow?
     private var timer: Timer?
@@ -21,10 +21,12 @@ final class WebLayerController: NSObject {
     private var loadedTransparent = true
     private var currentSize: CGSize = .zero
     private var opacity: Float = 1
+    private var snapshotFPS: Float = 20
+    private var interactive = false
 
-    /// Snapshot rate — decoupled from the pipeline; the pipeline reuses the
-    /// latest snapshot every frame.
-    private let snapshotFPS = 20.0
+    /// Called (on the main thread) when the user closes the interactive browser
+    /// window, so the owner can flip the `interactive` setting back off.
+    var onInteractiveClosed: (() -> Void)?
 
     // MARK: - Driven from the main thread on settings / output changes.
 
@@ -34,6 +36,7 @@ final class WebLayerController: NSObject {
         guard settings.enabled else {
             enabled = false
             stopTimer()
+            applyInteractive(false)
             lock.lock(); latest = nil; lock.unlock()
             return
         }
@@ -41,15 +44,52 @@ final class WebLayerController: NSObject {
         ensureWebView(size: outputSize)
         if currentSize != outputSize, outputSize.width > 0, outputSize.height > 0 {
             currentSize = outputSize
-            webView?.frame = CGRect(origin: .zero, size: outputSize)
-            window?.setContentSize(outputSize)
+            window?.contentAspectRatio = outputSize
         }
         if settings.urlString != loadedURL || settings.transparentBackground != loadedTransparent {
             loadedURL = settings.urlString
             loadedTransparent = settings.transparentBackground
             reload()
         }
+        if settings.interactive != interactive {
+            applyInteractive(settings.interactive)
+        }
+        if settings.refreshFPS != snapshotFPS {
+            snapshotFPS = settings.refreshFPS
+            restartTimer()
+        }
         startTimer()
+    }
+
+    /// Show the web view as an on-screen interactive window, or hide it
+    /// off-screen (still rendering for snapshots).
+    private func applyInteractive(_ on: Bool) {
+        interactive = on
+        guard let win = window else { return }
+        if on {
+            win.ignoresMouseEvents = false
+            win.alphaValue = 1
+            win.title = "SketchCam Web"
+            // Fit within ~80% of the screen, keeping the output aspect.
+            if let visible = NSScreen.main?.visibleFrame, currentSize.width > 0 {
+                let scale = min(1, min(visible.width * 0.8 / currentSize.width, visible.height * 0.8 / currentSize.height))
+                win.setContentSize(CGSize(width: currentSize.width * scale, height: currentSize.height * scale))
+            }
+            win.center()
+            win.makeKeyAndOrderFront(nil)
+        } else {
+            win.ignoresMouseEvents = true
+            win.alphaValue = 0
+            win.setFrameOrigin(CGPoint(x: -20000, y: -20000))
+            win.orderFrontRegardless()   // off-screen + invisible, still renders
+        }
+    }
+
+    // Closing the interactive window just hides it; tell the owner to untoggle.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        onInteractiveClosed?()
+        applyInteractive(false)
+        return false
     }
 
     /// Latest web snapshot with opacity applied (nil if disabled / not ready).
@@ -69,22 +109,24 @@ final class WebLayerController: NSObject {
         let frame = CGRect(origin: .zero, size: size.width > 0 ? size : CGSize(width: 1920, height: 1080))
         let config = WKWebViewConfiguration()
         let wv = WKWebView(frame: frame, configuration: config)
+        wv.autoresizingMask = [.width, .height]
         // Transparent web-view background (the page CSS is handled separately).
         wv.setValue(false, forKey: "drawsBackground")
         wv.layer?.backgroundColor = NSColor.clear.cgColor
 
-        // An off-screen, invisible window so the web content actually renders.
-        let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -20000, y: -20000), size: frame.size),
-                           styleMask: [.borderless], backing: .buffered, defer: false)
+        // A real window so the web content renders and can be made interactive.
+        let win = NSWindow(contentRect: CGRect(origin: .zero, size: frame.size),
+                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                           backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
-        win.alphaValue = 0
-        win.ignoresMouseEvents = true
+        win.delegate = self
         win.contentView = wv
-        win.orderFrontRegardless()
+        win.contentAspectRatio = frame.size
 
         webView = wv
         window = win
         currentSize = frame.size
+        applyInteractive(false)   // start hidden off-screen but rendering
     }
 
     private func reload() {
@@ -116,9 +158,15 @@ final class WebLayerController: NSObject {
 
     private func startTimer() {
         guard timer == nil else { return }
-        let t = Timer(timeInterval: 1.0 / snapshotFPS, repeats: true) { [weak self] _ in self?.snapshot() }
+        let fps = Double(max(1, min(60, snapshotFPS)))
+        let t = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in self?.snapshot() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    private func restartTimer() {
+        stopTimer()
+        if enabled { startTimer() }
     }
 
     private func stopTimer() {

@@ -234,6 +234,9 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     func start() {
+        webController.onInteractiveClosed = { [weak self] in
+            self?.settings.web.interactive = false
+        }
         if realtimeActivity == nil {
             realtimeActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.userInitiated, .latencyCritical],

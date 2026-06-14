@@ -104,19 +104,28 @@ public struct WebLayerSettings: Equatable, Sendable, Codable {
     public var transparentBackground: Bool
     public var placement: WebLayerPlacement
     public var opacity: Float
+    /// Snapshot/compositing refresh rate (fps), independent of the pipeline.
+    public var refreshFPS: Float
+    /// Bring the web view on-screen as an interactive browser window (you can
+    /// click/scroll/type; the page still composites into the frame).
+    public var interactive: Bool
 
     public init(
         enabled: Bool = false,
         urlString: String = "",
         transparentBackground: Bool = true,
         placement: WebLayerPlacement = .aboveDrawing,
-        opacity: Float = 1
+        opacity: Float = 1,
+        refreshFPS: Float = 20,
+        interactive: Bool = false
     ) {
         self.enabled = enabled
         self.urlString = urlString
         self.transparentBackground = transparentBackground
         self.placement = placement
         self.opacity = opacity
+        self.refreshFPS = refreshFPS
+        self.interactive = interactive
     }
 }
 
