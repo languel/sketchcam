@@ -57,6 +57,7 @@
 		CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */; };
 		D4573A47D80FD6C10D3FA006 /* SketchCamCameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2836CF880DAF3F0A8928640F /* LineWalk.swift */; };
+		D6A9D79D025FABA7FCE16864 /* WrapDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */; };
 		D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */; };
 		D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */; };
 		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
@@ -192,6 +193,7 @@
 		EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugStats.swift; sourceTree = "<group>"; };
 		ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateStore.swift; sourceTree = "<group>"; };
 		F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestFrameStore.swift; sourceTree = "<group>"; };
+		F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WrapDrawing.swift; sourceTree = "<group>"; };
 		FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -267,6 +269,7 @@
 			children = (
 				D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */,
 				CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */,
+				F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */,
 				4087DC25AE092E9D32327B08 /* YarnDrawing.swift */,
 			);
 			path = Drawing;
@@ -669,6 +672,7 @@
 				705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */,
 				6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */,
 				55B7B7BC977F976FD6E95357 /* WindowModeController.swift in Sources */,
+				D6A9D79D025FABA7FCE16864 /* WrapDrawing.swift in Sources */,
 				1734FE250B280600E8BDF382 /* YarnDrawing.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

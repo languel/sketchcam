@@ -343,7 +343,7 @@ public enum LineWalk {
     /// and tangential (bunching) components, faded to zero at the path ends.
     /// `scale` sets the noise frequency (local fine → global coarse). Zero
     /// wildness returns the path unchanged.
-    static func perturb(_ path: [Vertex], along: Float, ortho: Float, scale: Float, seed: Int) -> [Vertex] {
+    public static func perturb(_ path: [Vertex], along: Float, ortho: Float, scale: Float, seed: Int) -> [Vertex] {
         guard along > 0 || ortho > 0, path.count >= 2 else { return path }
         let pts = path.map(\.point)
         let diag = boundingDiagonal(pts)

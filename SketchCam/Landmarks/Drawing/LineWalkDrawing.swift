@@ -11,7 +11,7 @@ import SketchCamCore
 /// `strokes(...)` produces the curve-fit, colored strokes; both the CPU
 /// `CGContext` renderer here and the GPU `MetalLineRenderer` consume them.
 struct LineWalkDrawing: DrawingAlgorithm {
-    let style: DrawingStyle = .lineWalk
+    func isEnabled(_ landmarks: LandmarkSettings) -> Bool { landmarks.lineWalkEnabled }
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
         for stroke in strokes(groups: groups, landmarks: landmarks) {

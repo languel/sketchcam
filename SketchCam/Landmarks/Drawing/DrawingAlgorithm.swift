@@ -13,14 +13,14 @@ struct MappedGroup {
 }
 
 /// A self-contained art algorithm for the Drawing tab. Each algorithm is an
-/// independent module; the compositor renders exactly one (the one whose
-/// `style` matches `LandmarkSettings.drawingStyle`) per frame.
+/// independent module; algorithms toggle independently and the compositor
+/// layers every enabled one (back-to-front) per frame.
 ///
 /// Add a new algorithm by conforming a new type and registering it in
 /// `LandmarkOverlayCompositor.algorithms` — no other code changes required.
 protocol DrawingAlgorithm {
-    /// The settings value that selects this algorithm.
-    var style: DrawingStyle { get }
+    /// Whether this algorithm should draw this frame.
+    func isEnabled(_ landmarks: LandmarkSettings) -> Bool
 
     /// Draws into the (already-cleared, canvas-space) context using every
     /// region's mapped landmarks.

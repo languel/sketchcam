@@ -44,25 +44,6 @@ public enum ProcessingQuality: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Which drawing algorithm the Drawing tab renders. Marks visualizes raw
-/// sensor data; Drawing turns it into art. One algorithm renders at a time
-/// (the enum leaves room for future styles and a later multi-select mix).
-public enum DrawingStyle: String, CaseIterable, Identifiable, Sendable {
-    case off
-    case yarn
-    case lineWalk
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .off: return "Off"
-        case .yarn: return "Yarn"
-        case .lineWalk: return "Line walk"
-        }
-    }
-}
-
 /// How a path's sampled points become a drawn curve. A rich area to grow
 /// alongside future brush-stroke styles.
 public enum CurveFit: String, CaseIterable, Identifiable, Sendable {
@@ -222,8 +203,11 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Raw-data renderers (Marks tab) — any combination can be on.
     public var showDots: Bool
     public var showStick: Bool
-    /// Active art algorithm (Drawing tab) — one at a time.
-    public var drawingStyle: DrawingStyle
+    /// Art algorithms (Drawing tab) — each toggles independently and they
+    /// layer on top of each other (back-to-front in this order).
+    public var yarnEnabled: Bool
+    public var wrapEnabled: Bool
+    public var lineWalkEnabled: Bool
     /// Per-renderer size multipliers on top of each region's style.size.
     public var dotScale: Float
     public var stickScale: Float
@@ -270,19 +254,31 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Seeds the PRNG behind the drawing algorithms; a fixed seed keeps the
     /// generated shape stable while the subject moves.
     public var seed: Int
-    // Yarn parameters.
+    // Yarn parameters (per-region weave).
     public var subsetRatio: Float
     public var yarnWeaveAmount: Float
     public var yarnWidth: Float
-    /// Wrap the person: weave yarn through points sampled INSIDE the person
-    /// region (Person silhouette / Hull / on-the-fly hull) instead of per-region.
-    public var yarnWrap: Bool
     /// Path noise (analogue of LineWalk's wildness): `linear` = perpendicular
     /// zigzag; `circular` = coils/loops; `winding` = loops per segment (>1 =
     /// local tangles).
     public var yarnLinear: Float
     public var yarnCircular: Float
     public var yarnWinding: Float
+    // Wrap parameters (yarn-wire that winds through the body interior). Mirrors
+    // LineWalk's path-variation controls, plus the coil/winding loops.
+    /// Interior anchor count: sparse (bent-wire) → dense (woven mat).
+    public var wrapDensity: Float
+    /// LineWalk-style geometric wildness (the XY pad): along the path tangent
+    /// (bunching) and orthogonal to it (waviness / zigzag).
+    public var wrapWildnessAlong: Float
+    public var wrapWildnessOrtho: Float
+    /// Wildness frequency: local (high-frequency) → global (low-frequency).
+    public var wrapScale: Float
+    /// Coil/loop noise: `circular` = loop amplitude, `winding` = loops/segment.
+    public var wrapCircular: Float
+    public var wrapWinding: Float
+    public var wrapWidth: Float
+    public var wrapCurveFit: CurveFit
     // LineWalk parameters.
     /// Point sampling: minimal (few points) → dense (every point, subdivided).
     public var lineWalkDensity: Float
@@ -330,7 +326,9 @@ public struct LandmarkSettings: Equatable, Sendable {
         sourceMode: LandmarkSourceMode = .camera,
         showDots: Bool = false,
         showStick: Bool = false,
-        drawingStyle: DrawingStyle = .yarn,
+        yarnEnabled: Bool = true,
+        wrapEnabled: Bool = false,
+        lineWalkEnabled: Bool = false,
         dotScale: Float = 1,
         stickScale: Float = 1,
         trackJaw: Bool = true,
@@ -360,10 +358,17 @@ public struct LandmarkSettings: Equatable, Sendable {
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
         yarnWidth: Float = 2.2,
-        yarnWrap: Bool = false,
         yarnLinear: Float = 0,
         yarnCircular: Float = 0,
         yarnWinding: Float = 1,
+        wrapDensity: Float = 0.6,
+        wrapWildnessAlong: Float = 0.15,
+        wrapWildnessOrtho: Float = 0.25,
+        wrapScale: Float = 0.5,
+        wrapCircular: Float = 0,
+        wrapWinding: Float = 1,
+        wrapWidth: Float = 2.2,
+        wrapCurveFit: CurveFit = .hobby,
         lineWalkDensity: Float = 0.5,
         lineWalkContinuity: Float = 1,
         lineWalkWildnessAlong: Float = 0.2,
@@ -396,7 +401,9 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.sourceMode = sourceMode
         self.showDots = showDots
         self.showStick = showStick
-        self.drawingStyle = drawingStyle
+        self.yarnEnabled = yarnEnabled
+        self.wrapEnabled = wrapEnabled
+        self.lineWalkEnabled = lineWalkEnabled
         self.dotScale = dotScale
         self.stickScale = stickScale
         self.trackJaw = trackJaw
@@ -426,10 +433,17 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount
         self.yarnWidth = yarnWidth
-        self.yarnWrap = yarnWrap
         self.yarnLinear = yarnLinear
         self.yarnCircular = yarnCircular
         self.yarnWinding = yarnWinding
+        self.wrapDensity = wrapDensity
+        self.wrapWildnessAlong = wrapWildnessAlong
+        self.wrapWildnessOrtho = wrapWildnessOrtho
+        self.wrapScale = wrapScale
+        self.wrapCircular = wrapCircular
+        self.wrapWinding = wrapWinding
+        self.wrapWidth = wrapWidth
+        self.wrapCurveFit = wrapCurveFit
         self.lineWalkDensity = lineWalkDensity
         self.lineWalkContinuity = lineWalkContinuity
         self.lineWalkWildnessAlong = lineWalkWildnessAlong

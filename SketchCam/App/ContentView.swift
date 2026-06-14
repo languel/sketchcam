@@ -429,99 +429,127 @@ struct ContentView: View {
     // first algorithm; one-line, cubist, and ink-wash styles slot in here.
 
     @ViewBuilder private var drawingTab: some View {
-        Picker("Algorithm", selection: $model.settings.landmarks.drawingStyle) {
-            ForEach(DrawingStyle.allCases) { style in
-                Text(style.title).tag(style)
+        // Each algorithm toggles independently and they layer on top of each
+        // other (back-to-front: Wrap, Yarn, Line walk).
+        SectionHeader("Algorithms")
+        Toggle("Yarn", isOn: $model.settings.landmarks.yarnEnabled)
+            .help("Weave each feature's points into a many-pass tangle.")
+        Toggle("Wrap the body", isOn: $model.settings.landmarks.wrapEnabled)
+            .help("A continuous yarn-wire that winds through the inside of the person (Gormley-style).")
+        Toggle("Line walk", isOn: $model.settings.landmarks.lineWalkEnabled)
+            .help("One continuous line taken for a walk through the landmarks.")
+
+        // Shared across algorithms.
+        SectionHeader("Palette")
+        paletteEditor
+        Toggle("Match landmark colors", isOn: $model.settings.landmarks.drawingMatchesLandmarkColors)
+
+        SectionHeader("Seed")
+        HStack {
+            Stepper(value: $model.settings.landmarks.seed, in: 0...99_999) {
+                Text("Seed \(model.settings.landmarks.seed)")
+                    .monospacedDigit()
             }
+            Button("Shuffle") { model.settings.landmarks.seed = Int.random(in: 0..<100_000) }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
 
-        Group {
-            // Shared across algorithms.
-            SectionHeader("Palette")
-            paletteEditor
-            Toggle("Match landmark colors", isOn: $model.settings.landmarks.drawingMatchesLandmarkColors)
-
-            SectionHeader("Seed")
-            HStack {
-                Stepper(value: $model.settings.landmarks.seed, in: 0...99_999) {
-                    Text("Seed \(model.settings.landmarks.seed)")
-                        .monospacedDigit()
+        if model.settings.landmarks.yarnEnabled {
+            SectionHeader("Yarn")
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio),
+                      hint: "How many points are woven — higher = denser/heavier, lower = sparser.")
+            SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
+            HStack(alignment: .top, spacing: 10) {
+                XYPad(
+                    x: floatBinding(\.landmarks.yarnLinear),
+                    y: floatBinding(\.landmarks.yarnCircular)
+                )
+                .frame(width: 96, height: 96)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("→ linear (zigzag)")
+                    Text("↑ circular (loops)")
+                    Text("drag the dot").foregroundStyle(.tertiary)
                 }
-                Button("Shuffle") { model.settings.landmarks.seed = Int.random(in: 0..<100_000) }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-
-            // Per-algorithm controls.
-            switch model.settings.landmarks.drawingStyle {
-            case .off:
-                EmptyView()
-            case .yarn:
-                SectionHeader("Yarn")
-                SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio),
-                          hint: "How many points are woven — higher = denser/heavier, lower = sparser (fewer lines, more wire-like).")
-                SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
-                SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
-                Toggle("Wrap the person", isOn: $model.settings.landmarks.yarnWrap)
-                    .help("Weave yarn through points sampled INSIDE the person (Person silhouette / Hull / on-the-fly hull) — the figure wrapped in yarn — instead of per feature.")
-
-                SectionHeader("Noise")
-                HStack(alignment: .top, spacing: 10) {
-                    XYPad(
-                        x: floatBinding(\.landmarks.yarnLinear),
-                        y: floatBinding(\.landmarks.yarnCircular)
-                    )
-                    .frame(width: 96, height: 96)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("→ linear (zigzag)")
-                        Text("↑ circular (loops)")
-                        Text("drag the dot")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1,
-                          hint: "Loops per segment for the circular noise — >1 makes local tangles/coils.")
-            case .lineWalk:
-                SectionHeader("Line walk")
-                SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
-                          hint: "One continuous line → separate semantic paths → fragmented segments")
-                SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity),
-                          hint: "Few points (minimal) → dense sampling with subdivided lines")
-                Picker("Curve", selection: $model.settings.landmarks.lineWalkCurveFit) {
-                    ForEach(CurveFit.allCases) { fit in
-                        Text(fit.title).tag(fit)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                SectionHeader("Wildness")
-                HStack(alignment: .top, spacing: 10) {
-                    XYPad(
-                        x: floatBinding(\.landmarks.lineWalkWildnessAlong),
-                        y: floatBinding(\.landmarks.lineWalkWildnessOrtho)
-                    )
-                    .frame(width: 96, height: 96)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("→ along path")
-                        Text("↑ orthogonal")
-                        Text("drag the dot")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                SliderRow(title: "Scale", value: floatBinding(\.landmarks.lineWalkScale),
-                          hint: "Local (fine, per sub-stroke) → global (coarse, whole-line drift)")
-
-                SectionHeader("Stroke")
-                SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8)
-                SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
-                          hint: "Width modulation along the curve (calligraphic swell)")
-            }
+            SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1,
+                      hint: "Loops per segment for the circular noise — >1 makes local tangles/coils.")
         }
-        .disabled(model.settings.landmarks.drawingStyle == .off)
+
+        if model.settings.landmarks.wrapEnabled {
+            SectionHeader("Wrap the body")
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.wrapDensity),
+                      hint: "How densely the wire samples inside the body — higher = woven mat, lower = sparse bent-wire.")
+            Picker("Curve", selection: $model.settings.landmarks.wrapCurveFit) {
+                ForEach(CurveFit.allCases) { fit in
+                    Text(fit.title).tag(fit)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            SectionHeader("Wildness")
+            HStack(alignment: .top, spacing: 10) {
+                XYPad(
+                    x: floatBinding(\.landmarks.wrapWildnessAlong),
+                    y: floatBinding(\.landmarks.wrapWildnessOrtho)
+                )
+                .frame(width: 96, height: 96)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("→ along path")
+                    Text("↑ orthogonal")
+                    Text("drag the dot").foregroundStyle(.tertiary)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            SliderRow(title: "Scale", value: floatBinding(\.landmarks.wrapScale),
+                      hint: "Local (fine) → global (coarse, whole-wire drift)")
+
+            SectionHeader("Loops")
+            SliderRow(title: "Loop", value: floatBinding(\.landmarks.wrapCircular),
+                      hint: "Coil/loop amplitude along the wire.")
+            SliderRow(title: "Winding", value: floatBinding(\.landmarks.wrapWinding), range: 1...6, precision: 1,
+                      hint: "Loops per segment — >1 makes tangles.")
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.wrapWidth), range: 0.7...8)
+        }
+
+        if model.settings.landmarks.lineWalkEnabled {
+            SectionHeader("Line walk")
+            SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
+                      hint: "One continuous line → separate semantic paths → fragmented segments")
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity),
+                      hint: "Few points (minimal) → dense sampling with subdivided lines")
+            Picker("Curve", selection: $model.settings.landmarks.lineWalkCurveFit) {
+                ForEach(CurveFit.allCases) { fit in
+                    Text(fit.title).tag(fit)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            SectionHeader("Wildness")
+            HStack(alignment: .top, spacing: 10) {
+                XYPad(
+                    x: floatBinding(\.landmarks.lineWalkWildnessAlong),
+                    y: floatBinding(\.landmarks.lineWalkWildnessOrtho)
+                )
+                .frame(width: 96, height: 96)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("→ along path")
+                    Text("↑ orthogonal")
+                    Text("drag the dot").foregroundStyle(.tertiary)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            SliderRow(title: "Scale", value: floatBinding(\.landmarks.lineWalkScale),
+                      hint: "Local (fine, per sub-stroke) → global (coarse, whole-line drift)")
+
+            SectionHeader("Stroke")
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
+                      hint: "Width modulation along the curve (calligraphic swell)")
+        }
 
         if !model.settings.landmarks.enabled {
             Text("Landmark overlay is off — enable it in Marks to draw.")

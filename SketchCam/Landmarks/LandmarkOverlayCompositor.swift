@@ -49,10 +49,10 @@ final class LandmarkOverlayCompositor {
     private var contextSizes: [CGSize] = [.zero, .zero]
     private var contextIndex = 0
 
-    /// Independent drawing modules. Exactly one renders per frame — the one
-    /// whose `style` matches `landmarks.drawingStyle`. Register new algorithms
-    /// here (and add a case to `DrawingStyle`); nothing else needs to change.
-    private let algorithms: [DrawingAlgorithm] = [YarnDrawing(), LineWalkDrawing()]
+    /// Independent drawing modules. Every enabled one renders per frame, layered
+    /// back-to-front in this order. Register new algorithms here; nothing else
+    /// needs to change.
+    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing()]
 
     // GPU drawing path (opt-in via settings.landmarks.useMetalDrawing). Created
     // lazily on the render queue; double-buffered output so the hot path can
@@ -120,9 +120,12 @@ final class LandmarkOverlayCompositor {
         )
 
         // GPU drawing path: render LineWalk strokes via Metal instead of the
-        // CPU CGContext. (Marks renderers — dots/stick/labels — stay on the CPU
-        // path and are skipped here; this is for A/B'ing the drawing cost.)
-        if settings.landmarks.useMetalDrawing, settings.landmarks.drawingStyle == .lineWalk, let metal = metalRenderer {
+        // CPU CGContext. Only when LineWalk is the *only* enabled algorithm
+        // (Metal renders its own buffer, bypassing the CPU layer that the other
+        // algorithms + Marks renderers draw into).
+        let l = settings.landmarks
+        if l.useMetalDrawing, l.lineWalkEnabled, !l.yarnEnabled, !l.wrapEnabled,
+           !l.showDots, !l.showStick, !l.showIDs, let metal = metalRenderer {
             return renderMetalLineWalk(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
         }
 
@@ -172,9 +175,10 @@ final class LandmarkOverlayCompositor {
             }
         }
 
-        // Exactly one art algorithm renders, selected by drawingStyle.
-        algorithms.first { $0.style == landmarks.drawingStyle }?
-            .render(groups: mappedGroups, landmarks: landmarks, into: cgContext)
+        // Every enabled art algorithm renders, layered in registration order.
+        for algorithm in algorithms where algorithm.isEnabled(landmarks) {
+            algorithm.render(groups: mappedGroups, landmarks: landmarks, into: cgContext)
+        }
 
         guard let cgImage = cgContext.makeImage() else { return nil }
         let upscale = 1 / scaleDown
