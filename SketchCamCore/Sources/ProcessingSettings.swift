@@ -274,6 +274,15 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var subsetRatio: Float
     public var yarnWeaveAmount: Float
     public var yarnWidth: Float
+    /// Wrap the person: weave yarn through points sampled INSIDE the person
+    /// region (Person silhouette / Hull / on-the-fly hull) instead of per-region.
+    public var yarnWrap: Bool
+    /// Path noise (analogue of LineWalk's wildness): `linear` = perpendicular
+    /// zigzag; `circular` = coils/loops; `winding` = loops per segment (>1 =
+    /// local tangles).
+    public var yarnLinear: Float
+    public var yarnCircular: Float
+    public var yarnWinding: Float
     // LineWalk parameters.
     /// Point sampling: minimal (few points) → dense (every point, subdivided).
     public var lineWalkDensity: Float
@@ -351,6 +360,10 @@ public struct LandmarkSettings: Equatable, Sendable {
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
         yarnWidth: Float = 2.2,
+        yarnWrap: Bool = false,
+        yarnLinear: Float = 0,
+        yarnCircular: Float = 0,
+        yarnWinding: Float = 1,
         lineWalkDensity: Float = 0.5,
         lineWalkContinuity: Float = 1,
         lineWalkWildnessAlong: Float = 0.2,
@@ -413,6 +426,10 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount
         self.yarnWidth = yarnWidth
+        self.yarnWrap = yarnWrap
+        self.yarnLinear = yarnLinear
+        self.yarnCircular = yarnCircular
+        self.yarnWinding = yarnWinding
         self.lineWalkDensity = lineWalkDensity
         self.lineWalkContinuity = lineWalkContinuity
         self.lineWalkWildnessAlong = lineWalkWildnessAlong

@@ -461,6 +461,27 @@ struct ContentView: View {
                 SliderRow(title: "Detail", value: floatBinding(\.landmarks.subsetRatio))
                 SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
                 SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
+                Toggle("Wrap the person", isOn: $model.settings.landmarks.yarnWrap)
+                    .help("Weave yarn through points sampled INSIDE the person (Person silhouette / Hull / on-the-fly hull) — the figure wrapped in yarn — instead of per feature.")
+
+                SectionHeader("Noise")
+                HStack(alignment: .top, spacing: 10) {
+                    XYPad(
+                        x: floatBinding(\.landmarks.yarnLinear),
+                        y: floatBinding(\.landmarks.yarnCircular)
+                    )
+                    .frame(width: 96, height: 96)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("→ linear (zigzag)")
+                        Text("↑ circular (loops)")
+                        Text("drag the dot")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1,
+                          hint: "Loops per segment for the circular noise — >1 makes local tangles/coils.")
             case .lineWalk:
                 SectionHeader("Line walk")
                 SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
