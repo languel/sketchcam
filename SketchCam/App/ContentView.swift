@@ -11,6 +11,7 @@ struct ContentView: View {
         case yarn = "Yarn"
         case wrap = "Wrap"
         case lineWalk = "Line walk"
+        case presets = "Presets"
         case keys = "Keys"
         case debug = "Debug"
 
@@ -25,6 +26,7 @@ struct ContentView: View {
             case .yarn: "scribble.variable"
             case .wrap: "figure.stand"
             case .lineWalk: "lasso"
+            case .presets: "bookmark"
             case .keys: "keyboard"
             case .debug: "ladybug"
             }
@@ -33,6 +35,8 @@ struct ContentView: View {
 
     @StateObject private var model = SketchCamViewModel()
     @StateObject private var windowMode = WindowModeController()
+    @StateObject private var presetStore = PresetStore()
+    @State private var newPresetName = ""
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
@@ -124,6 +128,7 @@ struct ContentView: View {
                     case .yarn: yarnTab
                     case .wrap: wrapTab
                     case .lineWalk: lineWalkTab
+                    case .presets: presetsTab
                     case .keys: keysTab
                     case .debug: debugTab
                     }
@@ -646,6 +651,64 @@ struct ContentView: View {
                 )
             }
         )
+    }
+
+    // MARK: - Presets tab
+    //
+    // A preset captures the whole LandmarkSettings — Marks toggles, all three
+    // drawing algorithms (each with its own palette/seed/params), and the
+    // detection config — so the user can store and recall complete looks.
+
+    @ViewBuilder private var presetsTab: some View {
+        SectionHeader("Save current")
+        HStack {
+            TextField("Preset name", text: $newPresetName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { saveCurrentPreset() }
+            Button("Save") { saveCurrentPreset() }
+        }
+
+        SectionHeader("Presets")
+        if presetStore.presets.isEmpty {
+            Text("No presets yet — save the current drawing + detection config above.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(presetStore.presets) { preset in
+                HStack {
+                    Button {
+                        model.settings.landmarks = preset.landmarks
+                    } label: {
+                        Label(preset.name, systemImage: "arrow.down.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    Button {
+                        newPresetName = preset.name
+                        presetStore.save(name: preset.name, landmarks: model.settings.landmarks)
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Overwrite this preset with the current settings.")
+                    Button {
+                        presetStore.delete(preset)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
+
+        Text("Captures Marks, all Drawing algorithms, and Detection settings. Saved across launches.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func saveCurrentPreset() {
+        presetStore.save(name: newPresetName, landmarks: model.settings.landmarks)
+        newPresetName = ""
     }
 
     // MARK: - Debug tab

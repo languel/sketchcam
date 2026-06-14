@@ -46,7 +46,7 @@ public enum ProcessingQuality: String, CaseIterable, Identifiable, Sendable {
 
 /// How a path's sampled points become a drawn curve. A rich area to grow
 /// alongside future brush-stroke styles.
-public enum CurveFit: String, CaseIterable, Identifiable, Sendable {
+public enum CurveFit: String, CaseIterable, Identifiable, Sendable, Codable {
     case polyline
     case catmull
     case hobby
@@ -67,7 +67,7 @@ public enum CurveFit: String, CaseIterable, Identifiable, Sendable {
 /// Shared, user-editable color set for the Drawing algorithms. Starts as a
 /// single solid color; algorithms cycle through the colors (e.g. per feature)
 /// when more are added.
-public struct DrawingPalette: Equatable, Sendable {
+public struct DrawingPalette: Equatable, Sendable, Codable {
     public var colors: [RGBAColor]
 
     public init(colors: [RGBAColor]) {
@@ -167,7 +167,7 @@ public struct ProcessingSettings: Equatable, Sendable {
     }
 }
 
-public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable {
+public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable, Codable {
     case camera
     case synthetic
 
@@ -184,7 +184,7 @@ public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable {
 /// Generic visual style for a significant element: one color (with opacity)
 /// and one size whose meaning is contextual — stroke width for lines/yarn,
 /// dot scale for points. One UI control (StyleRow) edits any of these.
-public struct ElementStyle: Equatable, Sendable {
+public struct ElementStyle: Equatable, Sendable, Codable {
     public var color: RGBAColor
     public var size: Float
 
@@ -197,7 +197,7 @@ public struct ElementStyle: Equatable, Sendable {
 /// Landmark overlay settings. Detection runs off the frame hot path at
 /// `detectionsPerSecond`; the overlay layer is re-rendered only when a
 /// detection lands and is GPU-composited into every published frame.
-public struct LandmarkSettings: Equatable, Sendable {
+public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var enabled: Bool
     public var sourceMode: LandmarkSourceMode
     /// Raw-data renderers (Marks tab) — any combination can be on.
@@ -512,7 +512,7 @@ public struct LandmarkSettings: Equatable, Sendable {
 }
 
 /// Plain-value color (no AppKit dependency in Core).
-public struct RGBAColor: Equatable, Sendable {
+public struct RGBAColor: Equatable, Sendable, Codable {
     public var red: Float
     public var green: Float
     public var blue: Float

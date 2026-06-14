@@ -67,6 +67,7 @@
 		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
 		EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */; };
 		F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEAB9229D624BE20FB261892 /* Assets.xcassets */; };
+		FD3836D973381874AC5BC066 /* PresetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291424DBAD8774D373DAC93E /* PresetStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -149,6 +150,7 @@
 		250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferUtils.swift; sourceTree = "<group>"; };
 		2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyHullTests.swift; sourceTree = "<group>"; };
 		2836CF880DAF3F0A8928640F /* LineWalk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalk.swift; sourceTree = "<group>"; };
+		291424DBAD8774D373DAC93E /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
 		33A62B38FB62959937129F6F /* ProcessingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingSettings.swift; sourceTree = "<group>"; };
 		34C077C1A613941A722E856D /* FrameFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormat.swift; sourceTree = "<group>"; };
 		4087DC25AE092E9D32327B08 /* YarnDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YarnDrawing.swift; sourceTree = "<group>"; };
@@ -289,6 +291,7 @@
 			children = (
 				96EBEE96DC987956AD1E458A /* ContentView.swift */,
 				ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */,
+				291424DBAD8774D373DAC93E /* PresetStore.swift */,
 				A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */,
 				1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */,
 				168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */,
@@ -662,6 +665,7 @@
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
+				FD3836D973381874AC5BC066 /* PresetStore.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
 				88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */,
 				B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */,
