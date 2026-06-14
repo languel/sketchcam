@@ -15,8 +15,17 @@ struct YarnDrawing: DrawingAlgorithm {
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
         if landmarks.yarnWrap {
-            if let wrapPoints = wrapSamplePoints(groups: groups, landmarks: landmarks) {
-                drawYarn(wrapPoints, region: .bodyHull, in: context, landmarks: landmarks)
+            if let wrap = wrapData(groups: groups, landmarks: landmarks) {
+                // Clip the weave to the silhouette so the coils/loops stay
+                // INSIDE the figure (Gormley-style) instead of escaping it.
+                context.saveGState()
+                let clip = CGMutablePath()
+                clip.addLines(between: wrap.boundary)
+                clip.closeSubpath()
+                context.addPath(clip)
+                context.clip()
+                drawYarn(wrap.points, region: .bodyHull, in: context, landmarks: landmarks)
+                context.restoreGState()
             }
             return
         }
@@ -70,10 +79,11 @@ struct YarnDrawing: DrawingAlgorithm {
 
     // MARK: - Wrap (yarn inside the person)
 
-    /// Boundary loop + seeded interior samples of the person region, so the yarn
-    /// fills/wraps the figure. Prefers the Person silhouette, then the Hull,
-    /// then an on-the-fly hull of all landmarks (so wrap works regardless).
-    private func wrapSamplePoints(groups: [MappedGroup], landmarks: LandmarkSettings) -> [CGPoint]? {
+    /// Seeded interior samples (+ boundary loop) of the person region for the
+    /// weave, plus the boundary polygon used to CLIP the result inside the
+    /// figure. Prefers the Person silhouette (body-shaped), then the Hull, then
+    /// an on-the-fly hull of all landmarks (so wrap works regardless).
+    private func wrapData(groups: [MappedGroup], landmarks: LandmarkSettings) -> (points: [CGPoint], boundary: [CGPoint])? {
         let boundary: [CGPoint]
         if let contour = groups.first(where: { $0.region == .contour }), contour.points.count >= 3 {
             boundary = contour.points
@@ -85,7 +95,7 @@ struct YarnDrawing: DrawingAlgorithm {
         guard boundary.count >= 3 else { return nil }
         let count = max(8, Int(8 + landmarks.subsetRatio * 200))
         let interior = interiorSamples(boundary: boundary, count: count, seed: landmarks.seed)
-        return interior + boundary
+        return (interior + boundary, boundary)
     }
 
     private func interiorSamples(boundary: [CGPoint], count: Int, seed: Int) -> [CGPoint] {
