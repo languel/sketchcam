@@ -93,9 +93,15 @@ struct YarnDrawing: DrawingAlgorithm {
             boundary = BodyHull.convexHull(groups.flatMap { $0.points })
         }
         guard boundary.count >= 3 else { return nil }
-        let count = max(8, Int(8 + landmarks.subsetRatio * 200))
+        // Sparse by default — fewer interior anchors read like bent wire, not a
+        // dense mat, and keep the weave cheap. Detail scales it up.
+        let count = max(5, Int(5 + landmarks.subsetRatio * 45))
         let interior = interiorSamples(boundary: boundary, count: count, seed: landmarks.seed)
-        return (interior + boundary, boundary)
+        // Don't weave the whole silhouette rim (it can be 240 pts) — subsample
+        // a handful so the loops reach the body edges without exploding cost.
+        let step = max(1, boundary.count / 12)
+        let rim = stride(from: 0, to: boundary.count, by: step).map { boundary[$0] }
+        return (interior + rim, boundary)
     }
 
     private func interiorSamples(boundary: [CGPoint], count: Int, seed: Int) -> [CGPoint] {
@@ -155,7 +161,8 @@ enum LandmarkYarnWeaver {
         guard points.count >= 2, lin > 0.001 || circ > 0.001 else { return points }
         let wind = CGFloat(max(1, winding))
         let phase = CGFloat(seed % 360) * (.pi / 180)
-        let samplesPerSegment = max(3, Int((wind * 7).rounded()))
+        // Cap sub-samples so high winding can't explode the geometry.
+        let samplesPerSegment = min(20, max(3, Int((wind * 6).rounded())))
         var dense: [CGPoint] = []
         dense.reserveCapacity(points.count * samplesPerSegment)
         let n = points.count

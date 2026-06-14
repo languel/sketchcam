@@ -458,7 +458,8 @@ struct ContentView: View {
                 EmptyView()
             case .yarn:
                 SectionHeader("Yarn")
-                SliderRow(title: "Detail", value: floatBinding(\.landmarks.subsetRatio))
+                SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio),
+                          hint: "How many points are woven — higher = denser/heavier, lower = sparser (fewer lines, more wire-like).")
                 SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
                 SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
                 Toggle("Wrap the person", isOn: $model.settings.landmarks.yarnWrap)
