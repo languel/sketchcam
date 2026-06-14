@@ -222,26 +222,40 @@ enum DrawingSupport {
         }
     }
 
-    /// The yarn 4-pass halo (dark halo / soft fill / core / white highlight)
-    /// expressed as GPU strokes — the tessellatable analogue of
-    /// `YarnDrawing.strokePasses`. `points` is the already curve-sampled path.
-    static func yarnPassStrokes(_ points: [CGPoint], color: RGBAColor, baseWidth: CGFloat, seed: Int) -> [StrokeTessellator.Stroke] {
+    /// A variable-width **ribbon** (calligraphic taper/swell, like LineWalk) as
+    /// GPU strokes, with an optional glow **halo** (wide dark underlay + soft
+    /// color + white highlight). Shared by every algorithm's GPU path.
+    static func ribbonStrokes(_ points: [CGPoint], color: RGBAColor, baseWidth: CGFloat, widthVariation: Float, halo: Bool, seed: Int) -> [StrokeTessellator.Stroke] {
         guard points.count >= 2 else { return [] }
+        let w = Float(baseWidth)
         let opacity = Float(min(1, max(0, color.alpha)))
-        let widths: [Float] = [7.5, 4.2, 1.0, 2.0]
-        let alphas: [Float] = [0.18, 0.22, 0.84, 0.46]
-        let mults: [Float] = [0.45, 0.38, 1.0, 0.48]
-        let rgb: [RGBAColor] = [.black, color, color, .white]
-        return (0..<4).map { pass in
-            var c = rgb[pass]
-            c.alpha = alphas[pass] * opacity * mults[pass]
-            return StrokeTessellator.Stroke(
-                points: points,
-                color: c,
-                baseWidth: Float(baseWidth) * widths[pass],
-                widthVariation: 0,
-                seed: seed
-            )
+        var out: [StrokeTessellator.Stroke] = []
+        if halo {
+            var dark = RGBAColor.black; dark.alpha = 0.16 * opacity
+            out.append(.init(points: points, color: dark, baseWidth: w * 4.5, widthVariation: widthVariation, seed: seed))
+            var soft = color; soft.alpha = 0.28 * opacity
+            out.append(.init(points: points, color: soft, baseWidth: w * 2.3, widthVariation: widthVariation, seed: seed))
+        }
+        out.append(.init(points: points, color: color, baseWidth: w, widthVariation: widthVariation, seed: seed))
+        if halo {
+            var hi = RGBAColor.white; hi.alpha = 0.5 * opacity
+            out.append(.init(points: points, color: hi, baseWidth: w * 0.4, widthVariation: widthVariation, seed: seed))
+        }
+        return out
+    }
+
+    /// CPU analogue of `ribbonStrokes` — strokes the same variable-width ribbon
+    /// (+ optional halo) into a CGContext.
+    static func drawRibbon(_ points: [CGPoint], color: RGBAColor, baseWidth: CGFloat, widthVariation: Float, halo: Bool, seed: Int, into context: CGContext) {
+        guard points.count >= 2 else { return }
+        let opacity = min(1, max(0, CGFloat(color.alpha)))
+        if halo {
+            strokeVariableWidth(points, baseWidth: baseWidth * 4.5, variation: widthVariation, color: NSColor.black.withAlphaComponent(0.16 * opacity), seed: seed, into: context)
+            strokeVariableWidth(points, baseWidth: baseWidth * 2.3, variation: widthVariation, color: nsColor(color, alpha: 0.28 * opacity), seed: seed, into: context)
+        }
+        strokeVariableWidth(points, baseWidth: baseWidth, variation: widthVariation, color: nsColor(color), seed: seed, into: context)
+        if halo {
+            strokeVariableWidth(points, baseWidth: baseWidth * 0.4, variation: widthVariation, color: NSColor.white.withAlphaComponent(0.5 * opacity), seed: seed, into: context)
         }
     }
 }

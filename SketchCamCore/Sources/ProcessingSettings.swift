@@ -267,6 +267,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var yarnLinear: Float
     public var yarnCircular: Float
     public var yarnWinding: Float
+    /// Ribbon width variation (calligraphic taper/swell) + optional glow halo.
+    public var yarnWidthVariation: Float
+    public var yarnHalo: Bool
     // Wrap parameters (yarn-wire that winds through the body interior). Mirrors
     // LineWalk's path-variation controls, plus the coil/winding loops.
     /// Interior anchor count: sparse (bent-wire) → dense (woven mat).
@@ -282,6 +285,9 @@ public struct LandmarkSettings: Equatable, Sendable {
     public var wrapWinding: Float
     public var wrapWidth: Float
     public var wrapCurveFit: CurveFit
+    /// Ribbon width variation + optional glow halo.
+    public var wrapWidthVariation: Float
+    public var wrapHalo: Bool
     // LineWalk parameters.
     /// Point sampling: minimal (few points) → dense (every point, subdivided).
     public var lineWalkDensity: Float
@@ -299,6 +305,8 @@ public struct LandmarkSettings: Equatable, Sendable {
     /// Width variation along the curve (calligraphic taper / swell amount).
     public var lineWalkWidthVariation: Float
     public var lineWalkCurveFit: CurveFit
+    /// Optional glow halo behind the ribbon.
+    public var lineWalkHalo: Bool
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -370,6 +378,8 @@ public struct LandmarkSettings: Equatable, Sendable {
         yarnLinear: Float = 0,
         yarnCircular: Float = 0,
         yarnWinding: Float = 1,
+        yarnWidthVariation: Float = 0.35,
+        yarnHalo: Bool = false,
         wrapDensity: Float = 0.6,
         wrapWildnessAlong: Float = 0.15,
         wrapWildnessOrtho: Float = 0.25,
@@ -378,6 +388,8 @@ public struct LandmarkSettings: Equatable, Sendable {
         wrapWinding: Float = 1,
         wrapWidth: Float = 2.2,
         wrapCurveFit: CurveFit = .hobby,
+        wrapWidthVariation: Float = 0.35,
+        wrapHalo: Bool = false,
         lineWalkDensity: Float = 0.5,
         lineWalkContinuity: Float = 1,
         lineWalkWildnessAlong: Float = 0.2,
@@ -386,6 +398,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         lineWalkWidth: Float = 2,
         lineWalkWidthVariation: Float = 0.3,
         lineWalkCurveFit: CurveFit = .hobby,
+        lineWalkHalo: Bool = false,
         useMetalDrawing: Bool = false,
         yarnPalette: DrawingPalette = .default,
         yarnMatchesLandmarkColors: Bool = false,
@@ -451,6 +464,8 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.yarnLinear = yarnLinear
         self.yarnCircular = yarnCircular
         self.yarnWinding = yarnWinding
+        self.yarnWidthVariation = yarnWidthVariation
+        self.yarnHalo = yarnHalo
         self.wrapDensity = wrapDensity
         self.wrapWildnessAlong = wrapWildnessAlong
         self.wrapWildnessOrtho = wrapWildnessOrtho
@@ -459,6 +474,8 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.wrapWinding = wrapWinding
         self.wrapWidth = wrapWidth
         self.wrapCurveFit = wrapCurveFit
+        self.wrapWidthVariation = wrapWidthVariation
+        self.wrapHalo = wrapHalo
         self.lineWalkDensity = lineWalkDensity
         self.lineWalkContinuity = lineWalkContinuity
         self.lineWalkWildnessAlong = lineWalkWildnessAlong
@@ -467,6 +484,7 @@ public struct LandmarkSettings: Equatable, Sendable {
         self.lineWalkWidth = lineWalkWidth
         self.lineWalkWidthVariation = lineWalkWidthVariation
         self.lineWalkCurveFit = lineWalkCurveFit
+        self.lineWalkHalo = lineWalkHalo
         self.useMetalDrawing = useMetalDrawing
         self.yarnPalette = yarnPalette
         self.yarnMatchesLandmarkColors = yarnMatchesLandmarkColors

@@ -454,6 +454,10 @@ struct ContentView: View {
                       hint: "How many points are woven — higher = denser/heavier, lower = sparser.")
             SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
             SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.yarnWidthVariation),
+                      hint: "Ribbon taper/swell along the stroke (0 = constant width).")
+            Toggle("Halo (glow)", isOn: $model.settings.landmarks.yarnHalo)
+                .help("Add a wide dark underlay + white highlight around the ribbon.")
             HStack(alignment: .top, spacing: 10) {
                 XYPad(x: floatBinding(\.landmarks.yarnLinear), y: floatBinding(\.landmarks.yarnCircular))
                     .frame(width: 96, height: 96)
@@ -511,6 +515,10 @@ struct ContentView: View {
             SliderRow(title: "Winding", value: floatBinding(\.landmarks.wrapWinding), range: 1...6, precision: 1,
                       hint: "Loops per segment — >1 makes tangles.")
             SliderRow(title: "Width", value: floatBinding(\.landmarks.wrapWidth), range: 0.7...8)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.wrapWidthVariation),
+                      hint: "Ribbon taper/swell along the wire (0 = constant width).")
+            Toggle("Halo (glow)", isOn: $model.settings.landmarks.wrapHalo)
+                .help("Add a wide dark underlay + white highlight around the ribbon.")
         }
         .disabled(!model.settings.landmarks.wrapEnabled)
     }
@@ -555,6 +563,8 @@ struct ContentView: View {
             SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8)
             SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
                       hint: "Width modulation along the curve (calligraphic swell)")
+            Toggle("Halo (glow)", isOn: $model.settings.landmarks.lineWalkHalo)
+                .help("Add a wide dark underlay + white highlight around the ribbon.")
         }
         .disabled(!model.settings.landmarks.lineWalkEnabled)
     }

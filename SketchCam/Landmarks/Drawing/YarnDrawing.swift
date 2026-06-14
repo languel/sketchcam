@@ -11,67 +11,38 @@ struct YarnDrawing: DrawingAlgorithm {
     func isEnabled(_ landmarks: LandmarkSettings) -> Bool { landmarks.yarnEnabled }
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
-        for group in groups {
-            let selected = LandmarkYarnWeaver.seededSubset(
-                group.points,
-                seed: landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region),
-                ratio: landmarks.subsetRatio
-            )
-            guard selected.count > 2 else { continue }
-            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, matchColors: landmarks.yarnMatchesLandmarkColors, palette: landmarks.yarnPalette, width: landmarks.yarnWidth)
-            let seed = landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region)
-            let ordered = LandmarkYarnWeaver.wovenOrder(selected, seed: seed)
-            let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
-            YarnDrawing.strokePasses(coiled, closed: true, stroke: stroke, weave: CGFloat(landmarks.yarnWeaveAmount), in: context)
+        for r in ribbons(groups: groups, landmarks: landmarks) {
+            DrawingSupport.drawRibbon(r.curve, color: r.color, baseWidth: r.width, widthVariation: landmarks.yarnWidthVariation, halo: landmarks.yarnHalo, seed: r.seed, into: context)
         }
     }
 
     func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
         var out: [StrokeTessellator.Stroke] = []
-        for group in groups {
-            let selected = LandmarkYarnWeaver.seededSubset(
-                group.points,
-                seed: landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region),
-                ratio: landmarks.subsetRatio
-            )
-            guard selected.count > 2 else { continue }
-            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, matchColors: landmarks.yarnMatchesLandmarkColors, palette: landmarks.yarnPalette, width: landmarks.yarnWidth)
-            let seed = landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region)
-            let ordered = LandmarkYarnWeaver.wovenOrder(selected, seed: seed)
-            let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
-            // Closed loop → repeat first point so the GPU polyline closes.
-            // Light densification: the Metal round joins/caps smooth the rest,
-            // and tessellation cost is CPU-side so fewer vertices = cheaper.
-            let curve = DrawingSupport.curvePoints(coiled + [coiled.first].compactMap { $0 }, fit: .hobby, samplesPerSegment: 3)
-            out += DrawingSupport.yarnPassStrokes(curve, color: stroke.color, baseWidth: stroke.width, seed: seed)
+        for r in ribbons(groups: groups, landmarks: landmarks) {
+            out += DrawingSupport.ribbonStrokes(r.curve, color: r.color, baseWidth: r.width, widthVariation: landmarks.yarnWidthVariation, halo: landmarks.yarnHalo, seed: r.seed)
         }
         return out
     }
 
-    /// The yarn look: four overlapping strokes (dark halo, soft fill, core,
-    /// white highlight). Shared by the per-region and wrap renderers.
-    static func strokePasses(_ points: [CGPoint], closed: Bool, stroke: (color: RGBAColor, width: CGFloat), weave: CGFloat, in context: CGContext) {
-        guard points.count >= 2 else { return }
-        let width = stroke.width
-        let opacity = CGFloat(min(1, max(0, stroke.color.alpha)))
-        for pass in 0..<4 {
-            let path = DrawingSupport.hobbyPath(points: points, weave: weave, pass: pass, closed: closed)
-            let alpha = CGFloat([0.18, 0.22, 0.84, 0.46][pass]) * opacity
-            let passWidth = width * CGFloat([7.5, 4.2, 1.0, 2.0][pass])
-            let color: NSColor
-            switch pass {
-            case 0: color = NSColor.black.withAlphaComponent(alpha * 0.45)
-            case 1: color = DrawingSupport.nsColor(stroke.color, alpha: alpha * 0.38)
-            case 2: color = DrawingSupport.nsColor(stroke.color, alpha: alpha)
-            default: color = NSColor.white.withAlphaComponent(alpha * 0.48)
+    /// One woven ribbon per region, as a curve-sampled closed loop. Shared by
+    /// the CPU and GPU renderers. Weave = orthogonal waviness of the loop.
+    private func ribbons(groups: [MappedGroup], landmarks: LandmarkSettings) -> [(curve: [CGPoint], color: RGBAColor, width: CGFloat, seed: Int)] {
+        var out: [(curve: [CGPoint], color: RGBAColor, width: CGFloat, seed: Int)] = []
+        for group in groups {
+            let seed = landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region)
+            let selected = LandmarkYarnWeaver.seededSubset(group.points, seed: seed, ratio: landmarks.subsetRatio)
+            guard selected.count > 2 else { continue }
+            var ordered = LandmarkYarnWeaver.wovenOrder(selected, seed: seed)
+            if landmarks.yarnWeaveAmount > 0.001 {
+                ordered = LineWalk.perturb(ordered.map { LineWalk.Vertex(point: $0, featureIndex: 0, tag: 0) },
+                                           along: 0, ortho: landmarks.yarnWeaveAmount, scale: 0.5, seed: seed).map(\.point)
             }
-            context.addPath(path)
-            context.setStrokeColor(color.cgColor)
-            context.setLineWidth(passWidth)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.strokePath()
+            let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
+            let curve = DrawingSupport.curvePoints(coiled + [coiled.first].compactMap { $0 }, fit: .hobby, samplesPerSegment: 4)
+            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, matchColors: landmarks.yarnMatchesLandmarkColors, palette: landmarks.yarnPalette, width: landmarks.yarnWidth)
+            out.append((curve, stroke.color, stroke.width, seed))
         }
+        return out
     }
 }
 

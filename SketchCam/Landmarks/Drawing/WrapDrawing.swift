@@ -16,14 +16,15 @@ struct WrapDrawing: DrawingAlgorithm {
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
         guard let wire = wireCurve(groups: groups, landmarks: landmarks) else { return }
         let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
-        YarnDrawing.strokePasses(wire, closed: false, stroke: stroke, weave: 0, in: context)
+        let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
+        DrawingSupport.drawRibbon(wire, color: stroke.color, baseWidth: stroke.width, widthVariation: landmarks.wrapWidthVariation, halo: landmarks.wrapHalo, seed: seed, into: context)
     }
 
     func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
         guard let wire = wireCurve(groups: groups, landmarks: landmarks) else { return [] }
         let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
         let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
-        return DrawingSupport.yarnPassStrokes(wire, color: stroke.color, baseWidth: stroke.width, seed: seed)
+        return DrawingSupport.ribbonStrokes(wire, color: stroke.color, baseWidth: stroke.width, widthVariation: landmarks.wrapWidthVariation, halo: landmarks.wrapHalo, seed: seed)
     }
 
     /// The wrap wire as a single curve-sampled polyline (shared by the CPU and

@@ -64,14 +64,13 @@ struct LineWalkDrawing: DrawingAlgorithm {
             guard let first = path.first else { continue }
             let color = pathColor(index: pathIndex, tag: first.tag, palette: palette, landmarks: landmarks)
             let pts = path.map(\.point)
-            let dense = pts.count <= 2 ? pts : DrawingSupport.curvePoints(pts, fit: landmarks.lineWalkCurveFit)
-            result.append(StrokeTessellator.Stroke(
-                points: dense,
-                color: color,
-                baseWidth: width,
-                widthVariation: landmarks.lineWalkWidthVariation,
-                seed: landmarks.lineWalkSeed &+ pathIndex &* 131
-            ))
+            let seed = landmarks.lineWalkSeed &+ pathIndex &* 131
+            if pts.count <= 2 {
+                result.append(StrokeTessellator.Stroke(points: pts, color: color, baseWidth: width, widthVariation: landmarks.lineWalkWidthVariation, seed: seed))
+            } else {
+                let dense = DrawingSupport.curvePoints(pts, fit: landmarks.lineWalkCurveFit)
+                result += DrawingSupport.ribbonStrokes(dense, color: color, baseWidth: CGFloat(width), widthVariation: landmarks.lineWalkWidthVariation, halo: landmarks.lineWalkHalo, seed: seed)
+            }
         }
         return result
     }
