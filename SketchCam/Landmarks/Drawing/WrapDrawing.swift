@@ -14,12 +14,28 @@ struct WrapDrawing: DrawingAlgorithm {
     func isEnabled(_ landmarks: LandmarkSettings) -> Bool { landmarks.wrapEnabled }
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
-        guard let boundary = personBoundary(groups), boundary.count >= 3 else { return }
+        guard let wire = wireCurve(groups: groups, landmarks: landmarks) else { return }
+        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
+        YarnDrawing.strokePasses(wire, closed: false, stroke: stroke, weave: 0, in: context)
+    }
+
+    func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
+        guard let wire = wireCurve(groups: groups, landmarks: landmarks) else { return [] }
+        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
+        let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
+        return DrawingSupport.yarnPassStrokes(wire, color: stroke.color, baseWidth: stroke.width, seed: seed)
+    }
+
+    /// The wrap wire as a single curve-sampled polyline (shared by the CPU and
+    /// GPU renderers): heavy interior sampling → proximity order → LineWalk
+    /// perturbation → coil/winding loops → curve fit.
+    private func wireCurve(groups: [MappedGroup], landmarks: LandmarkSettings) -> [CGPoint]? {
+        guard let boundary = personBoundary(groups), boundary.count >= 3 else { return nil }
 
         // Heavily sample the interior — density scales the anchor count up.
         let count = max(10, min(160, Int(10 + landmarks.wrapDensity * 150)))
         let interior = Self.interiorSamples(boundary: boundary, count: count, seed: landmarks.wrapSeed)
-        guard interior.count >= 2 else { return }
+        guard interior.count >= 2 else { return nil }
 
         let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
         // Proximity order → short segments that stay near the body.
@@ -40,10 +56,7 @@ struct WrapDrawing: DrawingAlgorithm {
             perturbed, linear: 0, circular: landmarks.wrapCircular,
             winding: landmarks.wrapWinding, seed: seed, closed: false
         )
-        let curve = DrawingSupport.curvePoints(coiled, fit: landmarks.wrapCurveFit)
-
-        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
-        YarnDrawing.strokePasses(curve, closed: false, stroke: stroke, weave: 0, in: context)
+        return DrawingSupport.curvePoints(coiled, fit: landmarks.wrapCurveFit, samplesPerSegment: 4)
     }
 
     /// The figure boundary used only to sample interior points (not to clip):

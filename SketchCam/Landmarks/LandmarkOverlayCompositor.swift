@@ -119,14 +119,13 @@ final class LandmarkOverlayCompositor {
             height: (outputSize.height * scaleDown).rounded(.down)
         )
 
-        // GPU drawing path: render LineWalk strokes via Metal instead of the
-        // CPU CGContext. Only when LineWalk is the *only* enabled algorithm
-        // (Metal renders its own buffer, bypassing the CPU layer that the other
-        // algorithms + Marks renderers draw into).
+        // GPU drawing path: render every enabled algorithm's strokes via Metal
+        // in one pass. Only when no Marks renderers are on (dots/stick/labels
+        // stay on the CPU path; Metal renders its own buffer).
         let l = settings.landmarks
-        if l.useMetalDrawing, l.lineWalkEnabled, !l.yarnEnabled, !l.wrapEnabled,
+        if l.useMetalDrawing, l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled,
            !l.showDots, !l.showStick, !l.showIDs, let metal = metalRenderer {
-            return renderMetalLineWalk(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
+            return renderMetalOverlay(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
         }
 
         contextIndex = (contextIndex + 1) % 2
@@ -187,9 +186,10 @@ final class LandmarkOverlayCompositor {
             .cropped(to: CGRect(origin: .zero, size: outputSize))
     }
 
-    /// GPU LineWalk render: map groups → canvas space, tessellate strokes, and
-    /// rasterize with Metal into an IOSurface buffer wrapped as a CIImage.
-    private func renderMetalLineWalk(
+    /// GPU drawing render: map groups → canvas space, gather tessellatable
+    /// strokes from every enabled algorithm (layered in registration order),
+    /// and rasterize with Metal into an IOSurface buffer wrapped as a CIImage.
+    private func renderMetalOverlay(
         detection: LandmarkDetection,
         settings: ProcessingSettings,
         canvasSize: CGSize,
@@ -203,7 +203,10 @@ final class LandmarkOverlayCompositor {
             }
             return MappedGroup(region: group.region, points: points, edges: group.edges)
         }
-        let strokes = LineWalkDrawing().strokes(groups: mapped, landmarks: settings.landmarks)
+        var strokes: [StrokeTessellator.Stroke] = []
+        for algorithm in algorithms where algorithm.isEnabled(settings.landmarks) {
+            strokes += algorithm.strokes(groups: mapped, landmarks: settings.landmarks)
+        }
 
         let width = Int(canvasSize.width), height = Int(canvasSize.height)
         guard width > 0, height > 0, let buffer = overlayBuffer(width: width, height: height) else { return nil }

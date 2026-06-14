@@ -25,6 +25,15 @@ protocol DrawingAlgorithm {
     /// Draws into the (already-cleared, canvas-space) context using every
     /// region's mapped landmarks.
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext)
+
+    /// GPU path: the same drawing expressed as tessellatable strokes (canvas
+    /// space). The compositor gathers these from every enabled algorithm and
+    /// rasterizes them in one Metal pass. Default `[]` = CPU-only.
+    func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke]
+}
+
+extension DrawingAlgorithm {
+    func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] { [] }
 }
 
 /// Drawing primitives shared by the algorithm modules (and the Marks renderers
@@ -210,6 +219,29 @@ enum DrawingSupport {
             context.move(to: pts[i])
             context.addLine(to: pts[i + 1])
             context.strokePath()
+        }
+    }
+
+    /// The yarn 4-pass halo (dark halo / soft fill / core / white highlight)
+    /// expressed as GPU strokes — the tessellatable analogue of
+    /// `YarnDrawing.strokePasses`. `points` is the already curve-sampled path.
+    static func yarnPassStrokes(_ points: [CGPoint], color: RGBAColor, baseWidth: CGFloat, seed: Int) -> [StrokeTessellator.Stroke] {
+        guard points.count >= 2 else { return [] }
+        let opacity = Float(min(1, max(0, color.alpha)))
+        let widths: [Float] = [7.5, 4.2, 1.0, 2.0]
+        let alphas: [Float] = [0.18, 0.22, 0.84, 0.46]
+        let mults: [Float] = [0.45, 0.38, 1.0, 0.48]
+        let rgb: [RGBAColor] = [.black, color, color, .white]
+        return (0..<4).map { pass in
+            var c = rgb[pass]
+            c.alpha = alphas[pass] * opacity * mults[pass]
+            return StrokeTessellator.Stroke(
+                points: points,
+                color: c,
+                baseWidth: Float(baseWidth) * widths[pass],
+                widthVariation: 0,
+                seed: seed
+            )
         }
     }
 }

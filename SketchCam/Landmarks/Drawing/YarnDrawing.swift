@@ -26,6 +26,28 @@ struct YarnDrawing: DrawingAlgorithm {
         }
     }
 
+    func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
+        var out: [StrokeTessellator.Stroke] = []
+        for group in groups {
+            let selected = LandmarkYarnWeaver.seededSubset(
+                group.points,
+                seed: landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region),
+                ratio: landmarks.subsetRatio
+            )
+            guard selected.count > 2 else { continue }
+            let stroke = DrawingSupport.stroke(for: group.region, landmarks: landmarks, matchColors: landmarks.yarnMatchesLandmarkColors, palette: landmarks.yarnPalette, width: landmarks.yarnWidth)
+            let seed = landmarks.yarnSeed + DrawingSupport.seedOffset(for: group.region)
+            let ordered = LandmarkYarnWeaver.wovenOrder(selected, seed: seed)
+            let coiled = LandmarkYarnWeaver.coilPath(ordered, linear: landmarks.yarnLinear, circular: landmarks.yarnCircular, winding: landmarks.yarnWinding, seed: seed, closed: true)
+            // Closed loop → repeat first point so the GPU polyline closes.
+            // Light densification: the Metal round joins/caps smooth the rest,
+            // and tessellation cost is CPU-side so fewer vertices = cheaper.
+            let curve = DrawingSupport.curvePoints(coiled + [coiled.first].compactMap { $0 }, fit: .hobby, samplesPerSegment: 3)
+            out += DrawingSupport.yarnPassStrokes(curve, color: stroke.color, baseWidth: stroke.width, seed: seed)
+        }
+        return out
+    }
+
     /// The yarn look: four overlapping strokes (dark halo, soft fill, core,
     /// white highlight). Shared by the per-region and wrap renderers.
     static func strokePasses(_ points: [CGPoint], closed: Bool, stroke: (color: RGBAColor, width: CGFloat), weave: CGFloat, in context: CGContext) {

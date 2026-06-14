@@ -508,6 +508,7 @@ public struct RGBAColor: Equatable, Sendable {
     }
 
     public static let black = RGBAColor(red: 0, green: 0, blue: 0)
+    public static let white = RGBAColor(red: 1, green: 1, blue: 1)
     public static let chromaGreen = RGBAColor(red: 0, green: 0.85, blue: 0.25)
     /// Default drawing ink — a near-black warm charcoal.
     public static let ink = RGBAColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 0.95)
