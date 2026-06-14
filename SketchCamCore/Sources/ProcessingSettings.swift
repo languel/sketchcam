@@ -64,6 +64,92 @@ public enum CurveFit: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
+public enum InkBrushMode: String, CaseIterable, Identifiable, Sendable, Codable {
+    case pen
+    case brush
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .pen: return "Pen"
+        case .brush: return "Brush"
+        }
+    }
+
+    public var toggled: InkBrushMode {
+        switch self {
+        case .pen: return .brush
+        case .brush: return .pen
+        }
+    }
+}
+
+public enum InkKind: String, CaseIterable, Identifiable, Sendable, Codable {
+    case black
+    case white
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .black: return "Black"
+        case .white: return "White"
+        }
+    }
+
+    public var toggled: InkKind {
+        switch self {
+        case .black: return .white
+        case .white: return .black
+        }
+    }
+}
+
+public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
+    public var id: UUID
+    /// Points are normalized to the output canvas (0...1), so editor strokes
+    /// survive output-size changes.
+    public var points: [CGPoint]
+    /// Optional metadata keeps old saved paths valid; nil means the current
+    /// inkwash defaults: black pen with the live controls.
+    public var brushMode: InkBrushMode?
+    public var inkKind: InkKind?
+    public var width: Float?
+    public var flow: Float?
+    public var bleed: Float?
+    public var dry: Float?
+    public var colorSeparation: Float?
+    public var brushInk: Float?
+    public var color: RGBAColor?
+
+    public init(
+        id: UUID = UUID(),
+        points: [CGPoint],
+        brushMode: InkBrushMode? = nil,
+        inkKind: InkKind? = nil,
+        width: Float? = nil,
+        flow: Float? = nil,
+        bleed: Float? = nil,
+        dry: Float? = nil,
+        colorSeparation: Float? = nil,
+        brushInk: Float? = nil,
+        color: RGBAColor? = nil
+    ) {
+        self.id = id
+        self.points = points
+        self.brushMode = brushMode
+        self.inkKind = inkKind
+        self.width = width
+        self.flow = flow
+        self.bleed = bleed
+        self.dry = dry
+        self.colorSeparation = colorSeparation
+        self.brushInk = brushInk
+        self.color = color
+    }
+}
+
 /// Shared, user-editable color set for the Drawing algorithms. Starts as a
 /// single solid color; algorithms cycle through the colors (e.g. per feature)
 /// when more are added.
@@ -109,6 +195,10 @@ public struct WebLayerSettings: Equatable, Sendable, Codable {
     /// Bring the web view on-screen as an interactive browser window (you can
     /// click/scroll/type; the page still composites into the frame).
     public var interactive: Bool
+    /// Render the inline HTML snippet instead of the URL.
+    public var useSnippet: Bool
+    /// Inline HTML (with optional inline <style>/<script>), CodePen-style.
+    public var htmlSnippet: String
 
     public init(
         enabled: Bool = false,
@@ -117,7 +207,9 @@ public struct WebLayerSettings: Equatable, Sendable, Codable {
         placement: WebLayerPlacement = .aboveDrawing,
         opacity: Float = 1,
         refreshFPS: Float = 20,
-        interactive: Bool = false
+        interactive: Bool = false,
+        useSnippet: Bool = false,
+        htmlSnippet: String = ""
     ) {
         self.enabled = enabled
         self.urlString = urlString
@@ -126,6 +218,8 @@ public struct WebLayerSettings: Equatable, Sendable, Codable {
         self.opacity = opacity
         self.refreshFPS = refreshFPS
         self.interactive = interactive
+        self.useSnippet = useSnippet
+        self.htmlSnippet = htmlSnippet
     }
 }
 
@@ -260,6 +354,11 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var yarnEnabled: Bool
     public var wrapEnabled: Bool
     public var lineWalkEnabled: Bool
+    /// Inkwash-style editor and renderer. It can draw hand-authored editor
+    /// paths as a full-canvas layer.
+    public var inkEnabled: Bool
+    public var inkPlacement: WebLayerPlacement
+    public var inkOpacity: Float
     /// Per-renderer size multipliers on top of each region's style.size.
     public var dotScale: Float
     public var stickScale: Float
@@ -309,6 +408,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var yarnSeed: Int
     public var wrapSeed: Int
     public var lineWalkSeed: Int
+    public var inkSeed: Int
     // Yarn parameters (per-region weave).
     public var subsetRatio: Float
     public var yarnWeaveAmount: Float
@@ -359,6 +459,24 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var lineWalkCurveFit: CurveFit
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
+    public var inkPaths: [InkEditorPath]
+    public var inkColor: RGBAColor
+    public var inkWidth: Float
+    public var inkFlow: Float
+    public var inkBleed: Float
+    public var inkDry: Float
+    public var inkPaperEnabled: Bool
+    public var inkPaperColor: RGBAColor
+    public var inkPaperGrain: Float
+    public var inkWashStrength: Float
+    public var inkCurveFit: CurveFit
+    public var inkBrushMode: InkBrushMode?
+    public var inkKind: InkKind?
+    public var inkColorSeparation: Float?
+    public var inkBrushInk: Float?
+    /// Incremented by the UI to ask the Metal ink engine to settle mobile
+    /// pigment into the fixed paper layer without clearing the painting.
+    public var inkFixRevision: Int?
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -399,6 +517,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         yarnEnabled: Bool = true,
         wrapEnabled: Bool = false,
         lineWalkEnabled: Bool = false,
+        inkEnabled: Bool = false,
+        inkPlacement: WebLayerPlacement = .aboveDrawing,
+        inkOpacity: Float = 1,
         dotScale: Float = 1,
         stickScale: Float = 1,
         trackJaw: Bool = true,
@@ -427,6 +548,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         yarnSeed: Int = 7,
         wrapSeed: Int = 7,
         lineWalkSeed: Int = 7,
+        inkSeed: Int = 11,
         subsetRatio: Float = 0.65,
         yarnWeaveAmount: Float = 0.7,
         yarnWidth: Float = 2.2,
@@ -454,6 +576,22 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkWidthVariation: Float = 0.3,
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
+        inkPaths: [InkEditorPath] = [],
+        inkColor: RGBAColor = .ink,
+        inkWidth: Float = 0.5,
+        inkFlow: Float = 0.9,
+        inkBleed: Float = 0.8,
+        inkDry: Float = 0.25,
+        inkPaperEnabled: Bool = true,
+        inkPaperColor: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 0.42),
+        inkPaperGrain: Float = 0.45,
+        inkWashStrength: Float = 0.9,
+        inkCurveFit: CurveFit = .hobby,
+        inkBrushMode: InkBrushMode? = .pen,
+        inkKind: InkKind? = .black,
+        inkColorSeparation: Float? = 0.5,
+        inkBrushInk: Float? = 0,
+        inkFixRevision: Int? = 0,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
@@ -486,6 +624,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.yarnEnabled = yarnEnabled
         self.wrapEnabled = wrapEnabled
         self.lineWalkEnabled = lineWalkEnabled
+        self.inkEnabled = inkEnabled
+        self.inkPlacement = inkPlacement
+        self.inkOpacity = inkOpacity
         self.dotScale = dotScale
         self.stickScale = stickScale
         self.trackJaw = trackJaw
@@ -514,6 +655,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.yarnSeed = yarnSeed
         self.wrapSeed = wrapSeed
         self.lineWalkSeed = lineWalkSeed
+        self.inkSeed = inkSeed
         self.subsetRatio = subsetRatio
         self.yarnWeaveAmount = yarnWeaveAmount
         self.yarnWidth = yarnWidth
@@ -541,6 +683,22 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkWidthVariation = lineWalkWidthVariation
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
+        self.inkPaths = inkPaths
+        self.inkColor = inkColor
+        self.inkWidth = inkWidth
+        self.inkFlow = inkFlow
+        self.inkBleed = inkBleed
+        self.inkDry = inkDry
+        self.inkPaperEnabled = inkPaperEnabled
+        self.inkPaperColor = inkPaperColor
+        self.inkPaperGrain = inkPaperGrain
+        self.inkWashStrength = inkWashStrength
+        self.inkCurveFit = inkCurveFit
+        self.inkBrushMode = inkBrushMode
+        self.inkKind = inkKind
+        self.inkColorSeparation = inkColorSeparation
+        self.inkBrushInk = inkBrushInk
+        self.inkFixRevision = inkFixRevision
         self.useMetalDrawing = useMetalDrawing
         self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette

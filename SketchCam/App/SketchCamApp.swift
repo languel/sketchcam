@@ -8,6 +8,7 @@ struct SketchCamApp: App {
         DispatchQueue.global(qos: .utility).async {
             MetalLineRenderer.runSelfCheck()
             MetalEffects.runSelfCheck()
+            MetalInkEngine.runSelfCheck()
         }
         #endif
     }
@@ -21,4 +22,3 @@ struct SketchCamApp: App {
         .windowResizability(.contentMinSize)
     }
 }
-

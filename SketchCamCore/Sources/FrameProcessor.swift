@@ -25,20 +25,21 @@ public protocol FrameProcessor {
     /// keyed by it over the configured background.
     /// `webLayer`: optional pre-snapshotted web page composited relative to the
     /// drawing overlay per `webAboveDrawing` (both above the video/effects).
-    func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, webAboveDrawing: Bool) throws -> ProcessedFrame
+    /// `inkLayer`: optional full-canvas inkwash feedback layer, composited
+    /// according to the ink layer placement setting.
+    func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?, webAboveDrawing: Bool) throws -> ProcessedFrame
 }
 
 public extension FrameProcessor {
     func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime) throws -> ProcessedFrame {
-        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: nil, matte: nil, webLayer: nil, webAboveDrawing: true)
+        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: nil, matte: nil, webLayer: nil, inkLayer: nil, webAboveDrawing: true)
     }
 
     func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?) throws -> ProcessedFrame {
-        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: overlay, matte: nil, webLayer: nil, webAboveDrawing: true)
+        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: overlay, matte: nil, webLayer: nil, inkLayer: nil, webAboveDrawing: true)
     }
 
     func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?) throws -> ProcessedFrame {
-        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: overlay, matte: matte, webLayer: nil, webAboveDrawing: true)
+        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp, overlay: overlay, matte: matte, webLayer: nil, inkLayer: nil, webAboveDrawing: true)
     }
 }
-

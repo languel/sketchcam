@@ -317,4 +317,3 @@ enum LandmarkCoordinateMapper {
         )
     }
 }
-

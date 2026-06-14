@@ -15,6 +15,7 @@
 		1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = D92A8604968462AFE800148A /* LineShaders.metal */; };
 		1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */; };
 		252A7093E9997987BFABE110 /* chaplin-dance.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = 9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */; };
+		272C963F431C2E68DC7B75C6 /* InkLayerCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */; };
 		27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
@@ -40,6 +41,7 @@
 		8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F2A2598E845123A35AB7F0C /* MetalEffects.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
 		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
+		9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */; };
 		A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */; };
 		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
 		AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */; };
@@ -49,6 +51,7 @@
 		B13D9E4ECF56AD3FBD0F4E3D /* SegmentationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53093F3EB6121C4B7899971 /* SegmentationService.swift */; };
 		B32E553B221584589B18FF01 /* CameraPermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */; };
 		B7717997B7A7D676037BAB33 /* FallbackTestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */; };
+		C08D417215B461026AF9BB6B /* MetalInkEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF4F80977B2AC11156B00993 /* MetalInkEngine.swift */; };
 		C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */; };
 		C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */; };
 		C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */; };
@@ -178,13 +181,16 @@
 		9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */ = {isa = PBXFileReference; path = "chaplin-dance.mp4"; sourceTree = "<group>"; };
 		A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRegistry.swift; sourceTree = "<group>"; };
 		AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
+		ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkLayerCompositor.swift; sourceTree = "<group>"; };
 		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
+		AF4F80977B2AC11156B00993 /* MetalInkEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalInkEngine.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowModeController.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
 		B53093F3EB6121C4B7899971 /* SegmentationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentationService.swift; sourceTree = "<group>"; };
 		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
 		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
+		C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = InkWashShaders.metal; sourceTree = "<group>"; };
 		C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkDetectionService.swift; sourceTree = "<group>"; };
 		C63392630883E5E55B589354 /* SketchCamCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8F1B8409805FC2A1A0C9825 /* ExtensionActivationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionActivationManager.swift; sourceTree = "<group>"; };
@@ -364,6 +370,7 @@
 			isa = PBXGroup;
 			children = (
 				11D744A99E5D781B4E282BB4 /* EffectShaders.metal */,
+				C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */,
 				D92A8604968462AFE800148A /* LineShaders.metal */,
 				4F2A2598E845123A35AB7F0C /* MetalEffects.swift */,
 				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
@@ -423,9 +430,11 @@
 		C0045440A55F23B6F41D6D01 /* Landmarks */ = {
 			isa = PBXGroup;
 			children = (
+				ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */,
 				C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */,
 				B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */,
 				8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */,
+				AF4F80977B2AC11156B00993 /* MetalInkEngine.swift */,
 				B53093F3EB6121C4B7899971 /* SegmentationService.swift */,
 				ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */,
 				4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */,
@@ -666,12 +675,15 @@
 				A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */,
 				96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */,
 				1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */,
+				272C963F431C2E68DC7B75C6 /* InkLayerCompositor.swift in Sources */,
+				9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */,
 				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
 				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,
 				EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */,
 				1B8F6A87C1639EFD1D4A9EBD /* LineShaders.metal in Sources */,
 				3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */,
 				8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */,
+				C08D417215B461026AF9BB6B /* MetalInkEngine.swift in Sources */,
 				AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */,
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,

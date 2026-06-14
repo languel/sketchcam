@@ -82,9 +82,11 @@ final class SketchCamViewModel: ObservableObject {
     let previewDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
+    private let inkCompositor = InkLayerCompositor()
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
+    private var webPickedURLs: [URL] = []   // retained to keep sandbox grants alive
     private let segmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
@@ -231,6 +233,31 @@ final class SketchCamViewModel: ObservableObject {
             timestamp: CMClockGetTime(CMClockGetHostTimeClock()),
             originalPixelBuffer: effective
         )
+    }
+
+    // MARK: - Web layer controls (main thread)
+
+    func webGoBack() { webController.goBack() }
+    func webGoForward() { webController.goForward() }
+    func webReload() { webController.reloadPage() }
+
+    /// Pick a local HTML file (or a folder with index.html). Selecting via the
+    /// panel grants the sandbox read access that a typed path lacks; we retain
+    /// the URL to keep the grant alive for the session.
+    func chooseWebFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose an HTML file, or a folder containing index.html"
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, var url = panel.url else { return }
+            _ = url.startAccessingSecurityScopedResource()
+            self.webPickedURLs.append(url)
+            if url.hasDirectoryPath { url = url.appendingPathComponent("index.html") }
+            self.settings.web.useSnippet = false
+            self.settings.web.urlString = url.absoluteString
+        }
     }
 
     func start() {
@@ -420,14 +447,16 @@ final class SketchCamViewModel: ObservableObject {
                 )
                 let matte = settings.segmentation.enabled ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
-                let overlay: CIImage? = {
-                    guard settings.landmarks.enabled else { return nil }
+                let landmarkDrawingWanted = settings.landmarks.enabled
+                let detectionWanted = landmarkDrawingWanted
+                let drawingDetection: LandmarkDetection? = {
+                    guard detectionWanted else { return nil }
                     var detection = self.landmarkService.currentDetection(
                         pixelBuffer: originalPixelBuffer,
                         settings: settings,
                         frameIndex: frameIndex
                     )
-                    if contourWanted, let contour = self.segmentationService.currentContour(maxPerSecond: settings.landmarks.detectionsPerSecond, detail: settings.landmarks.contourDetail) {
+                    if landmarkDrawingWanted, contourWanted, let contour = self.segmentationService.currentContour(maxPerSecond: settings.landmarks.detectionsPerSecond, detail: settings.landmarks.contourDetail) {
                         var augmented = detection ?? LandmarkDetection(
                             groups: [],
                             detectionID: 0,
@@ -443,16 +472,25 @@ final class SketchCamViewModel: ObservableObject {
                     // Seg-free person outline: convex hull of the detected
                     // landmarks (no segmentation). Rides the detection's id so it
                     // tracks at frame rate with the rest when predictive.
-                    if settings.landmarks.trackBodyHull, var d = detection, let hull = Self.makeHullGroup(from: d.groups) {
+                    if landmarkDrawingWanted, settings.landmarks.trackBodyHull, var d = detection, let hull = Self.makeHullGroup(from: d.groups) {
                         d.groups.append(hull)
                         detection = d
                     }
+                    return detection
+                }()
+                let overlay: CIImage? = {
+                    guard settings.landmarks.enabled else { return nil }
                     return self.overlayCompositor.overlay(
-                        detection: detection,
+                        detection: drawingDetection,
                         settings: settings,
                         outputSize: outputFormat.size
                     )
                 }()
+                let inkLayer = self.inkCompositor.layer(
+                    settings: settings,
+                    outputSize: outputFormat.size,
+                    frameIndex: frameIndex
+                )
                 // Overlay renders async; report the latest render duration
                 // (like detect/segment), not the ~0ms cache fetch.
                 self.timings.record(.overlay, seconds: self.overlayCompositor.lastRenderMillis / 1_000)
@@ -467,6 +505,7 @@ final class SketchCamViewModel: ObservableObject {
                         overlay: overlay,
                         matte: matte,
                         webLayer: webLayer,
+                        inkLayer: inkLayer,
                         webAboveDrawing: settings.web.placement == .aboveDrawing
                     )
                 }

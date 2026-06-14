@@ -1,6 +1,22 @@
+import AppKit
 import SketchCamCore
 import SketchCamShared
 import SwiftUI
+
+private enum InkTool: String, CaseIterable, Identifiable {
+    case draw = "Draw"
+    case select = "Select"
+    case points = "Points"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .draw: "pencil.tip"
+        case .select: "cursorarrow"
+        case .points: "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
 
 struct ContentView: View {
     private enum ControlTab: String, CaseIterable, Identifiable {
@@ -11,6 +27,7 @@ struct ContentView: View {
         case yarn = "Yarn"
         case wrap = "Wrap"
         case lineWalk = "Line walk"
+        case ink = "Ink"
         case web = "Web"
         case presets = "Presets"
         case keys = "Keys"
@@ -27,6 +44,7 @@ struct ContentView: View {
             case .yarn: "scribble.variable"
             case .wrap: "figure.stand"
             case .lineWalk: "lasso"
+            case .ink: "paintbrush.pointed"
             case .web: "globe"
             case .presets: "bookmark"
             case .keys: "keyboard"
@@ -41,9 +59,16 @@ struct ContentView: View {
     @State private var newPresetName = ""
     @State private var recallWholeState = false
     @State private var webURLField = ""
+    @State private var webSnippetField = ""
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
+    @State private var inkTool = InkTool.draw
+    @State private var selectedInkPathID: UUID?
+    @State private var selectedInkPointIndex: Int?
+    @State private var inkHUDVisible = false
+    @State private var inkUndoStack: [[InkEditorPath]] = []
+    @State private var inkRedoStack: [[InkEditorPath]] = []
 
     var body: some View {
         previewPane
@@ -75,28 +100,79 @@ struct ContentView: View {
     // MARK: - Preview
 
     private var previewPane: some View {
-        ZStack {
-            // Checkerboard backdrop so an Alpha background (or ink-only
-            // threshold) is visibly transparent in the preview instead of
-            // reading as black. Hidden in transparent-window mode, where
-            // alpha must be ACTUALLY transparent.
-            if !windowMode.transparent {
-                CheckerboardBackground()
+        GeometryReader { geo in
+            ZStack {
+                // Checkerboard backdrop so an Alpha background (or ink-only
+                // threshold) is visibly transparent in the preview instead of
+                // reading as black. Hidden in transparent-window mode, where
+                // alpha must be ACTUALLY transparent.
+                if !windowMode.transparent {
+                    CheckerboardBackground()
+                }
+                if !model.settings.previewEnabled {
+                    Text("Preview off — still publishing")
+                        .foregroundStyle(.secondary)
+                } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
+                    // Zero-readback GPU display (also the presentation-mode output).
+                    SampleBufferDisplayView(controller: model.previewDisplay)
+                } else if let previewImage = model.previewImage {
+                    Image(previewImage, scale: 1, label: Text("SketchCam preview"))
+                        .resizable()
+                        .interpolation(.none)
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    ProgressView()
+                        .controlSize(.large)
+                }
+                if tab == .ink, model.settings.landmarks.inkEnabled {
+                    InkPreviewDrawingLayer(
+                        paths: inkPathsBinding,
+                        outputSize: model.outputFormat.size,
+                        inkColor: rgbaColor(model.settings.landmarks.inkColor),
+                        inkRGBA: model.settings.landmarks.inkColor,
+                        tool: inkTool,
+                        brushMode: currentInkMode,
+                        inkKind: currentInkKind,
+                        width: Float(inkSizeBinding.wrappedValue),
+                        flow: model.settings.landmarks.inkFlow,
+                        bleed: model.settings.landmarks.inkBleed,
+                        dry: model.settings.landmarks.inkDry,
+                        colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
+                        brushInk: Float(inkBrushInkBinding.wrappedValue),
+                        selectedPathID: $selectedInkPathID,
+                        selectedPointIndex: $selectedInkPointIndex
+                    )
+                    .zIndex(20)
+                }
+                if tab == .ink, model.settings.landmarks.inkEnabled, inkHUDVisible {
+                    InkBottomHUD(
+                        mode: inkModeBinding,
+                        inkKind: inkKindBinding,
+                        inkColor: rgbaBinding(\.landmarks.inkColor),
+                        size: inkSizeBinding,
+                        flow: floatBinding(\.landmarks.inkFlow),
+                        bleed: floatBinding(\.landmarks.inkBleed),
+                        dry: floatBinding(\.landmarks.inkDry),
+                        colorSeparation: inkColorSeparationBinding,
+                        brushInk: inkBrushInkBinding,
+                        fix: fixInk,
+                        clear: clearInk,
+                        save: model.exportCurrentFrame
+                    )
+                    .padding(.bottom, 20)
+                    .transition(.opacity)
+                    .zIndex(30)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                }
             }
-            if !model.settings.previewEnabled {
-                Text("Preview off — still publishing")
-                    .foregroundStyle(.secondary)
-            } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
-                // Zero-readback GPU display (also the presentation-mode output).
-                SampleBufferDisplayView(controller: model.previewDisplay)
-            } else if let previewImage = model.previewImage {
-                Image(previewImage, scale: 1, label: Text("SketchCam preview"))
-                    .resizable()
-                    .interpolation(.none)
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                ProgressView()
-                    .controlSize(.large)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point):
+                    inkHUDVisible = tab == .ink && point.y > geo.size.height - 130
+                case .ended:
+                    inkHUDVisible = false
+                }
             }
         }
         .frame(minWidth: 120, minHeight: 68)
@@ -132,6 +208,7 @@ struct ContentView: View {
                     case .yarn: yarnTab
                     case .wrap: wrapTab
                     case .lineWalk: lineWalkTab
+                    case .ink: inkTab
                     case .web: webTab
                     case .presets: presetsTab
                     case .keys: keysTab
@@ -585,12 +662,214 @@ struct ContentView: View {
         .disabled(!model.settings.landmarks.lineWalkEnabled)
     }
 
+    @ViewBuilder private var inkTab: some View {
+        Toggle("Enable Ink", isOn: $model.settings.landmarks.inkEnabled)
+            .font(.headline)
+            .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
+        Group {
+            SectionHeader("Layer")
+            Picker("Placement", selection: $model.settings.landmarks.inkPlacement) {
+                ForEach(WebLayerPlacement.allCases) { placement in
+                    Text(placement.title).tag(placement)
+                }
+            }
+            .pickerStyle(.segmented)
+            SliderRow(title: "Opacity", value: floatBinding(\.landmarks.inkOpacity))
+
+            SectionHeader("Editor")
+            Picker("Tool", selection: $inkTool) {
+                ForEach(InkTool.allCases) { tool in
+                    Label(tool.rawValue, systemImage: tool.icon).tag(tool)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            InkEditorCanvas(
+                paths: inkPathsBinding,
+                inkColor: rgbaColor(model.settings.landmarks.inkColor),
+                inkRGBA: model.settings.landmarks.inkColor,
+                brushMode: currentInkMode,
+                inkKind: currentInkKind,
+                width: Float(inkSizeBinding.wrappedValue),
+                flow: model.settings.landmarks.inkFlow,
+                bleed: model.settings.landmarks.inkBleed,
+                dry: model.settings.landmarks.inkDry,
+                colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
+                brushInk: Float(inkBrushInkBinding.wrappedValue)
+            )
+                .frame(height: 180)
+                .help("Scratchpad view of the same full-canvas strokes. You can also draw directly on the preview while this tab is selected.")
+
+            HStack {
+                Button {
+                    clearInk()
+                } label: {
+                    Label("Clear", systemImage: "trash")
+                }
+                .disabled(model.settings.landmarks.inkPaths.isEmpty)
+                Button {
+                    deleteSelectedInk()
+                } label: {
+                    Label("Delete", systemImage: "delete.left")
+                }
+                .disabled(selectedInkPathID == nil)
+                Text("\(model.settings.landmarks.inkPaths.count) paths")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .controlSize(.small)
+
+            SectionHeader("Brush")
+            Picker("Mode", selection: inkModeBinding) {
+                ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Ink", selection: inkKindBinding) {
+                ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
+            }
+            .pickerStyle(.segmented)
+            ColorPicker("Ink", selection: rgbaBinding(\.landmarks.inkColor), supportsOpacity: true)
+            SliderRow(title: "Size", value: inkSizeBinding)
+            SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow))
+            SliderRow(title: "Bleed", value: floatBinding(\.landmarks.inkBleed))
+            SliderRow(title: "Dry", value: floatBinding(\.landmarks.inkDry))
+            SliderRow(title: "Color", value: inkColorSeparationBinding)
+            SliderRow(title: "Brush ink", value: inkBrushInkBinding)
+            Picker("Curve", selection: $model.settings.landmarks.inkCurveFit) {
+                ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
+            }
+            .pickerStyle(.segmented)
+            seedRow(\.landmarks.inkSeed)
+
+            SectionHeader("Paper")
+            Toggle("Paper layer", isOn: $model.settings.landmarks.inkPaperEnabled)
+            ColorPicker("Paper", selection: rgbaBinding(\.landmarks.inkPaperColor), supportsOpacity: true)
+                .disabled(!model.settings.landmarks.inkPaperEnabled)
+            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain))
+                .disabled(!model.settings.landmarks.inkPaperEnabled)
+        }
+        .disabled(!model.settings.landmarks.inkEnabled)
+    }
+
+    private func deleteSelectedInk() {
+        guard let selectedInkPathID,
+              let pathIndex = model.settings.landmarks.inkPaths.firstIndex(where: { $0.id == selectedInkPathID }) else { return }
+        var next = model.settings.landmarks.inkPaths
+        if let selectedInkPointIndex,
+           next[pathIndex].points.indices.contains(selectedInkPointIndex),
+           next[pathIndex].points.count > 2 {
+            next[pathIndex].points.remove(at: selectedInkPointIndex)
+            setInkPaths(next)
+            self.selectedInkPointIndex = nil
+        } else {
+            next.remove(at: pathIndex)
+            setInkPaths(next)
+            self.selectedInkPathID = nil
+            self.selectedInkPointIndex = nil
+        }
+    }
+
+    private func clearInkSelection() {
+        selectedInkPathID = nil
+        selectedInkPointIndex = nil
+    }
+
+    private func clearInk() {
+        setInkPaths([])
+        clearInkSelection()
+    }
+
+    private func fixInk() {
+        model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+    }
+
+    private func toggleInkMode() {
+        model.settings.landmarks.inkBrushMode = currentInkMode.toggled
+    }
+
+    private func toggleInkKind() {
+        model.settings.landmarks.inkKind = currentInkKind.toggled
+    }
+
+    private func undoInk() {
+        guard let previous = inkUndoStack.popLast() else { return }
+        inkRedoStack.append(model.settings.landmarks.inkPaths)
+        model.settings.landmarks.inkPaths = previous
+        clearInkSelection()
+    }
+
+    private func redoInk() {
+        guard let next = inkRedoStack.popLast() else { return }
+        inkUndoStack.append(model.settings.landmarks.inkPaths)
+        model.settings.landmarks.inkPaths = next
+        clearInkSelection()
+    }
+
+    private func setInkPaths(_ paths: [InkEditorPath]) {
+        let old = model.settings.landmarks.inkPaths
+        guard old != paths else { return }
+        inkUndoStack.append(old)
+        if inkUndoStack.count > 80 {
+            inkUndoStack.removeFirst(inkUndoStack.count - 80)
+        }
+        inkRedoStack.removeAll()
+        model.settings.landmarks.inkPaths = paths
+    }
+
+    private var currentInkMode: InkBrushMode {
+        model.settings.landmarks.inkBrushMode ?? .pen
+    }
+
+    private var currentInkKind: InkKind {
+        model.settings.landmarks.inkKind ?? .black
+    }
+
+    private var inkPathsBinding: Binding<[InkEditorPath]> {
+        Binding(
+            get: { model.settings.landmarks.inkPaths },
+            set: { setInkPaths($0) }
+        )
+    }
+
+    private var inkModeBinding: Binding<InkBrushMode> {
+        Binding(
+            get: { currentInkMode },
+            set: { model.settings.landmarks.inkBrushMode = $0 }
+        )
+    }
+
+    private var inkKindBinding: Binding<InkKind> {
+        Binding(
+            get: { currentInkKind },
+            set: { model.settings.landmarks.inkKind = $0 }
+        )
+    }
+
+    private var inkSizeBinding: Binding<Double> {
+        Binding(
+            get: { Double(min(1, max(0, model.settings.landmarks.inkWidth))) },
+            set: { model.settings.landmarks.inkWidth = Float($0) }
+        )
+    }
+
+    private var inkColorSeparationBinding: Binding<Double> {
+        optionalLandmarkFloatBinding(\.inkColorSeparation, defaultValue: 0.5)
+    }
+
+    private var inkBrushInkBinding: Binding<Double> {
+        optionalLandmarkFloatBinding(\.inkBrushInk, defaultValue: 0)
+    }
+
     @ViewBuilder private var overlayOffHint: some View {
         if !model.settings.landmarks.enabled {
             Text("Landmark overlay is off — enable it in Marks to draw.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func rgbaColor(_ color: RGBAColor) -> Color {
+        Color(.sRGB, red: Double(color.red), green: Double(color.green), blue: Double(color.blue), opacity: Double(color.alpha))
     }
 
     @ViewBuilder private func seedRow(_ keyPath: WritableKeyPath<ProcessingSettings, Int>) -> some View {
@@ -674,16 +953,45 @@ struct ContentView: View {
             .font(.headline)
 
         Group {
-            SectionHeader("URL")
-            HStack {
-                TextField("https://… or local path", text: $webURLField)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.settings.web.urlString = webURLField }
-                Button("Load") { model.settings.web.urlString = webURLField }
+            SectionHeader("Source")
+            Picker("Source", selection: $model.settings.web.useSnippet) {
+                Text("URL").tag(false)
+                Text("Snippet").tag(true)
             }
-            Text("Remote URL, file:// URL, or a local path. A code-snippet box (HTML/CSS/JS) is coming later.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if model.settings.web.useSnippet {
+                TextEditor(text: $webSnippetField)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 150)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+                Button("Run") {
+                    model.settings.web.htmlSnippet = webSnippetField
+                    model.settings.web.useSnippet = true
+                }
+                Text("Paste a full HTML document — inline <style>/<script> are fine.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    TextField("https://… or local path", text: $webURLField)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { model.settings.web.urlString = webURLField }
+                    Button("Load") { model.settings.web.urlString = webURLField }
+                }
+                HStack {
+                    Button("Choose file…") { model.chooseWebFile() }
+                    Spacer()
+                    Button { model.webGoBack() } label: { Image(systemName: "chevron.left") }
+                    Button { model.webGoForward() } label: { Image(systemName: "chevron.right") }
+                    Button { model.webReload() } label: { Image(systemName: "arrow.clockwise") }
+                }
+                .controlSize(.small)
+                Text("Remote URL, or a local file/folder picked via Choose (a typed path is blocked by the sandbox).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             SectionHeader("Layer")
             Toggle("Transparent background", isOn: $model.settings.web.transparentBackground)
@@ -702,7 +1010,10 @@ struct ContentView: View {
                 .help("Open the page as a real window you can click / scroll / type in. It keeps compositing into the frame; closing the window turns this off.")
         }
         .disabled(!model.settings.web.enabled)
-        .onAppear { if webURLField.isEmpty { webURLField = model.settings.web.urlString } }
+        .onAppear {
+            if webURLField.isEmpty { webURLField = model.settings.web.urlString }
+            if webSnippetField.isEmpty { webSnippetField = model.settings.web.htmlSnippet }
+        }
     }
 
     // MARK: - Presets tab
@@ -857,6 +1168,76 @@ struct ContentView: View {
                    default: KeyBinding(key: "p", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.togglePIP() }
         r.register(id: "window.presentation", title: "Presentation Mode", category: "Window",
                    default: KeyBinding(key: "p", modifiers: .command)) { [weak windowMode] in windowMode?.togglePresentationMode() }
+        r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
+                   default: KeyBinding(key: "v", modifiers: [])) {
+            guard tab == .ink else { return }
+            inkTool = .select
+        }
+        r.register(id: "ink.tool.selectNumber", title: "Ink: Select Tool (1)", category: "Ink",
+                   default: KeyBinding(key: "1", modifiers: [])) {
+            guard tab == .ink else { return }
+            inkTool = .select
+        }
+        r.register(id: "ink.tool.draw", title: "Ink: Draw Tool", category: "Ink",
+                   default: KeyBinding(key: "p", modifiers: [])) {
+            guard tab == .ink else { return }
+            inkTool = .draw
+        }
+        r.register(id: "ink.tool.drawNumber", title: "Ink: Draw Tool (7)", category: "Ink",
+                   default: KeyBinding(key: "7", modifiers: [])) {
+            guard tab == .ink else { return }
+            inkTool = .draw
+        }
+        r.register(id: "ink.tool.points", title: "Ink: Points Tool", category: "Ink",
+                   default: KeyBinding(key: "a", modifiers: [])) {
+            guard tab == .ink else { return }
+            inkTool = .points
+        }
+        r.register(id: "ink.delete", title: "Ink: Delete Selected", category: "Ink",
+                   default: KeyBinding(key: "delete", modifiers: [])) {
+            guard tab == .ink else { return }
+            deleteSelectedInk()
+        }
+        r.register(id: "ink.mode.toggle", title: "Ink: Pen / Brush", category: "Ink",
+                   default: KeyBinding(key: "b", modifiers: [])) {
+            guard tab == .ink else { return }
+            toggleInkMode()
+        }
+        r.register(id: "ink.kind.toggle", title: "Ink: Black / White", category: "Ink",
+                   default: KeyBinding(key: "w", modifiers: [])) {
+            guard tab == .ink else { return }
+            toggleInkKind()
+        }
+        r.register(id: "ink.fix", title: "Ink: Fix", category: "Ink",
+                   default: KeyBinding(key: "d", modifiers: [])) {
+            guard tab == .ink else { return }
+            fixInk()
+        }
+        r.register(id: "ink.clear", title: "Ink: Clear", category: "Ink",
+                   default: KeyBinding(key: "c", modifiers: [])) {
+            guard tab == .ink else { return }
+            clearInk()
+        }
+        r.register(id: "ink.save", title: "Ink: Save PNG", category: "Ink",
+                   default: KeyBinding(key: "s", modifiers: [])) { [weak model] in
+            guard tab == .ink else { return }
+            model?.exportCurrentFrame()
+        }
+        r.register(id: "ink.fullscreen", title: "Ink: Fullscreen", category: "Ink",
+                   default: KeyBinding(key: "f", modifiers: [])) { [weak windowMode] in
+            guard tab == .ink else { return }
+            windowMode?.togglePresentationMode()
+        }
+        r.register(id: "ink.undo", title: "Ink: Undo", category: "Ink",
+                   default: KeyBinding(key: "z", modifiers: .command)) {
+            guard tab == .ink else { return }
+            undoInk()
+        }
+        r.register(id: "ink.redo", title: "Ink: Redo", category: "Ink",
+                   default: KeyBinding(key: "z", modifiers: [.command, .shift])) {
+            guard tab == .ink else { return }
+            redoInk()
+        }
     }
 
     // MARK: - Bindings
@@ -888,6 +1269,13 @@ struct ContentView: View {
         Binding(
             get: { Double(model.settings[keyPath: keyPath]) },
             set: { model.settings[keyPath: keyPath] = Float($0) }
+        )
+    }
+
+    private func optionalLandmarkFloatBinding(_ keyPath: WritableKeyPath<LandmarkSettings, Float?>, defaultValue: Float) -> Binding<Double> {
+        Binding(
+            get: { Double(model.settings.landmarks[keyPath: keyPath] ?? defaultValue) },
+            set: { model.settings.landmarks[keyPath: keyPath] = Float($0) }
         )
     }
 
@@ -948,6 +1336,94 @@ private struct SliderRow: View {
                 .frame(width: 38, alignment: .trailing)
         }
         .help(hint ?? title)
+    }
+}
+
+private struct InkBottomHUD: View {
+    @Binding var mode: InkBrushMode
+    @Binding var inkKind: InkKind
+    @Binding var inkColor: Color
+    @Binding var size: Double
+    @Binding var flow: Double
+    @Binding var bleed: Double
+    @Binding var dry: Double
+    @Binding var colorSeparation: Double
+    @Binding var brushInk: Double
+    let fix: () -> Void
+    let clear: () -> Void
+    let save: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .bottom, spacing: 22) {
+                buttonControl("mode", value: mode.rawValue) { mode = mode.toggled }
+                buttonControl("ink", value: inkKind.rawValue) { inkKind = inkKind.toggled }
+                VStack(spacing: 7) {
+                    Text("hue")
+                        .hudLabel()
+                    ColorPicker("", selection: $inkColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 22, height: 22)
+                }
+                hudSlider("size", value: $size)
+                hudSlider("flow", value: $flow)
+                hudSlider("bleed", value: $bleed)
+                hudSlider("dry", value: $dry)
+                hudSlider("color", value: $colorSeparation)
+                hudSlider("brush ink", value: $brushInk)
+                command("fix", action: fix)
+                command("clear", action: clear)
+                command("save", action: save)
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.10)))
+        .controlSize(.small)
+    }
+
+    private func buttonControl(_ label: String, value: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 7) {
+            Text(label)
+                .hudLabel()
+            Button(value, action: action)
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .tracking(3)
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 58)
+        }
+    }
+
+    private func hudSlider(_ label: String, value: Binding<Double>) -> some View {
+        VStack(spacing: 7) {
+            Text(label)
+                .hudLabel()
+            Slider(value: value, in: 0...1)
+                .frame(width: 86)
+        }
+    }
+
+    private func command(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .tracking(3)
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 1)
+    }
+}
+
+private extension Text {
+    func hudLabel() -> some View {
+        self
+            .font(.system(size: 10, weight: .medium))
+            .tracking(4)
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary.opacity(0.75))
     }
 }
 
@@ -1035,6 +1511,379 @@ private struct StyleRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 30, alignment: .trailing)
         }
+    }
+}
+
+private struct InkEditorCanvas: View {
+    @Binding var paths: [InkEditorPath]
+    let inkColor: Color
+    let inkRGBA: RGBAColor
+    let brushMode: InkBrushMode
+    let inkKind: InkKind
+    let width: Float
+    let flow: Float
+    let bleed: Float
+    let dry: Float
+    let colorSeparation: Float
+    let brushInk: Float
+    @State private var current: [CGPoint] = []
+
+    var body: some View {
+        GeometryReader { geo in
+            Canvas { context, size in
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(nsColor: .textBackgroundColor)))
+                drawGrid(in: &context, size: size)
+                for path in paths {
+                    draw(points: path.points, size: size, context: &context, color: inkColor.opacity(0.72), width: 2.2)
+                }
+                draw(points: current, size: size, context: &context, color: inkColor, width: 2.8)
+            }
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.35)))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let p = normalized(value.location, size: geo.size)
+                        if current.last.map({ distance($0, p) > 0.004 }) ?? true {
+                            current.append(p)
+                        }
+                    }
+                    .onEnded { _ in
+                        if current.count > 1 {
+                            paths.append(InkEditorPath(
+                                points: current,
+                                brushMode: brushMode,
+                                inkKind: inkKind,
+                                width: width,
+                                flow: flow,
+                                bleed: bleed,
+                                dry: dry,
+                                colorSeparation: colorSeparation,
+                                brushInk: brushInk,
+                                color: inkRGBA
+                            ))
+                        }
+                        current = []
+                    }
+            )
+        }
+    }
+
+    private func drawGrid(in context: inout GraphicsContext, size: CGSize) {
+        var path = Path()
+        let step: CGFloat = 24
+        var x: CGFloat = step
+        while x < size.width {
+            path.move(to: CGPoint(x: x, y: 0))
+            path.addLine(to: CGPoint(x: x, y: size.height))
+            x += step
+        }
+        var y: CGFloat = step
+        while y < size.height {
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: size.width, y: y))
+            y += step
+        }
+        context.stroke(path, with: .color(Color.secondary.opacity(0.10)), lineWidth: 1)
+    }
+
+    private func draw(points: [CGPoint], size: CGSize, context: inout GraphicsContext, color: Color, width: CGFloat) {
+        guard let first = points.first else { return }
+        var path = Path()
+        path.move(to: denormalized(first, size: size))
+        for point in points.dropFirst() {
+            path.addLine(to: denormalized(point, size: size))
+        }
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+    }
+
+    private func normalized(_ point: CGPoint, size: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(1, max(0, point.x / max(1, size.width))),
+            y: min(1, max(0, point.y / max(1, size.height)))
+        )
+    }
+
+    private func denormalized(_ point: CGPoint, size: CGSize) -> CGPoint {
+        CGPoint(x: point.x * size.width, y: point.y * size.height)
+    }
+
+    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        hypot(a.x - b.x, a.y - b.y)
+    }
+}
+
+private struct InkPreviewDrawingLayer: View {
+    @Binding var paths: [InkEditorPath]
+    let outputSize: CGSize
+    let inkColor: Color
+    let inkRGBA: RGBAColor
+    let tool: InkTool
+    let brushMode: InkBrushMode
+    let inkKind: InkKind
+    let width: Float
+    let flow: Float
+    let bleed: Float
+    let dry: Float
+    let colorSeparation: Float
+    let brushInk: Float
+    @Binding var selectedPathID: UUID?
+    @Binding var selectedPointIndex: Int?
+    @State private var current: [CGPoint] = []
+    @State private var currentPathID: UUID?
+    @State private var dragStartPaths: [InkEditorPath] = []
+    @State private var dragStartPoint: CGPoint?
+
+    var body: some View {
+        GeometryReader { geo in
+            let rect = fittedRect(container: geo.size, content: outputSize)
+            ZStack {
+                Color.black.opacity(0.001)
+                ForEach(paths) { path in
+                    strokedPath(path.points, in: rect)
+                        .stroke(path.id == selectedPathID ? Color.accentColor.opacity(0.8) : editorColor(for: path).opacity(0.24),
+                                style: StrokeStyle(lineWidth: path.id == selectedPathID ? 3 : 2, lineCap: .round, lineJoin: .round))
+                    if path.id == selectedPathID {
+                        selectionBounds(path.points, in: rect)
+                            .stroke(Color.accentColor.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                        ForEach(path.points.indices, id: \.self) { index in
+                            Circle()
+                                .fill(index == selectedPointIndex ? Color.accentColor : Color(nsColor: .windowBackgroundColor))
+                                .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
+                                .frame(width: 9, height: 9)
+                                .position(viewPoint(path.points[index], in: rect))
+                        }
+                    }
+                }
+                strokedPath(current, in: rect)
+                    .stroke(inkColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard rect.contains(value.location) else { return }
+                        let p = normalized(value.location, in: rect)
+                        switch tool {
+                        case .draw:
+                            selectedPathID = nil
+                            selectedPointIndex = nil
+                            updateLiveStroke(with: p, secondary: Self.secondaryMousePressed())
+                        case .select:
+                            if dragStartPaths.isEmpty {
+                                dragStartPaths = paths
+                                selectedPointIndex = nil
+                                if selectedPathID == nil || !hitSelectedPath(at: p) {
+                                    selectedPathID = nearestPath(to: p, threshold: 0.025)?.id
+                                }
+                            }
+                            moveSelectedPath(from: normalized(value.startLocation, in: rect), to: p)
+                        case .points:
+                            if dragStartPaths.isEmpty {
+                                dragStartPaths = paths
+                                let hit = nearestPoint(to: p, threshold: 0.025)
+                                selectedPathID = hit?.pathID ?? nearestPath(to: p, threshold: 0.025)?.id
+                                selectedPointIndex = hit?.pointIndex
+                                if selectedPointIndex == nil, let selectedPathID {
+                                    selectedPointIndex = insertPoint(on: selectedPathID, near: p, threshold: 0.028)
+                                    dragStartPaths = paths
+                                }
+                                dragStartPoint = selectedPoint()
+                            }
+                            moveSelectedPoint(to: p)
+                        }
+                    }
+                    .onEnded { _ in
+                        if tool == .draw, let currentPathID, let path = paths.first(where: { $0.id == currentPathID }), path.points.count <= 1 {
+                            paths.removeAll { $0.id == currentPathID }
+                        }
+                        current = []
+                        currentPathID = nil
+                        dragStartPaths = []
+                        dragStartPoint = nil
+                    }
+            )
+        }
+    }
+
+    private func strokedPath(_ points: [CGPoint], in rect: CGRect) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: viewPoint(first, in: rect))
+        for point in points.dropFirst() {
+            path.addLine(to: viewPoint(point, in: rect))
+        }
+        return path
+    }
+
+    private func viewPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
+    }
+
+    private func updateLiveStroke(with point: CGPoint, secondary: Bool) {
+        let mode = secondary ? brushMode.toggled : brushMode
+        if currentPathID == nil {
+            let path = InkEditorPath(
+                points: [point],
+                brushMode: mode,
+                inkKind: inkKind,
+                width: width,
+                flow: flow,
+                bleed: bleed,
+                dry: dry,
+                colorSeparation: colorSeparation,
+                brushInk: brushInk,
+                color: inkRGBA
+            )
+            paths.append(path)
+            currentPathID = path.id
+            current = path.points
+        }
+        guard let currentPathID,
+              let index = paths.firstIndex(where: { $0.id == currentPathID }) else { return }
+        if paths[index].points.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0025 }) ?? true {
+            paths[index].points.append(point)
+            current = paths[index].points
+        }
+    }
+
+    private func editorColor(for path: InkEditorPath) -> Color {
+        if (path.brushMode ?? .pen) == .brush {
+            return Color(red: 0.33, green: 0.42, blue: 0.74)
+        }
+        return (path.inkKind ?? .black) == .white ? .white : inkColor
+    }
+
+    private static func secondaryMousePressed() -> Bool {
+        NSEvent.pressedMouseButtons & (1 << 1) != 0
+    }
+
+    private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        CGPoint(
+            x: min(1, max(0, (point.x - rect.minX) / max(1, rect.width))),
+            y: min(1, max(0, (point.y - rect.minY) / max(1, rect.height)))
+        )
+    }
+
+    private func selectionBounds(_ points: [CGPoint], in rect: CGRect) -> Path {
+        var path = Path()
+        guard !points.isEmpty else { return path }
+        let xs = points.map(\.x)
+        let ys = points.map(\.y)
+        let minX = xs.min() ?? 0
+        let maxX = xs.max() ?? 0
+        let minY = ys.min() ?? 0
+        let maxY = ys.max() ?? 0
+        let inset: CGFloat = 0.008
+        path.addRect(CGRect(
+            x: rect.minX + (minX - inset) * rect.width,
+            y: rect.minY + (minY - inset) * rect.height,
+            width: (maxX - minX + inset * 2) * rect.width,
+            height: (maxY - minY + inset * 2) * rect.height
+        ))
+        return path
+    }
+
+    private func nearestPath(to point: CGPoint, threshold: CGFloat) -> InkEditorPath? {
+        paths
+            .map { ($0, distanceToPath(point, $0.points)) }
+            .filter { $0.1 <= threshold }
+            .min { $0.1 < $1.1 }?
+            .0
+    }
+
+    private func nearestPoint(to point: CGPoint, threshold: CGFloat) -> (pathID: UUID, pointIndex: Int)? {
+        var best: (UUID, Int, CGFloat)?
+        for path in paths {
+            for (index, candidate) in path.points.enumerated() {
+                let d = hypot(candidate.x - point.x, candidate.y - point.y)
+                if d <= threshold, best == nil || d < best!.2 {
+                    best = (path.id, index, d)
+                }
+            }
+        }
+        return best.map { ($0.0, $0.1) }
+    }
+
+    private func hitSelectedPath(at point: CGPoint) -> Bool {
+        guard let selectedPathID,
+              let path = paths.first(where: { $0.id == selectedPathID }) else { return false }
+        return distanceToPath(point, path.points) <= 0.025
+    }
+
+    private func moveSelectedPath(from start: CGPoint, to end: CGPoint) {
+        guard let selectedPathID,
+              let original = dragStartPaths.first(where: { $0.id == selectedPathID }),
+              let index = paths.firstIndex(where: { $0.id == selectedPathID }) else { return }
+        let delta = CGPoint(x: end.x - start.x, y: end.y - start.y)
+        paths[index].points = original.points.map {
+            CGPoint(x: min(1, max(0, $0.x + delta.x)), y: min(1, max(0, $0.y + delta.y)))
+        }
+    }
+
+    private func selectedPoint() -> CGPoint? {
+        guard let selectedPathID,
+              let selectedPointIndex,
+              let path = paths.first(where: { $0.id == selectedPathID }),
+              path.points.indices.contains(selectedPointIndex) else { return nil }
+        return path.points[selectedPointIndex]
+    }
+
+    private func moveSelectedPoint(to point: CGPoint) {
+        guard let selectedPathID,
+              let selectedPointIndex,
+              let index = paths.firstIndex(where: { $0.id == selectedPathID }),
+              paths[index].points.indices.contains(selectedPointIndex) else { return }
+        paths[index].points[selectedPointIndex] = point
+    }
+
+    private func insertPoint(on pathID: UUID, near point: CGPoint, threshold: CGFloat) -> Int? {
+        guard let pathIndex = paths.firstIndex(where: { $0.id == pathID }) else { return nil }
+        let pts = paths[pathIndex].points
+        guard pts.count >= 2 else { return nil }
+        var best: (segment: Int, distance: CGFloat)?
+        for i in 0..<(pts.count - 1) {
+            let d = distanceToSegment(point, pts[i], pts[i + 1])
+            if d <= threshold, best == nil || d < best!.distance {
+                best = (i, d)
+            }
+        }
+        guard let best else { return nil }
+        let insertIndex = best.segment + 1
+        paths[pathIndex].points.insert(point, at: insertIndex)
+        return insertIndex
+    }
+
+    private func distanceToPath(_ point: CGPoint, _ points: [CGPoint]) -> CGFloat {
+        guard points.count > 1 else { return .greatestFiniteMagnitude }
+        return (0..<(points.count - 1))
+            .map { distanceToSegment(point, points[$0], points[$0 + 1]) }
+            .min() ?? .greatestFiniteMagnitude
+    }
+
+    private func distanceToSegment(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let vx = b.x - a.x
+        let vy = b.y - a.y
+        let len2 = vx * vx + vy * vy
+        guard len2 > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let t = min(1, max(0, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2))
+        let q = CGPoint(x: a.x + vx * t, y: a.y + vy * t)
+        return hypot(p.x - q.x, p.y - q.y)
+    }
+
+    private func fittedRect(container: CGSize, content: CGSize) -> CGRect {
+        guard container.width > 0, container.height > 0, content.width > 0, content.height > 0 else {
+            return CGRect(origin: .zero, size: container)
+        }
+        let scale = min(container.width / content.width, container.height / content.height)
+        let size = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(
+            x: (container.width - size.width) / 2,
+            y: (container.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
     }
 }
 

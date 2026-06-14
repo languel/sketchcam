@@ -18,6 +18,8 @@ final class WebLayerController: NSObject, NSWindowDelegate {
 
     private var enabled = false
     private var loadedURL = ""
+    private var loadedSnippet = ""
+    private var loadedUseSnippet = false
     private var loadedTransparent = true
     private var currentSize: CGSize = .zero
     private var opacity: Float = 1
@@ -46,8 +48,11 @@ final class WebLayerController: NSObject, NSWindowDelegate {
             currentSize = outputSize
             window?.contentAspectRatio = outputSize
         }
-        if settings.urlString != loadedURL || settings.transparentBackground != loadedTransparent {
+        if settings.urlString != loadedURL || settings.transparentBackground != loadedTransparent
+            || settings.useSnippet != loadedUseSnippet || settings.htmlSnippet != loadedSnippet {
             loadedURL = settings.urlString
+            loadedSnippet = settings.htmlSnippet
+            loadedUseSnippet = settings.useSnippet
             loadedTransparent = settings.transparentBackground
             reload()
         }
@@ -138,6 +143,10 @@ final class WebLayerController: NSObject, NSWindowDelegate {
             let js = "var s=document.createElement('style');s.textContent='html,body{background:transparent !important;background-color:transparent !important;}';document.head?document.head.appendChild(s):document.documentElement.appendChild(s);"
             ucc.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
+        if loadedUseSnippet {
+            wv.loadHTMLString(loadedSnippet, baseURL: nil)
+            return
+        }
         guard !loadedURL.isEmpty else {
             wv.loadHTMLString("", baseURL: nil)
             return
@@ -153,6 +162,12 @@ final class WebLayerController: NSObject, NSWindowDelegate {
             wv.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
     }
+
+    // MARK: - Navigation (main thread)
+
+    func goBack() { webView?.goBack() }
+    func goForward() { webView?.goForward() }
+    func reloadPage() { if loadedUseSnippet { reload() } else { webView?.reload() } }
 
     // MARK: - Snapshotting
 

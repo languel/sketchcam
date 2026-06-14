@@ -44,6 +44,29 @@ Phase 1 advertises three 30 FPS BGRA presets:
 
 Input frames are aspect-filled into the selected output format. Mirror is on by default.
 
+## Drawing And Ink Layers
+
+Landmark-driven drawing can render through the CPU path or through the Metal ribbon renderer:
+
+```text
+semantic paths -> StrokeTessellator -> MetalLineRenderer -> IOSurface-backed overlay
+```
+
+The Ink tab is a separate full-canvas drawing layer. It stores editable vector paths in `ProcessingSettings`, then replays them through a native Metal feedback simulation:
+
+```text
+InkEditorPath log
+  -> MetalInkEngine
+  -> RGBA16F mobile ink + RGBA16F fixed ink + R16F wetness
+  -> RG16F velocity + R16F pressure/divergence/curl
+  -> BGRA materialized layer
+  -> CoreImageFrameProcessor composite
+```
+
+The inkwash layer deliberately keeps feedback state inside Metal textures. The Core Image processor receives only the latest flat BGRA layer, which avoids building a persistent recursive CI graph while preserving the existing layer ordering with the other drawing/web overlays.
+
+The editor uses normalized top-left canvas coordinates. Metal replay uses the same coordinate system so the vector guide path and the simulated shader stroke stay aligned on the preview.
+
 ## Future Boundaries
 
 The stable long-term shape is:
@@ -53,4 +76,3 @@ frame input -> processing/runtime -> semantic state -> rendered frame -> platfor
 ```
 
 Phase 2 can add inference, OSC/WebSocket state output, zones, and sketch hosting without moving virtual-camera mechanics into the product layer.
-
