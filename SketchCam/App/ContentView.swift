@@ -718,7 +718,9 @@ struct ContentView: View {
 
         SectionHeader("Experimental")
         Toggle("GPU drawing (Metal)", isOn: $model.settings.landmarks.useMetalDrawing)
-            .help("Render Line walk strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms.")
+            .help("Render the drawing strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms.")
+        Toggle("Bead stroke (legacy)", isOn: $model.settings.landmarks.beadStroke)
+            .help("Off = smooth filled ribbons (clean under transparency). On = the older per-segment quads + round discs.")
 
         if let error = model.errorText {
             Text(error)

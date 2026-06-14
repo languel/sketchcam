@@ -310,6 +310,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
+    /// Legacy bead stroke (per-segment quads + round discs). Off = smooth filled
+    /// ribbons (clean under transparency).
+    public var beadStroke: Bool
     /// Per-algorithm color set. When the matching `*MatchesLandmarkColors` flag
     /// is set, that algorithm instead tints by each region's landmark color.
     public var yarnPalette: DrawingPalette
@@ -400,6 +403,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
         useMetalDrawing: Bool = false,
+        beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
         yarnMatchesLandmarkColors: Bool = false,
         wrapPalette: DrawingPalette = .default,
@@ -486,6 +490,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
         self.useMetalDrawing = useMetalDrawing
+        self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette
         self.yarnMatchesLandmarkColors = yarnMatchesLandmarkColors
         self.wrapPalette = wrapPalette

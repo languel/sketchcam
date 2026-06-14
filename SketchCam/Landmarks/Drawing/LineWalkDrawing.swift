@@ -15,22 +15,7 @@ struct LineWalkDrawing: DrawingAlgorithm {
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
         for stroke in strokes(groups: groups, landmarks: landmarks) {
-            let color = DrawingSupport.nsColor(stroke.color)
-            if stroke.points.count == 1 {
-                context.setFillColor(color.cgColor)
-                let r = CGFloat(max(0.4, stroke.baseWidth))
-                let p = stroke.points[0]
-                context.fillEllipse(in: CGRect(x: p.x - r / 2, y: p.y - r / 2, width: r, height: r))
-            } else {
-                DrawingSupport.strokeVariableWidth(
-                    stroke.points,
-                    baseWidth: CGFloat(stroke.baseWidth),
-                    variation: stroke.widthVariation,
-                    color: color,
-                    seed: stroke.seed,
-                    into: context
-                )
-            }
+            DrawingSupport.renderStroke(stroke, bead: landmarks.beadStroke, into: context)
         }
     }
 

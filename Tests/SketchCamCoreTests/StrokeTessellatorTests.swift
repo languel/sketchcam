@@ -19,9 +19,17 @@ final class StrokeTessellatorTests: XCTestCase {
         XCTAssertTrue(verts.allSatisfy { $0.isFinite })
     }
 
-    func testTwoPointLineGeometry() {
+    func testTwoPointRibbonIsAStrip() {
         let stroke = StrokeTessellator.Stroke(points: [CGPoint(x: 10, y: 50), CGPoint(x: 90, y: 50)], color: red, baseWidth: 10)
-        let verts = StrokeTessellator.tessellate([stroke])
+        let verts = StrokeTessellator.tessellate([stroke])   // ribbon (default)
+        // 1 strip segment = 2 triangles = 6 verts, no discs.
+        XCTAssertEqual(verts.count, 6 * StrokeTessellator.floatsPerVertex)
+        XCTAssertTrue(verts.allSatisfy { $0.isFinite })
+    }
+
+    func testTwoPointBeadsGeometry() {
+        let stroke = StrokeTessellator.Stroke(points: [CGPoint(x: 10, y: 50), CGPoint(x: 90, y: 50)], color: red, baseWidth: 10)
+        let verts = StrokeTessellator.tessellate([stroke], ribbon: false)
         // 1 segment quad (6 verts) + 2 discs (2 × 30 verts) = 66 verts.
         XCTAssertEqual(verts.count, 66 * StrokeTessellator.floatsPerVertex)
         XCTAssertTrue(verts.allSatisfy { $0.isFinite })

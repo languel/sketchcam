@@ -244,18 +244,32 @@ enum DrawingSupport {
         return out
     }
 
-    /// CPU analogue of `ribbonStrokes` — strokes the same variable-width ribbon
-    /// (+ optional halo) into a CGContext.
-    static func drawRibbon(_ points: [CGPoint], color: RGBAColor, baseWidth: CGFloat, widthVariation: Float, halo: Bool, seed: Int, into context: CGContext) {
-        guard points.count >= 2 else { return }
-        let opacity = min(1, max(0, CGFloat(color.alpha)))
-        if halo {
-            strokeVariableWidth(points, baseWidth: baseWidth * 4.5, variation: widthVariation, color: NSColor.black.withAlphaComponent(0.16 * opacity), seed: seed, into: context)
-            strokeVariableWidth(points, baseWidth: baseWidth * 2.3, variation: widthVariation, color: nsColor(color, alpha: 0.28 * opacity), seed: seed, into: context)
+    /// CPU render of a single tessellatable stroke — the same `Stroke` the GPU
+    /// path consumes — as either a filled ribbon (default, clean under alpha) or
+    /// the legacy bead stroke. Both paths share `StrokeTessellator.ribbonBoundary`.
+    static func renderStroke(_ stroke: StrokeTessellator.Stroke, bead: Bool, into context: CGContext) {
+        let pts = stroke.points
+        guard !pts.isEmpty else { return }
+        let color = nsColor(stroke.color)
+        if pts.count == 1 {
+            let r = CGFloat(max(0.4, stroke.baseWidth))
+            context.setFillColor(color.cgColor)
+            context.fillEllipse(in: CGRect(x: pts[0].x - r / 2, y: pts[0].y - r / 2, width: r, height: r))
+            return
         }
-        strokeVariableWidth(points, baseWidth: baseWidth, variation: widthVariation, color: nsColor(color), seed: seed, into: context)
-        if halo {
-            strokeVariableWidth(points, baseWidth: baseWidth * 0.4, variation: widthVariation, color: NSColor.white.withAlphaComponent(0.5 * opacity), seed: seed, into: context)
+        if bead {
+            strokeVariableWidth(pts, baseWidth: CGFloat(stroke.baseWidth), variation: stroke.widthVariation, color: color, seed: stroke.seed, into: context)
+            return
         }
+        let (left, right) = StrokeTessellator.ribbonBoundary(stroke)
+        guard left.count >= 2 else { return }
+        let path = CGMutablePath()
+        path.move(to: left[0])
+        for p in left.dropFirst() { path.addLine(to: p) }
+        for p in right.reversed() { path.addLine(to: p) }
+        path.closeSubpath()
+        context.addPath(path)
+        context.setFillColor(color.cgColor)
+        context.fillPath()
     }
 }

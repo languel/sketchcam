@@ -14,10 +14,9 @@ struct WrapDrawing: DrawingAlgorithm {
     func isEnabled(_ landmarks: LandmarkSettings) -> Bool { landmarks.wrapEnabled }
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
-        guard let wire = wireCurve(groups: groups, landmarks: landmarks) else { return }
-        let stroke = DrawingSupport.stroke(for: .bodyHull, landmarks: landmarks, matchColors: landmarks.wrapMatchesLandmarkColors, palette: landmarks.wrapPalette, width: landmarks.wrapWidth)
-        let seed = landmarks.wrapSeed + DrawingSupport.seedOffset(for: .bodyHull)
-        DrawingSupport.drawRibbon(wire, color: stroke.color, baseWidth: stroke.width, widthVariation: landmarks.wrapWidthVariation, halo: landmarks.wrapHalo, seed: seed, into: context)
+        for stroke in strokes(groups: groups, landmarks: landmarks) {
+            DrawingSupport.renderStroke(stroke, bead: landmarks.beadStroke, into: context)
+        }
     }
 
     func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {

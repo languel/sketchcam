@@ -11,8 +11,8 @@ struct YarnDrawing: DrawingAlgorithm {
     func isEnabled(_ landmarks: LandmarkSettings) -> Bool { landmarks.yarnEnabled }
 
     func render(groups: [MappedGroup], landmarks: LandmarkSettings, into context: CGContext) {
-        for r in ribbons(groups: groups, landmarks: landmarks) {
-            DrawingSupport.drawRibbon(r.curve, color: r.color, baseWidth: r.width, widthVariation: landmarks.yarnWidthVariation, halo: landmarks.yarnHalo, seed: r.seed, into: context)
+        for stroke in strokes(groups: groups, landmarks: landmarks) {
+            DrawingSupport.renderStroke(stroke, bead: landmarks.beadStroke, into: context)
         }
     }
 

@@ -38,18 +38,21 @@ public enum StrokeTessellator {
     /// the GPU eats tens of thousands of these without noticing.
     private static let discSegments = 10
 
-    public static func tessellate(_ strokes: [Stroke]) -> [Float] {
+    /// - ribbon: `true` (default) emits one filled triangle strip per stroke
+    ///   (two smooth miter-offset boundaries, no per-vertex discs) so
+    ///   translucent strokes blend once — no visible beads/spine. `false` is the
+    ///   legacy beads style (per-segment quads + round discs at every vertex).
+    public static func tessellate(_ strokes: [Stroke], ribbon: Bool = true) -> [Float] {
         var out: [Float] = []
-        // Rough preallocation: per point ~ 1 quad (6 verts) + 1 disc.
         let pointCount = strokes.reduce(0) { $0 + $1.points.count }
         out.reserveCapacity(pointCount * (6 + discSegments * 3) * floatsPerVertex)
         for stroke in strokes {
-            tessellate(stroke, into: &out)
+            if ribbon { appendRibbon(stroke, into: &out) } else { appendBeads(stroke, into: &out) }
         }
         return out
     }
 
-    static func tessellate(_ stroke: Stroke, into out: inout [Float]) {
+    static func appendBeads(_ stroke: Stroke, into out: inout [Float]) {
         let pts = stroke.points
         guard !pts.isEmpty else { return }
         let c = stroke.color
@@ -68,6 +71,53 @@ public enum StrokeTessellator {
         for i in 0..<pts.count {
             appendDisc(center: pts[i], radius: halfWidths[i], color: c, into: &out)
         }
+    }
+
+    /// One filled ribbon: shared miter-offset boundaries, emitted as a triangle
+    /// strip (no overlapping primitives → clean under alpha).
+    static func appendRibbon(_ stroke: Stroke, into out: inout [Float]) {
+        let pts = stroke.points
+        guard !pts.isEmpty else { return }
+        if pts.count == 1 {
+            appendDisc(center: pts[0], radius: halfWidthProfile(stroke)[0], color: stroke.color, into: &out)
+            return
+        }
+        let (left, right) = ribbonBoundary(stroke)
+        let c = stroke.color
+        for i in 0..<(pts.count - 1) {
+            appendVertex(left[i], c, &out); appendVertex(right[i], c, &out); appendVertex(left[i + 1], c, &out)
+            appendVertex(right[i], c, &out); appendVertex(right[i + 1], c, &out); appendVertex(left[i + 1], c, &out)
+        }
+    }
+
+    /// The two ribbon boundaries (left/right of the centerline) using a clamped
+    /// miter so consecutive segments share boundary vertices — no overlap, no
+    /// gaps. Shared by the GPU tessellator and the CPU fill.
+    public static func ribbonBoundary(_ stroke: Stroke) -> (left: [CGPoint], right: [CGPoint]) {
+        let pts = stroke.points
+        let n = pts.count
+        guard n >= 2 else { return ([], []) }
+        let half = halfWidthProfile(stroke)
+        func unit(_ dx: CGFloat, _ dy: CGFloat) -> (CGFloat, CGFloat) {
+            let l = max(1e-5, hypot(dx, dy)); return (dx / l, dy / l)
+        }
+        var left = [CGPoint](repeating: .zero, count: n)
+        var right = [CGPoint](repeating: .zero, count: n)
+        for i in 0..<n {
+            let (idx, idy) = i > 0 ? unit(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+                                   : unit(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+            let (odx, ody) = i < n - 1 ? unit(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+                                       : (idx, idy)
+            // Average of the two segment normals (perp = (-dy, dx)).
+            var mx = -idy + -ody, my = idx + ody
+            let ml = max(1e-5, hypot(mx, my)); mx /= ml; my /= ml
+            // Miter length compensation, clamped so sharp turns don't spike.
+            let cosA = max(0.25, mx * -ody + my * odx)
+            let off = half[i] * min(3.0, 1.0 / cosA)
+            left[i] = CGPoint(x: pts[i].x + mx * off, y: pts[i].y + my * off)
+            right[i] = CGPoint(x: pts[i].x - mx * off, y: pts[i].y - my * off)
+        }
+        return (left, right)
     }
 
     /// Per-point half-width: end-taper × seeded-noise swell (calligraphic),

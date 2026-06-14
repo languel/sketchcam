@@ -60,7 +60,7 @@ final class MetalLineRenderer {
     /// Renders `strokes` into `pixelBuffer` (must be IOSurface- + Metal-compatible
     /// BGRA). Clears to transparent first. Returns false on GPU/wrap failure.
     @discardableResult
-    func render(strokes: [StrokeTessellator.Stroke], into pixelBuffer: CVPixelBuffer) -> Bool {
+    func render(strokes: [StrokeTessellator.Stroke], ribbon: Bool = true, into pixelBuffer: CVPixelBuffer) -> Bool {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         guard width > 0, height > 0, let target = makeTexture(from: pixelBuffer, width: width, height: height) else {
@@ -79,7 +79,7 @@ final class MetalLineRenderer {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
 
-        let verts = StrokeTessellator.tessellate(strokes)
+        let verts = StrokeTessellator.tessellate(strokes, ribbon: ribbon)
         let vertexCount = verts.count / StrokeTessellator.floatsPerVertex
         if vertexCount > 0, let vertexBuffer = device.makeBuffer(bytes: verts, length: verts.count * MemoryLayout<Float>.stride, options: .storageModeShared) {
             var viewport = SIMD2<Float>(Float(width), Float(height))

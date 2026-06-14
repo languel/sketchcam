@@ -210,7 +210,7 @@ final class LandmarkOverlayCompositor {
 
         let width = Int(canvasSize.width), height = Int(canvasSize.height)
         guard width > 0, height > 0, let buffer = overlayBuffer(width: width, height: height) else { return nil }
-        guard metal.render(strokes: strokes, into: buffer) else { return nil }
+        guard metal.render(strokes: strokes, ribbon: !settings.landmarks.beadStroke, into: buffer) else { return nil }
 
         let upscale = 1 / scaleDown
         return CIImage(cvPixelBuffer: buffer)
