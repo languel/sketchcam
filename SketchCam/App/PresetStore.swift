@@ -1,18 +1,19 @@
 import Foundation
 import SketchCamCore
 
-/// A saved drawing + detection configuration: a named snapshot of the whole
-/// `LandmarkSettings` (Marks toggles, all three drawing algorithms, and the
-/// detection params).
+/// A named snapshot of the ENTIRE `ProcessingSettings` (effects, threshold,
+/// background, and the whole landmark/drawing/detection config). On recall the
+/// user chooses to apply just the render style (the `landmarks` portion) or the
+/// whole state.
 struct DrawingPreset: Codable, Identifiable {
     var id: UUID
     var name: String
-    var landmarks: LandmarkSettings
+    var settings: ProcessingSettings
 
-    init(id: UUID = UUID(), name: String, landmarks: LandmarkSettings) {
+    init(id: UUID = UUID(), name: String, settings: ProcessingSettings) {
         self.id = id
         self.name = name
-        self.landmarks = landmarks
+        self.settings = settings
     }
 }
 
@@ -21,21 +22,21 @@ struct DrawingPreset: Codable, Identifiable {
 final class PresetStore: ObservableObject {
     @Published private(set) var presets: [DrawingPreset] = []
 
-    private let key = "sketchcam.presets.v1"
+    private let key = "sketchcam.presets.v2"
     private let defaults = UserDefaults.standard
 
     init() { load() }
 
     @discardableResult
-    func save(name: String, landmarks: LandmarkSettings) -> DrawingPreset {
+    func save(name: String, settings: ProcessingSettings) -> DrawingPreset {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalName = trimmed.isEmpty ? "Preset \(presets.count + 1)" : trimmed
         if let index = presets.firstIndex(where: { $0.name.caseInsensitiveCompare(finalName) == .orderedSame }) {
-            presets[index].landmarks = landmarks
+            presets[index].settings = settings
             persist()
             return presets[index]
         }
-        let preset = DrawingPreset(name: finalName, landmarks: landmarks)
+        let preset = DrawingPreset(name: finalName, settings: settings)
         presets.append(preset)
         persist()
         return preset

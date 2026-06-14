@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PreviewMode: String, CaseIterable, Identifiable, Sendable {
+public enum PreviewMode: String, CaseIterable, Identifiable, Sendable, Codable {
     case processed
     case original
     case split
@@ -19,7 +19,7 @@ public enum PreviewMode: String, CaseIterable, Identifiable, Sendable {
 /// Resolution the effect chain runs at, independent of the published output
 /// format: the chain renders at this height and a single upscale happens at
 /// the end. Filter cost scales with area, so 540p is ~4x cheaper than 1080p.
-public enum ProcessingQuality: String, CaseIterable, Identifiable, Sendable {
+public enum ProcessingQuality: String, CaseIterable, Identifiable, Sendable, Codable {
     case full
     case balanced
     case fast
@@ -80,7 +80,7 @@ public struct DrawingPalette: Equatable, Sendable, Codable {
     public static let `default` = DrawingPalette(colors: [.ink])
 }
 
-public struct ProcessingSettings: Equatable, Sendable {
+public struct ProcessingSettings: Equatable, Sendable, Codable {
     public var threshold: Float
     public var edgeStrength: Float
     public var invert: Bool
@@ -540,7 +540,7 @@ public struct RGBAColor: Equatable, Sendable, Codable {
 /// What sits behind the composited layers. `solid`/`transparent` exist so the
 /// doodle/effects can be exported with a keyable background (or a real alpha
 /// channel) into TouchDesigner and similar tools.
-public enum BackgroundMode: String, CaseIterable, Identifiable, Sendable {
+public enum BackgroundMode: String, CaseIterable, Identifiable, Sendable, Codable {
     case live
     case solid
     case transparent
@@ -556,7 +556,7 @@ public enum BackgroundMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum SegmentationQuality: String, CaseIterable, Identifiable, Sendable {
+public enum SegmentationQuality: String, CaseIterable, Identifiable, Sendable, Codable {
     case fast
     case balanced
     case accurate
@@ -577,7 +577,7 @@ public enum SegmentationQuality: String, CaseIterable, Identifiable, Sendable {
 /// background. MediaPipe selfie segmentation has no official macOS runtime;
 /// Vision runs on the ANE and is the native equivalent.
 /// How the person matte is used.
-public enum SegmentationMode: String, CaseIterable, Identifiable, Sendable {
+public enum SegmentationMode: String, CaseIterable, Identifiable, Sendable, Codable {
     /// The matte masks the consecutive layers (video/threshold/outline):
     /// they render only inside the person, background elsewhere.
     case cutout
@@ -595,7 +595,7 @@ public enum SegmentationMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public struct SegmentationSettings: Equatable, Sendable {
+public struct SegmentationSettings: Equatable, Sendable, Codable {
     public var enabled: Bool
     public var quality: SegmentationQuality
     public var mode: SegmentationMode

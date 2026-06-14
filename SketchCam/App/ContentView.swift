@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     private enum ControlTab: String, CaseIterable, Identifiable {
-        case input = "Input"
+        case input = "Settings"
         case layers = "Layers"
         case effect = "Effect"
         case marks = "Marks"
@@ -19,7 +19,7 @@ struct ContentView: View {
 
         var icon: String {
             switch self {
-            case .input: "video"
+            case .input: "gearshape"
             case .layers: "square.3.layers.3d"
             case .effect: "wand.and.stars"
             case .marks: "point.3.connected.trianglepath.dotted"
@@ -37,6 +37,7 @@ struct ContentView: View {
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
     @State private var newPresetName = ""
+    @State private var recallWholeState = false
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
@@ -272,6 +273,12 @@ struct ContentView: View {
             }
         }
         .controlSize(.small)
+
+        SectionHeader("Rendering")
+        Toggle("GPU drawing (Metal)", isOn: $model.settings.landmarks.useMetalDrawing)
+            .help("Render the drawing strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms in Debug.")
+        Toggle("Bead stroke (legacy)", isOn: $model.settings.landmarks.beadStroke)
+            .help("Off = smooth filled ribbons (clean under transparency). On = the older per-segment quads + round discs.")
 
         SectionHeader("Camera Extension")
         HStack {
@@ -668,29 +675,41 @@ struct ContentView: View {
             Button("Save") { saveCurrentPreset() }
         }
 
+        SectionHeader("Recall")
+        Picker("Recall", selection: $recallWholeState) {
+            Text("Render style").tag(false)
+            Text("Whole state").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        Text(recallWholeState
+             ? "Loading applies the entire saved state (effects, threshold, background + drawing)."
+             : "Loading applies only the render style (Marks, Drawing algorithms, Detection).")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
         SectionHeader("Presets")
         if presetStore.presets.isEmpty {
-            Text("No presets yet — save the current drawing + detection config above.")
+            Text("No presets yet — save the current state above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
             ForEach(presetStore.presets) { preset in
                 HStack {
                     Button {
-                        model.settings.landmarks = preset.landmarks
+                        apply(preset)
                     } label: {
                         Label(preset.name, systemImage: "arrow.down.circle")
                     }
                     .buttonStyle(.borderless)
                     Spacer()
                     Button {
-                        newPresetName = preset.name
-                        presetStore.save(name: preset.name, landmarks: model.settings.landmarks)
+                        presetStore.save(name: preset.name, settings: model.settings)
                     } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
                     }
                     .buttonStyle(.borderless)
-                    .help("Overwrite this preset with the current settings.")
+                    .help("Overwrite this preset with the current state.")
                     Button {
                         presetStore.delete(preset)
                     } label: {
@@ -701,13 +720,21 @@ struct ContentView: View {
             }
         }
 
-        Text("Captures Marks, all Drawing algorithms, and Detection settings. Saved across launches.")
+        Text("A preset saves the entire state. Recall mode (above) chooses render-style-only or whole-state. Saved across launches.")
             .font(.caption)
             .foregroundStyle(.secondary)
     }
 
+    private func apply(_ preset: DrawingPreset) {
+        if recallWholeState {
+            model.settings = preset.settings
+        } else {
+            model.settings.landmarks = preset.settings.landmarks
+        }
+    }
+
     private func saveCurrentPreset() {
-        presetStore.save(name: newPresetName, landmarks: model.settings.landmarks)
+        presetStore.save(name: newPresetName, settings: model.settings)
         newPresetName = ""
     }
 
@@ -716,11 +743,6 @@ struct ContentView: View {
     @ViewBuilder private var debugTab: some View {
         DebugGrid(stats: model.stats, permission: model.cameraPermissionState.rawValue, threshold: model.settings.threshold)
 
-        SectionHeader("Experimental")
-        Toggle("GPU drawing (Metal)", isOn: $model.settings.landmarks.useMetalDrawing)
-            .help("Render the drawing strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms.")
-        Toggle("Bead stroke (legacy)", isOn: $model.settings.landmarks.beadStroke)
-            .help("Off = smooth filled ribbons (clean under transparency). On = the older per-segment quads + round discs.")
 
         if let error = model.errorText {
             Text(error)
