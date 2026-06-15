@@ -133,6 +133,9 @@ final class MetalInkEngine {
     private var lastRebuildRevision = 0
     private var fixTimer: Float = 0
     private var brushNow = SIMD3<Float>(0, 0, 0)
+    /// Destructive lift under the brush (immediate wash re-mobilizes dried ink);
+    /// 0 = additive wash. Rides in the exchange brush.w.
+    private var brushLift: Float = 0
     private var activeFramesRemaining = 0
     private var replayedPaths: [InkEditorPath] = []
     private var livePointerStates: [UUID: LivePointerState] = [:]
@@ -206,6 +209,7 @@ final class MetalInkEngine {
         lastRebuildRevision = 0
         fixTimer = 0
         brushNow = SIMD3(0, 0, 0)
+        brushLift = 0
         activeFramesRemaining = 0
         replayedPaths = []
         livePointerStates = [:]
@@ -367,6 +371,7 @@ final class MetalInkEngine {
 
     private func replay(paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard !paths.isEmpty else { return }
+        brushLift = 0   // replayed/committed wash is additive, not destructive
         for (index, path) in paths.enumerated() {
             replay(path: path, index: index, settings: settings, commandBuffer: commandBuffer)
         }
@@ -474,6 +479,7 @@ final class MetalInkEngine {
         guard let sample else {
             livePointerStates = [:]
             brushNow = SIMD3(0, 0, 0)
+            brushLift = 0
             return false
         }
         guard let ink, let wet, let velocity else { return false }
@@ -491,6 +497,11 @@ final class MetalInkEngine {
         // All cursor points captured since the last frame (dense), so fast
         // drags don't get connected by long straight segments. If none arrived
         // (cursor held still), settle/stir toward the last point.
+        // Immediate wash is destructive: it re-mobilizes dried ink under the
+        // brush so the velocity field pushes it. Pen and additive (committed)
+        // wash leave it at 0.
+        brushLift = (mode == .brush && sample.destructive) ? 0.4 : 0
+
         var targets = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
         if targets.isEmpty { targets = [SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))] }
 
@@ -665,7 +676,7 @@ final class MetalInkEngine {
         ink.swap()
 
         let settle: Float = fixing ? 1 - exp(-dt * 5) : 0
-        var exch = ExchangeParams(settle: settle, dt: dt, aspect: aspect, mode: 0, brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, 0))
+        var exch = ExchangeParams(settle: settle, dt: dt, aspect: aspect, mode: 0, brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, brushLift))
         encode(exchangePSO, textures: [fixed.read, ink.read, wet.read, fixed.write], bytes: &exch, length: MemoryLayout<ExchangeParams>.stride, grid: fixed.write, commandBuffer: commandBuffer)
         exch.mode = 1
         encode(exchangePSO, textures: [fixed.read, ink.read, wet.read, ink.write], bytes: &exch, length: MemoryLayout<ExchangeParams>.stride, grid: ink.write, commandBuffer: commandBuffer)

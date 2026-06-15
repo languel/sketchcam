@@ -55,8 +55,7 @@ struct InkExchangeParams {
     float dt;
     float aspect;
     float mode; // 0 fixed output, 1 mobile output
-    float3 brush;
-    float pad0;
+    float4 brush; // x, y, radius, lift (destructive re-mobilization amount)
 };
 
 struct InkDisplayParams {
@@ -297,8 +296,10 @@ kernel void ink_exchange(texture2d<float, access::sample> fixedIn [[texture(0)]]
         d.x *= p.aspect;
         brush = exp(-dot(d, d) / (p.brush.z * p.brush.z));
     }
-    (void)brush;
-    float lift = 0.0;
+    // A destructive (immediate) wash re-mobilizes dried (fixed) pigment under
+    // the brush back into the mobile layer, where the velocity field
+    // pushes/smears it. The lift amount rides in brush.w (0 = additive wash).
+    float lift = brush * p.brush.w;
     if (p.mode < 0.5) {
         float3 fd = F.rgb * (1.0 - lift) + M.rgb * p.settle;
         float fw = F.a * (1.0 - lift) + M.a * p.settle;

@@ -1936,16 +1936,18 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func makeSample(id: UUID, point: CGPoint, shift: Bool) -> InkLiveStrokeSample {
-        InkLiveStrokeSample(
+        let strokeMode = currentStrokeMode ?? brushMode
+        return InkLiveStrokeSample(
             id: id,
             point: point,
-            brushMode: currentStrokeMode ?? brushMode,
+            brushMode: strokeMode,
             inkKind: inkKind,
             width: width,
             flow: flow,
             brushInk: brushInk,
             color: inkRGBA,
-            smoothBoost: shift
+            smoothBoost: shift,
+            destructive: strokeMode == .brush && immediateWash
         )
     }
 

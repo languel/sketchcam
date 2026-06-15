@@ -16,6 +16,8 @@ struct InkLiveStrokeSample: Equatable {
     var color: RGBAColor
     /// Shift held → extra path smoothing this stroke.
     var smoothBoost: Bool
+    /// Immediate wash → the brush re-mobilizes & pushes dried ink (destructive).
+    var destructive: Bool
 }
 
 /// Thread-safe hand-off of the live stroke from the drawing UI (main thread) to
