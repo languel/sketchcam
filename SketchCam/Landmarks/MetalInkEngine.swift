@@ -472,6 +472,10 @@ final class MetalInkEngine {
             return false
         }
         guard let ink, let wet, let velocity else { return false }
+        // Mark this stroke baked-live as soon as it starts drawing (many frames
+        // before it commits to inkPaths), so the committed path is never
+        // replayed on top — race-free, unlike relying on the end signal.
+        bakedLiveIDs.insert(sample.id)
         let mode = sample.brushMode
         let kind = sample.inkKind
         let size = normalizedSize(sample.width)
