@@ -1704,6 +1704,12 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
     var onEnded: (Bool) -> Void
 
     func makeNSView(context: Context) -> EventView {
+        // Deliver every mouse-dragged sample. By default macOS coalesces drag
+        // events when the app is busy (and the inkwash sim makes it busier as a
+        // session runs / after the queue backs up on tab-in), so fast strokes
+        // arrive as a few far-apart points -> the smoothed path collapses to
+        // straight chords ("choppy"). Uncoalesced delivery keeps strokes dense.
+        NSEvent.isMouseCoalescingEnabled = false
         let view = EventView()
         view.onChanged = onChanged
         view.onEnded = onEnded

@@ -12,6 +12,20 @@ struct InkSplatParams {
     float4 color;
 };
 
+struct InkCapsuleParams {
+    float2 targetSize;
+    uint2 origin;
+    float aspect;
+    float edge;       // soft-edge half-width (in y-uv units)
+    float2 a;         // segment start (uv)
+    float2 b;         // segment end (uv)
+    float ra;         // half-width at a (aspect-corrected uv)
+    float rb;         // half-width at b
+    uint blendMode;   // 0 = add, 1 = max
+    float pad0;
+    float4 color;
+};
+
 struct InkCopyParams {
     float value;
 };
@@ -126,6 +140,31 @@ kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]]
     float2 d = uv - p.point;
     d.x *= p.aspect;
     float4 mark = p.color * exp(-dot(d, d) / max(p.radiusSq, 1e-7));
+    float4 old = target.read(px);
+    target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
+}
+
+// A variable-width rounded segment (capsule). Stamping ONE of these per
+// centerline step — combined with max blend — makes a stroke the smooth UNION
+// of capsules (a ribbon, like perfect-freehand's filled outline), instead of a
+// row of additive discs that bead up ("salami") when the radius wobbles.
+kernel void ink_splat_capsule(texture2d<float, access::read_write> target [[texture(0)]],
+                              constant InkCapsuleParams &p [[buffer(0)]],
+                              uint2 gid [[thread_position_in_grid]]) {
+    uint2 px = p.origin + gid;
+    if (px.x >= target.get_width() || px.y >= target.get_height()) return;
+    float2 uv = (float2(px) + 0.5) / p.targetSize;
+    float2 P = float2(uv.x * p.aspect, uv.y);
+    float2 A = float2(p.a.x * p.aspect, p.a.y);
+    float2 B = float2(p.b.x * p.aspect, p.b.y);
+    float2 ab = B - A;
+    float t = clamp(dot(P - A, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0);
+    float2 c = A + ab * t;
+    float dist = length(P - c);
+    float r = mix(p.ra, p.rb, t);
+    float mask = 1.0 - smoothstep(r - p.edge, r + p.edge, dist);
+    if (mask <= 0.0) return;
+    float4 mark = p.color * mask;
     float4 old = target.read(px);
     target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
 }
