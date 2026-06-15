@@ -212,7 +212,7 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
         let l = settings.landmarks
         let width = max(1, Int(requested.width.rounded()))
         let height = max(1, Int(requested.height.rounded()))
@@ -280,7 +280,7 @@ final class MetalInkEngine {
 
         if lastFrameIndex != frameIndex {
             let dt: Float = 1.0 / 60.0
-            let liveActive = updateLiveStroke(live, settings: settings, dt: dt, commandBuffer: commandBuffer)
+            let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
@@ -465,7 +465,7 @@ final class MetalInkEngine {
     }
 
     @discardableResult
-    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
+    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, points: [CGPoint], settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
         guard let sample else {
             livePointerStates = [:]
             brushNow = SIMD3(0, 0, 0)
@@ -482,76 +482,90 @@ final class MetalInkEngine {
         let flow = clamp01(sample.flow)
         let brushInk = clamp01(sample.brushInk)
         let color = sample.color
-        let target = SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))
+
+        // All cursor points captured since the last frame (dense), so fast
+        // drags don't get connected by long straight segments. If none arrived
+        // (cursor held still), settle/stir toward the last point.
+        var targets = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
+        if targets.isEmpty { targets = [SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))] }
+
+        // Smoothing = a low-pass on the cursor: higher = rounder/laggier, lower
+        // = tracks tighter. Shift held boosts it.
+        let smoothing = clamp01(max(settings.landmarks.inkSmoothing, sample.smoothBoost ? 0.85 : 0))
+        let followRate: Float = 6 + (1 - smoothing) * 32
+        let subDt = dt / Float(targets.count)
+        let k = 1 - exp(-subDt * followRate)
+
         var state = livePointerStates[sample.id] ?? LivePointerState(
-            bx: target.x,
-            by: target.y,
+            bx: targets[0].x,
+            by: targets[0].y,
             speed: 0,
             simPressure: 0.35,
             stirPhase: Float(sample.id.hashValue & 0x3ff) * 0.0061359
         )
-
         brushNow = SIMD3(0, 0, 0)
-        let previous = SIMD2<Float>(state.bx, state.by)
-        let k = 1 - exp(-dt * 14)
-        state.bx += (target.x - state.bx) * k
-        state.by += (target.y - state.by) * k
-        let current = SIMD2<Float>(state.bx, state.by)
-        let delta = current - previous
-        let dist = simd_length(delta)
-        let inst = dist / max(dt, 0.0001)
-        state.speed += (inst - state.speed) * (1 - exp(-dt * 10))
-        let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
-        state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-dt * 6))
-        let pressure = state.simPressure
-        let speed = state.speed
 
-        if mode == .pen {
-            let radius = penRadius(pressure: pressure, speed: speed, size: size)
-            let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
-            if dist < radius * 0.4 {
-                splat(texture: ink.read, point: current, radius: radius * 1.15, color: inkColor(kind: kind, base: color, density: density * dt * 4), blend: .add, commandBuffer: commandBuffer)
-                splat(texture: wet.read, point: current, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-            } else {
-                let spacing = radius * 0.6
-                let steps = min(max(1, Int(ceil(dist / max(spacing, 0.0008)))), 60)
-                for i in 1...steps {
-                    let t = Float(i) / Float(steps)
-                    let p = previous + delta * t
-                    splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
-                    if i % 2 == 0 || steps == 1 {
-                        splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+        for target in targets {
+            let previous = SIMD2<Float>(state.bx, state.by)
+            state.bx += (target.x - state.bx) * k
+            state.by += (target.y - state.by) * k
+            let current = SIMD2<Float>(state.bx, state.by)
+            let delta = current - previous
+            let dist = simd_length(delta)
+            let inst = dist / max(subDt, 0.0001)
+            state.speed += (inst - state.speed) * (1 - exp(-subDt * 10))
+            let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
+            state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-subDt * 6))
+            let pressure = state.simPressure
+            let speed = state.speed
+
+            if mode == .pen {
+                let radius = penRadius(pressure: pressure, speed: speed, size: size)
+                let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
+                if dist < radius * 0.4 {
+                    splat(texture: ink.read, point: current, radius: radius * 1.15, color: inkColor(kind: kind, base: color, density: density * subDt * 4), blend: .add, commandBuffer: commandBuffer)
+                    splat(texture: wet.read, point: current, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                } else {
+                    let spacing = radius * 0.6
+                    let steps = min(max(1, Int(ceil(dist / max(spacing, 0.0008)))), 60)
+                    for i in 1...steps {
+                        let t = Float(i) / Float(steps)
+                        let p = previous + delta * t
+                        splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
+                        if i % 2 == 0 || steps == 1 {
+                            splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                        }
                     }
                 }
-            }
-        } else {
-            let radius = brushRadius(pressure: pressure, speed: speed, size: size)
-            brushNow = SIMD3<Float>(current.x, current.y, radius)
-            let wetAmount = 0.5 + 0.5 * pressure
-            let force = 15 + flow * 95
-            var vel = delta / max(dt, 0.0001) * force
-            let vm = simd_length(vel)
-            if vm > 240 { vel *= 240 / vm }
-            let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
-            if dist < radius * 0.25 {
-                splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-                state.stirPhase += 2.399963
-                let stir = (6 + 26 * flow) * pressure
-                let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
-                splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
-                if loadedDensity > 0 {
-                    splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * dt * 5), blend: .add, commandBuffer: commandBuffer)
-                }
             } else {
-                let spacing = radius * 0.7
-                let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
-                for i in 1...steps {
-                    let t = Float(i) / Float(steps)
-                    let p = previous + delta * t
-                    splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-                    splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+                let radius = brushRadius(pressure: pressure, speed: speed, size: size)
+                brushNow = SIMD3<Float>(current.x, current.y, radius)
+                let wetAmount = 0.5 + 0.5 * pressure
+                let force = 15 + flow * 95
+                var vel = delta / max(subDt, 0.0001) * force
+                let vm = simd_length(vel)
+                if vm > 240 { vel *= 240 / vm }
+                let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
+                if dist < radius * 0.25 {
+                    splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                    state.stirPhase += 2.399963
+                    let stir = (6 + 26 * flow) * pressure
+                    let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
+                    splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
                     if loadedDensity > 0 {
-                        splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                        splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * subDt * 5), blend: .add, commandBuffer: commandBuffer)
+                    }
+                } else {
+                    let spacing = radius * 0.7
+                    let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
+                    for i in 1...steps {
+                        let t = Float(i) / Float(steps)
+                        let p = previous + delta * t
+                        splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                        splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+                        if loadedDensity > 0 {
+                            splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                        }
                     }
                 }
             }
@@ -767,16 +781,16 @@ extension MetalInkEngine {
             InkEditorPath(points: [CGPoint(x: 0.46, y: 0.34), CGPoint(x: 0.54, y: 0.66)], brushMode: .brush, inkKind: .black, width: 0.75, flow: 0.9, brushInk: 0.25)
         ]
         for frame in 0..<10 {
-            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, livePoints: [], endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let early = snapshot(engine.outputBuffer) else { return "ink-selftest: early snapshot FAILED" }
         for frame in 10..<70 {
-            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, livePoints: [], endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let wetMoved = snapshot(engine.outputBuffer) else { return "ink-selftest: wet snapshot FAILED" }
         settings.landmarks.inkFixRevision = 1
         for frame in 70..<130 {
-            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, livePoints: [], endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let fixed = snapshot(engine.outputBuffer) else { return "ink-selftest: fixed snapshot FAILED" }
         let blackCenter = fixed.centerLum
@@ -789,7 +803,7 @@ extension MetalInkEngine {
         ))
         settings.landmarks.inkFixRevision = 2
         for frame in 130..<180 {
-            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, livePoints: [], endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let white = snapshot(engine.outputBuffer) else { return "ink-selftest: white snapshot FAILED" }
 

@@ -503,7 +503,8 @@ final class SketchCamViewModel: ObservableObject {
                 let inkLayer = self.timings.measure(.ink) {
                     self.inkCompositor.layer(
                         settings: settings,
-                        live: liveInk.active,
+                        live: liveInk.sample,
+                        livePoints: liveInk.points,
                         endedLiveID: liveInk.ended,
                         outputSize: outputFormat.size,
                         frameIndex: frameIndex

@@ -10,7 +10,7 @@ final class InkLayerCompositor {
     private let lock = NSLock()
     private var engine: MetalInkEngine? = MetalInkEngine()
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int) -> CIImage? {
         let l = settings.landmarks
         guard l.inkEnabled else {
             return lock.withLock {
@@ -20,7 +20,7 @@ final class InkLayerCompositor {
         }
         return lock.withLock {
             if engine == nil { engine = MetalInkEngine() }
-            return engine?.layer(settings: settings, live: live, endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex)
+            return engine?.layer(settings: settings, live: live, livePoints: livePoints, endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex)
         }
     }
 }

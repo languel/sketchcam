@@ -480,6 +480,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Show the live mouse path as a thin dashed guide while drawing (the
     /// rendered ink lags behind the cursor). Off by default.
     public var inkShowLivePath: Bool
+    /// Stroke smoothing: 0 = tracks the cursor tightly, 1 = heavily smoothed
+    /// (rounder, more lag). Shift held while drawing boosts it.
+    public var inkSmoothing: Float
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -596,6 +599,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkBrushInk: Float? = 0,
         inkFixRevision: Int? = 0,
         inkShowLivePath: Bool = false,
+        inkSmoothing: Float = 0.5,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
@@ -704,6 +708,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkBrushInk = inkBrushInk
         self.inkFixRevision = inkFixRevision
         self.inkShowLivePath = inkShowLivePath
+        self.inkSmoothing = inkSmoothing
         self.useMetalDrawing = useMetalDrawing
         self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette

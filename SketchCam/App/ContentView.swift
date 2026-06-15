@@ -758,6 +758,8 @@ struct ContentView: View {
             .controlSize(.small)
             Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
                 .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
+            SliderRow(title: "Smoothing", value: floatBinding(\.landmarks.inkSmoothing),
+                      hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.")
 
             SectionHeader("Pen / Wash")
             Picker("Mode", selection: inkModeBinding) {
@@ -1668,6 +1670,7 @@ private struct InkCanvasDragValue {
     var location: CGPoint
     var startLocation: CGPoint
     var secondary: Bool
+    var shift: Bool
 }
 
 private struct InkCanvasEventOverlay: NSViewRepresentable {
@@ -1724,17 +1727,17 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
             secondaryDrag = secondary
             let point = convert(event.locationInWindow, from: nil)
             startLocation = point
-            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary))
+            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary, shift: event.modifierFlags.contains(.shift)))
         }
 
         private func update(_ event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
-            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag))
+            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift)))
         }
 
         private func finish(_ event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
-            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag))
+            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift)))
             onEnded?(true)
             startLocation = nil
             secondaryDrag = false
@@ -1834,7 +1837,7 @@ private struct InkPreviewDrawingLayer: View {
         case .draw:
             selectedPathID = nil
             selectedPointIndex = nil
-            updateLiveStroke(with: p, secondary: value.secondary)
+            updateLiveStroke(with: p, secondary: value.secondary, shift: value.shift)
         case .select:
             if dragStartPaths.isEmpty {
                 dragStartPaths = paths
@@ -1884,25 +1887,26 @@ private struct InkPreviewDrawingLayer: View {
         dragStartPoint = nil
     }
 
-    private func updateLiveStroke(with point: CGPoint, secondary: Bool) {
-        // Per move we send only the LATEST point + params to the engine (O(1));
-        // `current` still accumulates locally for the committed path + dashed
+    private func updateLiveStroke(with point: CGPoint, secondary: Bool, shift: Bool) {
+        // Per move we send the latest point + params to the engine; the channel
+        // accumulates every point so the engine injects along all of them
+        // (dense). `current` accumulates locally for the committed path + dashed
         // guide. This never touches the @Published settings struct.
         if current.isEmpty {
             let id = UUID()
             currentPathID = id
             currentStrokeMode = secondary ? .brush : brushMode
             current = [point]
-            onLive(makeSample(id: id, point: point))
+            onLive(makeSample(id: id, point: point, shift: shift))
             return
         }
-        if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0025 }) ?? true {
+        if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0015 }) ?? true {
             current.append(point)
         }
-        onLive(makeSample(id: currentPathID ?? UUID(), point: point))
+        onLive(makeSample(id: currentPathID ?? UUID(), point: point, shift: shift))
     }
 
-    private func makeSample(id: UUID, point: CGPoint) -> InkLiveStrokeSample {
+    private func makeSample(id: UUID, point: CGPoint, shift: Bool) -> InkLiveStrokeSample {
         InkLiveStrokeSample(
             id: id,
             point: point,
@@ -1911,7 +1915,8 @@ private struct InkPreviewDrawingLayer: View {
             width: width,
             flow: flow,
             brushInk: brushInk,
-            color: inkRGBA
+            color: inkRGBA,
+            smoothBoost: shift
         )
     }
 

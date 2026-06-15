@@ -2,10 +2,9 @@ import CoreGraphics
 import Foundation
 import SketchCamCore
 
-/// The minimum the ink engine needs for the in-progress stroke: the latest
-/// point plus the stroke's parameters. The engine damps toward `point` and only
-/// ever uses the latest sample, so this is O(1) per mouse move — no growing
-/// array, and (crucially) it never touches the `@Published` settings struct.
+/// One cursor sample for the in-progress stroke: the latest point plus the
+/// stroke's parameters. The channel accumulates the points across moves so the
+/// engine can inject ink along ALL of them (dense), not just the latest.
 struct InkLiveStrokeSample: Equatable {
     var id: UUID
     var point: CGPoint
@@ -15,43 +14,62 @@ struct InkLiveStrokeSample: Equatable {
     var flow: Float
     var brushInk: Float
     var color: RGBAColor
+    /// Shift held → extra path smoothing this stroke.
+    var smoothBoost: Bool
 }
 
 /// Thread-safe hand-off of the live stroke from the drawing UI (main thread) to
-/// the ink engine (processing queue). Replaces routing the live path through
-/// `ProcessingSettings`, which re-rendered the whole UI on every mouse move.
+/// the ink engine (processing queue), off the `@Published` settings path.
+/// Accumulates every cursor point between engine frames so fast drags stay
+/// dense — the engine reads ~30x/sec but the mouse moves ~60–120x/sec.
 final class InkLiveStroke {
     private let lock = NSLock()
-    private var sample: InkLiveStrokeSample?
+    private var latest: InkLiveStrokeSample?
+    private var activeID: UUID?
+    private var pending: [CGPoint] = []
     private var endedID: UUID?
 
     /// Called per mouse move while drawing.
     func update(_ s: InkLiveStrokeSample) {
-        lock.lock(); sample = s; lock.unlock()
+        lock.lock()
+        if activeID != s.id {
+            activeID = s.id
+            pending.removeAll(keepingCapacity: true)
+        }
+        latest = s
+        pending.append(s.point)
+        lock.unlock()
     }
 
     /// Called once when the stroke finishes; the engine bakes that id.
     func end() {
         lock.lock()
-        endedID = sample?.id
-        sample = nil
+        endedID = activeID
+        activeID = nil
+        latest = nil
+        pending.removeAll(keepingCapacity: true)
         lock.unlock()
     }
 
     /// Discard any in-progress stroke WITHOUT baking (clear / undo / redo).
     func cancel() {
         lock.lock()
-        sample = nil
+        activeID = nil
+        latest = nil
+        pending.removeAll(keepingCapacity: true)
         endedID = nil
         lock.unlock()
     }
 
-    /// Engine reads the active sample and consumes any just-ended id (delivered
-    /// exactly once).
-    func consume() -> (active: InkLiveStrokeSample?, ended: UUID?) {
+    /// Engine reads the active sample (params), all points captured this frame
+    /// (cleared), and any just-ended id (delivered once).
+    func consume() -> (sample: InkLiveStrokeSample?, points: [CGPoint], ended: UUID?) {
         lock.lock(); defer { lock.unlock() }
         let e = endedID
         endedID = nil
-        return (sample, e)
+        guard let latest else { return (nil, [], e) }
+        let pts = pending
+        pending.removeAll(keepingCapacity: true)
+        return (latest, pts, e)
     }
 }
