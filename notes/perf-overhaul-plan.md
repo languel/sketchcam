@@ -317,3 +317,50 @@ Detection is OFF the hot path — it doesn't lower FPS, only caps the rate.
 
 REMAINING / DEFERRED: wire Metal *effects* live (drop CoreImage); wrap spine bias;
 trim the yarn-weave perturbation cost; starter presets.
+
+## Inkwash perf + interaction overhaul (branch perf/inkwash, off metal-ink)
+
+The Metal fluid inkwash was beautiful but sluggish. The perf overlay showed
+~1ms "Ink" while drawing felt far heavier — the real cost was on the MAIN thread
+(UI), invisible to the processing-queue timings.
+
+- **Perf overlay attribution**: added a `.ink` PipelineStage and wrapped
+  `inkCompositor.layer()` in `timings.measure(.ink)` (it was unmeasured between
+  the overlay record and the process block, leaking only into "Frame total").
+- **Main-thread decoupling (biggest win)**: the live stroke routed through
+  `settings.landmarks.inkLivePath` on every mouse move → deep-copied the giant
+  `@Published settings` and re-evaluated the whole ContentView body at 60–120Hz,
+  growing O(n^2). Replaced with a lock-guarded `InkLiveStroke` channel
+  (`SketchCam/Landmarks/InkLiveStroke.swift`) the engine reads off the settings
+  path. Removed `inkLivePath` from `ProcessingSettings`. (This is why fewer
+  paths in the buffer feels faster too — the buffer no longer rides @Published.)
+- **Static accumulated layer**: removed `curveFit` from the engine RebuildKey so
+  switching curve/params no longer wipes + re-simulates. Finished strokes bake
+  into the persistent `fixed` texture and are never replayed (`bakedLiveIDs`,
+  marked at stroke START to avoid a frame-timing double-mark).
+- **Idle short-circuit**: `MetalInkEngine.layer()` reuses a cached CIImage (no
+  GPU commit/wait) when nothing is evolving and no display input changed → idle
+  Ink ~0ms; the sync wait only happens while ink is actively evolving.
+- **Dense live sampling + smoothing**: the channel accumulates EVERY cursor
+  point between frames (the engine read only the latest/frame → jagged on fast
+  drags); injection walks all of them. `inkSmoothing` (+ Shift boost) is a
+  low-pass follow on the cursor; subdivided per queued point so the amount is
+  speed-independent.
+- **Editor UX**: live cursor path is a thin dashed guide, toggleable, default
+  off; the side sketchpad uses the paper color; Rerender button forces a full
+  re-simulation (`inkRebuildRevision`); Clear always wipes (incl. immediate
+  marks).
+- **Immediate mode (pen/wash, separate toggles)**: paints straight onto the
+  canvas (the live bake) without adding an editable path — experiment without
+  filling the buffer. Immediate marks aren't selectable/editable/re-rendered.
+- **Destructive immediate wash**: the `ink_exchange` kernel had a disabled
+  `lift` (brush falloff computed then `(void)`'d, lift=0). Enabled it for
+  immediate wash only — the wet brush re-mobilizes dried `fixed` pigment into
+  the mobile layer where the velocity field pushes/smears it. Lift rides in the
+  exchange brush.w (struct → float4); committed/replayed wash stays additive.
+
+KNOWN ISSUE (next): the smear is slow to start — a single fast pass barely
+moves ink; you have to "rub" until lift accumulates. Likely the gradual lift
+rate + velocity dissipation/scale. Plan: a wash Strength slider and/or a
+"charge" mechanic (hold-before-drag builds power). Also: tldraw-style path
+smoothing slider for committed pen paths.
