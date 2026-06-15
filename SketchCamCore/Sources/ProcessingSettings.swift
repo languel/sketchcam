@@ -460,9 +460,6 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
     public var inkPaths: [InkEditorPath]
-    /// Transient in-progress stroke. The Metal ink engine consumes this as a
-    /// live local input without adding it to the replayable editor history.
-    public var inkLivePath: InkEditorPath?
     public var inkColor: RGBAColor
     public var inkWidth: Float
     public var inkFlow: Float
@@ -480,6 +477,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Incremented by the UI to ask the Metal ink engine to settle mobile
     /// pigment into the fixed paper layer without clearing the painting.
     public var inkFixRevision: Int?
+    /// Show the live mouse path as a thin dashed guide while drawing (the
+    /// rendered ink lags behind the cursor). Off by default.
+    public var inkShowLivePath: Bool
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -580,7 +580,6 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
         inkPaths: [InkEditorPath] = [],
-        inkLivePath: InkEditorPath? = nil,
         inkColor: RGBAColor = .ink,
         inkWidth: Float = 0.5,
         inkFlow: Float = 0.9,
@@ -596,6 +595,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkColorSeparation: Float? = 0.5,
         inkBrushInk: Float? = 0,
         inkFixRevision: Int? = 0,
+        inkShowLivePath: Bool = false,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
@@ -688,7 +688,6 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
         self.inkPaths = inkPaths
-        self.inkLivePath = inkLivePath
         self.inkColor = inkColor
         self.inkWidth = inkWidth
         self.inkFlow = inkFlow
@@ -704,6 +703,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkColorSeparation = inkColorSeparation
         self.inkBrushInk = inkBrushInk
         self.inkFixRevision = inkFixRevision
+        self.inkShowLivePath = inkShowLivePath
         self.useMetalDrawing = useMetalDrawing
         self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette

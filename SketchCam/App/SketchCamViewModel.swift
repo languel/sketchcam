@@ -83,6 +83,9 @@ final class SketchCamViewModel: ObservableObject {
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
+    /// Live in-progress ink stroke, handed to the engine off the @Published
+    /// settings path so drawing doesn't re-render the whole UI per mouse move.
+    let inkLiveStroke = InkLiveStroke()
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
@@ -234,6 +237,12 @@ final class SketchCamViewModel: ObservableObject {
             originalPixelBuffer: effective
         )
     }
+
+    // MARK: - Ink live stroke (main thread → engine, off the settings path)
+
+    func updateInkLiveStroke(_ sample: InkLiveStrokeSample) { inkLiveStroke.update(sample) }
+    func endInkLiveStroke() { inkLiveStroke.end() }
+    func cancelInkLiveStroke() { inkLiveStroke.cancel() }
 
     // MARK: - Web layer controls (main thread)
 
@@ -490,9 +499,12 @@ final class SketchCamViewModel: ObservableObject {
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
                 // up buried in "Frame total".
+                let liveInk = self.inkLiveStroke.consume()
                 let inkLayer = self.timings.measure(.ink) {
                     self.inkCompositor.layer(
                         settings: settings,
+                        live: liveInk.active,
+                        endedLiveID: liveInk.ended,
                         outputSize: outputFormat.size,
                         frameIndex: frameIndex
                     )

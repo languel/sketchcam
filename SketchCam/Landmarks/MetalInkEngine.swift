@@ -15,7 +15,15 @@ final class MetalInkEngine {
     private struct RebuildKey: Equatable {
         var outputWidth: Int
         var outputHeight: Int
-        var curveFit: CurveFit
+    }
+
+    /// Display-affecting settings; when unchanged (and the sim is idle) the
+    /// engine reuses the cached image instead of re-rendering.
+    private struct RenderSignature: Equatable {
+        var paperOn: Bool
+        var grain: Float
+        var opacity: Float
+        var colorSep: Float
     }
 
     private struct LivePointerState {
@@ -127,7 +135,12 @@ final class MetalInkEngine {
     private var activeFramesRemaining = 0
     private var replayedPaths: [InkEditorPath] = []
     private var livePointerStates: [UUID: LivePointerState] = [:]
-    private var liveInjectedPointCounts: [UUID: Int] = [:]
+    /// Strokes whose ink was injected live (already on the canvas); the
+    /// committed path with the same id must NOT be replayed (avoids the double
+    /// mark). Cleared on full rebuild/replay.
+    private var bakedLiveIDs: Set<UUID> = []
+    private var lastRenderSig: RenderSignature?
+    private var cachedImage: CIImage?
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -194,40 +207,72 @@ final class MetalInkEngine {
         activeFramesRemaining = 0
         replayedPaths = []
         livePointerStates = [:]
-        liveInjectedPointCounts = [:]
+        bakedLiveIDs = []
+        lastRenderSig = nil
+        cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
         let l = settings.landmarks
         let width = max(1, Int(requested.width.rounded()))
         let height = max(1, Int(requested.height.rounded()))
         let replayablePaths = l.inkPaths.filter { $0.points.count > 1 }
-        let livePath = (l.inkLivePath?.points.isEmpty == false) ? l.inkLivePath : nil
-        guard l.inkPaperEnabled || !replayablePaths.isEmpty || livePath != nil else { return nil }
-        guard let commandBuffer = queue.makeCommandBuffer() else { return nil }
 
-        let key = RebuildKey(
-            outputWidth: width,
-            outputHeight: height,
-            curveFit: l.inkCurveFit
+        let key = RebuildKey(outputWidth: width, outputHeight: height)
+        let needRebuild = key != rebuildKey || outputBuffer == nil
+        let pathsChanged = replayablePaths != replayedPaths
+        let fixRevision = l.inkFixRevision ?? 0
+        let fixRequested = fixRevision != lastFixRevision
+        let renderSig = RenderSignature(
+            paperOn: l.inkPaperEnabled,
+            grain: clamp01(l.inkPaperGrain),
+            opacity: clamp01(l.inkOpacity),
+            colorSep: clamp01(l.inkColorSeparation ?? 0.5)
         )
+        let sigChanged = renderSig != lastRenderSig
+        let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil
 
-        if key != rebuildKey || outputBuffer == nil {
-            guard configure(width: width, height: height) else { return nil }
+        // Nothing to draw at all → blank.
+        if !l.inkPaperEnabled, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
+            cachedImage = nil
+            return nil
+        }
+        // Idle and already rendered → reuse the cached image (no GPU work, no
+        // synchronous wait). This is the steady state once ink has dried.
+        if !needRebuild, !pathsChanged, !fixRequested, !sigChanged, !evolving, let cachedImage {
+            return cachedImage
+        }
+
+        guard let commandBuffer = queue.makeCommandBuffer() else { return cachedImage }
+
+        // A finished stroke's wet ink is already on the canvas (drawn live). On
+        // a reconcile (not a full rebuild) mark it baked BEFORE reconciling so
+        // the committed path with the same id is skipped — avoids the double
+        // mark. On a full rebuild the path is redrawn by replay instead.
+        if let endedLiveID, !needRebuild {
+            bakedLiveIDs.insert(endedLiveID)
+        }
+
+        if needRebuild {
+            guard configure(width: width, height: height) else { return cachedImage }
             clearAll(commandBuffer)
+            bakedLiveIDs = []
             replay(paths: replayablePaths, settings: settings, commandBuffer: commandBuffer)
             replayedPaths = replayablePaths
             livePointerStates = [:]
-            liveInjectedPointCounts = [:]
             rebuildKey = key
             lastFrameIndex = nil
             activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
-        } else {
+        } else if pathsChanged {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
         }
 
-        let fixRevision = l.inkFixRevision ?? 0
-        if fixRevision != lastFixRevision {
+        // Dry the just-finished stroke into the fixed paper layer.
+        if endedLiveID != nil {
+            fixTimer = max(fixTimer, 1.2)
+            activeFramesRemaining = max(activeFramesRemaining, 90)
+        }
+        if fixRequested {
             fixTimer = 1.2
             lastFixRevision = fixRevision
             activeFramesRemaining = max(activeFramesRemaining, 90)
@@ -235,7 +280,7 @@ final class MetalInkEngine {
 
         if lastFrameIndex != frameIndex {
             let dt: Float = 1.0 / 60.0
-            let liveActive = updateLiveStroke(livePath, settings: settings, dt: dt, commandBuffer: commandBuffer)
+            let liveActive = updateLiveStroke(live, settings: settings, dt: dt, commandBuffer: commandBuffer)
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
@@ -248,9 +293,12 @@ final class MetalInkEngine {
         render(settings: settings, commandBuffer: commandBuffer)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        lastRenderSig = renderSig
 
         guard let outputBuffer else { return nil }
-        return CIImage(cvPixelBuffer: outputBuffer).cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+        let image = CIImage(cvPixelBuffer: outputBuffer).cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+        cachedImage = image
+        return image
     }
 
     private func configure(width: Int, height: Int) -> Bool {
@@ -327,20 +375,20 @@ final class MetalInkEngine {
         if replayedPaths.isEmpty || isAppendOnly(previous: replayedPaths, next: paths) {
             let appended = paths.dropFirst(replayedPaths.count)
             for path in appended where path.points.count > 1 {
-                let liveCount = liveInjectedPointCounts[path.id] ?? 0
-                if liveCount < path.points.count {
-                    replay(path: path, index: replayedPaths.count, settings: settings, commandBuffer: commandBuffer)
-                    activeFramesRemaining = max(activeFramesRemaining, 90)
-                }
+                // Skip strokes already drawn live (baked) — replaying would
+                // double the mark. Replay only programmatic / loaded paths.
+                if bakedLiveIDs.contains(path.id) { continue }
+                replay(path: path, index: replayedPaths.count, settings: settings, commandBuffer: commandBuffer)
+                activeFramesRemaining = max(activeFramesRemaining, 90)
             }
             replayedPaths = paths
             return
         }
         clearAll(commandBuffer)
+        bakedLiveIDs = []
         replay(paths: paths, settings: settings, commandBuffer: commandBuffer)
         replayedPaths = paths
         livePointerStates = [:]
-        liveInjectedPointCounts = [:]
         activeFramesRemaining = paths.isEmpty ? 0 : 180
     }
 
@@ -417,26 +465,26 @@ final class MetalInkEngine {
     }
 
     @discardableResult
-    private func updateLiveStroke(_ path: InkEditorPath?, settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
-        guard let path, let targetPoint = path.points.last else {
+    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let sample else {
             livePointerStates = [:]
             brushNow = SIMD3(0, 0, 0)
             return false
         }
         guard let ink, let wet, let velocity else { return false }
-        let mode = path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen
-        let kind = path.inkKind ?? settings.landmarks.inkKind ?? .black
-        let size = normalizedSize(path.width ?? settings.landmarks.inkWidth)
-        let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
-        let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
-        let color = path.color ?? settings.landmarks.inkColor
-        let target = SIMD2<Float>(Float(targetPoint.x), Float(targetPoint.y))
-        var state = livePointerStates[path.id] ?? LivePointerState(
+        let mode = sample.brushMode
+        let kind = sample.inkKind
+        let size = normalizedSize(sample.width)
+        let flow = clamp01(sample.flow)
+        let brushInk = clamp01(sample.brushInk)
+        let color = sample.color
+        let target = SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))
+        var state = livePointerStates[sample.id] ?? LivePointerState(
             bx: target.x,
             by: target.y,
             speed: 0,
             simPressure: 0.35,
-            stirPhase: Float(path.id.hashValue & 0x3ff) * 0.0061359
+            stirPhase: Float(sample.id.hashValue & 0x3ff) * 0.0061359
         )
 
         brushNow = SIMD3(0, 0, 0)
@@ -505,8 +553,7 @@ final class MetalInkEngine {
             }
         }
 
-        livePointerStates = [path.id: state]
-        liveInjectedPointCounts[path.id] = max(liveInjectedPointCounts[path.id] ?? 0, path.points.count)
+        livePointerStates = [sample.id: state]
         return true
     }
 
@@ -716,16 +763,16 @@ extension MetalInkEngine {
             InkEditorPath(points: [CGPoint(x: 0.46, y: 0.34), CGPoint(x: 0.54, y: 0.66)], brushMode: .brush, inkKind: .black, width: 0.75, flow: 0.9, brushInk: 0.25)
         ]
         for frame in 0..<10 {
-            _ = engine.layer(settings: settings, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let early = snapshot(engine.outputBuffer) else { return "ink-selftest: early snapshot FAILED" }
         for frame in 10..<70 {
-            _ = engine.layer(settings: settings, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let wetMoved = snapshot(engine.outputBuffer) else { return "ink-selftest: wet snapshot FAILED" }
         settings.landmarks.inkFixRevision = 1
         for frame in 70..<130 {
-            _ = engine.layer(settings: settings, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let fixed = snapshot(engine.outputBuffer) else { return "ink-selftest: fixed snapshot FAILED" }
         let blackCenter = fixed.centerLum
@@ -738,7 +785,7 @@ extension MetalInkEngine {
         ))
         settings.landmarks.inkFixRevision = 2
         for frame in 130..<180 {
-            _ = engine.layer(settings: settings, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
+            _ = engine.layer(settings: settings, live: nil, endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
         }
         guard let white = snapshot(engine.outputBuffer) else { return "ink-selftest: white snapshot FAILED" }
 

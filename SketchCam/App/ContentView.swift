@@ -152,7 +152,9 @@ struct ContentView: View {
                 if tab == .ink, model.settings.landmarks.inkEnabled {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
-                        livePath: inkLivePathBinding,
+                        showLivePath: model.settings.landmarks.inkShowLivePath,
+                        onLive: { model.updateInkLiveStroke($0) },
+                        onLiveEnd: { model.endInkLiveStroke() },
                         outputSize: model.outputFormat.size,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -721,6 +723,7 @@ struct ContentView: View {
             .labelsHidden()
             InkEditorCanvas(
                 paths: inkPathsBinding,
+                paperColor: rgbaColor(model.settings.landmarks.inkPaperColor),
                 inkColor: rgbaColor(model.settings.landmarks.inkColor),
                 inkRGBA: model.settings.landmarks.inkColor,
                 brushMode: currentInkMode,
@@ -753,6 +756,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             .controlSize(.small)
+            Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
+                .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
 
             SectionHeader("Pen / Wash")
             Picker("Mode", selection: inkModeBinding) {
@@ -787,7 +792,7 @@ struct ContentView: View {
     }
 
     private func deleteSelectedInk() {
-        model.settings.landmarks.inkLivePath = nil
+        model.cancelInkLiveStroke()
         guard let selectedInkPathID,
               let pathIndex = model.settings.landmarks.inkPaths.firstIndex(where: { $0.id == selectedInkPathID }) else { return }
         var next = model.settings.landmarks.inkPaths
@@ -811,7 +816,7 @@ struct ContentView: View {
     }
 
     private func clearInk() {
-        model.settings.landmarks.inkLivePath = nil
+        model.cancelInkLiveStroke()
         setInkPaths([])
         clearInkSelection()
     }
@@ -830,7 +835,7 @@ struct ContentView: View {
 
     private func undoInk() {
         guard let previous = inkUndoStack.popLast() else { return }
-        model.settings.landmarks.inkLivePath = nil
+        model.cancelInkLiveStroke()
         inkRedoStack.append(model.settings.landmarks.inkPaths)
         model.settings.landmarks.inkPaths = previous
         clearInkSelection()
@@ -838,14 +843,14 @@ struct ContentView: View {
 
     private func redoInk() {
         guard let next = inkRedoStack.popLast() else { return }
-        model.settings.landmarks.inkLivePath = nil
+        model.cancelInkLiveStroke()
         inkUndoStack.append(model.settings.landmarks.inkPaths)
         model.settings.landmarks.inkPaths = next
         clearInkSelection()
     }
 
     private func setInkPaths(_ paths: [InkEditorPath]) {
-        model.settings.landmarks.inkLivePath = nil
+        model.cancelInkLiveStroke()
         let old = model.settings.landmarks.inkPaths
         guard old != paths else { return }
         inkUndoStack.append(old)
@@ -868,13 +873,6 @@ struct ContentView: View {
         Binding(
             get: { model.settings.landmarks.inkPaths },
             set: { setInkPaths($0) }
-        )
-    }
-
-    private var inkLivePathBinding: Binding<InkEditorPath?> {
-        Binding(
-            get: { model.settings.landmarks.inkLivePath },
-            set: { model.settings.landmarks.inkLivePath = $0 }
         )
     }
 
@@ -1567,6 +1565,7 @@ private struct StyleRow: View {
 
 private struct InkEditorCanvas: View {
     @Binding var paths: [InkEditorPath]
+    let paperColor: Color
     let inkColor: Color
     let inkRGBA: RGBAColor
     let brushMode: InkBrushMode
@@ -1582,7 +1581,7 @@ private struct InkEditorCanvas: View {
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(nsColor: .textBackgroundColor)))
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(paperColor))
                 drawGrid(in: &context, size: size)
                 for path in paths {
                     draw(points: path.points, size: size, context: &context, color: inkColor.opacity(0.72), width: 2.2)
@@ -1745,7 +1744,9 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
 
 private struct InkPreviewDrawingLayer: View {
     @Binding var paths: [InkEditorPath]
-    @Binding var livePath: InkEditorPath?
+    let showLivePath: Bool
+    let onLive: (InkLiveStrokeSample) -> Void
+    let onLiveEnd: () -> Void
     let outputSize: CGSize
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -1789,9 +1790,11 @@ private struct InkPreviewDrawingLayer: View {
                         }
                     }
                 }
-                if (currentStrokeMode ?? brushMode) == .pen {
+                // Thin dashed guide for the live cursor path (the rendered ink
+                // lags behind). Off by default — the engine's mark is the truth.
+                if showLivePath, !current.isEmpty {
                     strokedPath(current, in: rect)
-                        .stroke(inkColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                        .stroke(inkColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round, dash: [4, 4]))
                 }
                 InkCanvasEventOverlay(
                     onChanged: { value in
@@ -1873,7 +1876,7 @@ private struct InkPreviewDrawingLayer: View {
                 color: inkRGBA
             ))
         }
-        livePath = nil
+        onLiveEnd()
         current = []
         currentPathID = nil
         currentStrokeMode = nil
@@ -1882,33 +1885,31 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func updateLiveStroke(with point: CGPoint, secondary: Bool) {
+        // Per move we send only the LATEST point + params to the engine (O(1));
+        // `current` still accumulates locally for the committed path + dashed
+        // guide. This never touches the @Published settings struct.
         if current.isEmpty {
             let id = UUID()
             currentPathID = id
             currentStrokeMode = secondary ? .brush : brushMode
             current = [point]
-            livePath = makeCurrentPath(id: id, points: current)
+            onLive(makeSample(id: id, point: point))
             return
         }
         if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0025 }) ?? true {
             current.append(point)
-            livePath = makeCurrentPath(id: currentPathID ?? UUID(), points: current)
-        } else if let currentPathID {
-            livePath = makeCurrentPath(id: currentPathID, points: current)
         }
+        onLive(makeSample(id: currentPathID ?? UUID(), point: point))
     }
 
-    private func makeCurrentPath(id: UUID, points: [CGPoint]) -> InkEditorPath {
-        InkEditorPath(
+    private func makeSample(id: UUID, point: CGPoint) -> InkLiveStrokeSample {
+        InkLiveStrokeSample(
             id: id,
-            points: points,
+            point: point,
             brushMode: currentStrokeMode ?? brushMode,
             inkKind: inkKind,
             width: width,
             flow: flow,
-            bleed: bleed,
-            dry: dry,
-            colorSeparation: colorSeparation,
             brushInk: brushInk,
             color: inkRGBA
         )

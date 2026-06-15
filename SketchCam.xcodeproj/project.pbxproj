@@ -25,6 +25,7 @@
 		55B7B7BC977F976FD6E95357 /* WindowModeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */; };
 		57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */; };
 		57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177F3E230DF6259E3ECAE346 /* BodyHull.swift */; };
+		580729A8AFF47997B30CF672 /* InkLiveStroke.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */; };
 		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
 		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
 		6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */; };
@@ -203,6 +204,7 @@
 		EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugStats.swift; sourceTree = "<group>"; };
 		ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineStateStore.swift; sourceTree = "<group>"; };
 		F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestFrameStore.swift; sourceTree = "<group>"; };
+		F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkLiveStroke.swift; sourceTree = "<group>"; };
 		F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WrapDrawing.swift; sourceTree = "<group>"; };
 		FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellatorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -431,6 +433,7 @@
 			isa = PBXGroup;
 			children = (
 				ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */,
+				F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */,
 				C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */,
 				B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */,
 				8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */,
@@ -676,6 +679,7 @@
 				96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */,
 				1500E048F480965F58132374 /* ExtensionActivationManager.swift in Sources */,
 				272C963F431C2E68DC7B75C6 /* InkLayerCompositor.swift in Sources */,
+				580729A8AFF47997B30CF672 /* InkLiveStroke.swift in Sources */,
 				9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */,
 				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
 				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,
