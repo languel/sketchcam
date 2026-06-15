@@ -18,6 +18,8 @@ struct InkLiveStrokeSample: Equatable {
     var smoothBoost: Bool
     /// Immediate wash → the brush re-mobilizes & pushes dried ink (destructive).
     var destructive: Bool
+    /// 0…1 "charge" from holding before dragging — multiplies destructive force.
+    var charge: Float
 }
 
 /// Thread-safe hand-off of the live stroke from the drawing UI (main thread) to

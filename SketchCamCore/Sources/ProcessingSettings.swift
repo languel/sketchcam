@@ -491,6 +491,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// and wash so each can be toggled.
     public var inkImmediatePen: Bool
     public var inkImmediateWash: Bool
+    /// Destructive (immediate) wash strength: how aggressively the wet brush
+    /// re-mobilizes and pushes dried ink. A "charge" (hold before dragging)
+    /// multiplies it further.
+    public var inkSmearStrength: Float
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -611,6 +615,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkRebuildRevision: Int = 0,
         inkImmediatePen: Bool = false,
         inkImmediateWash: Bool = false,
+        inkSmearStrength: Float = 0.5,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
@@ -723,6 +728,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkRebuildRevision = inkRebuildRevision
         self.inkImmediatePen = inkImmediatePen
         self.inkImmediateWash = inkImmediateWash
+        self.inkSmearStrength = inkSmearStrength
         self.useMetalDrawing = useMetalDrawing
         self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette

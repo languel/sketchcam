@@ -780,6 +780,8 @@ struct ContentView: View {
                 Toggle("Immediate wash", isOn: $model.settings.landmarks.inkImmediateWash)
             }
             .help("Immediate mode paints straight onto the canvas without adding an editable path — good for experimenting without filling the path buffer. These marks aren't selectable, editable, or re-rendered.")
+            SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength),
+                      hint: "Immediate-wash push strength — how aggressively the wet brush re-mobilizes and drags dried ink. Hold the mouse still before dragging to 'charge' an extra-strong push.")
             Picker("Ink", selection: inkKindBinding) {
                 ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
             }
@@ -1694,6 +1696,7 @@ private struct InkCanvasDragValue {
     var startLocation: CGPoint
     var secondary: Bool
     var shift: Bool
+    var charge: Float
 }
 
 private struct InkCanvasEventOverlay: NSViewRepresentable {
@@ -1717,6 +1720,9 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         var onEnded: ((Bool) -> Void)?
         private var startLocation: CGPoint?
         private var secondaryDrag = false
+        private var downTimestamp: TimeInterval = 0
+        private var dragCharge: Float = 0
+        private var chargeLocked = false
 
         override var isFlipped: Bool { true }
 
@@ -1750,20 +1756,32 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
             secondaryDrag = secondary
             let point = convert(event.locationInWindow, from: nil)
             startLocation = point
-            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary, shift: event.modifierFlags.contains(.shift)))
+            downTimestamp = event.timestamp
+            dragCharge = 0
+            chargeLocked = false
+            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary, shift: event.modifierFlags.contains(.shift), charge: 0))
         }
 
         private func update(_ event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
-            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift)))
+            let start = startLocation ?? point
+            // Charge = how long the button was held before the drag actually
+            // started moving (a "heavy weapon" wind-up). Locked once moving.
+            if !chargeLocked, hypot(point.x - start.x, point.y - start.y) > 4 {
+                dragCharge = Float(min(1.2, max(0, event.timestamp - downTimestamp)) / 1.2)
+                chargeLocked = true
+            }
+            onChanged?(InkCanvasDragValue(location: point, startLocation: start, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift), charge: dragCharge))
         }
 
         private func finish(_ event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
-            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift)))
+            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift), charge: dragCharge))
             onEnded?(true)
             startLocation = nil
             secondaryDrag = false
+            chargeLocked = false
+            dragCharge = 0
         }
     }
 }
@@ -1862,7 +1880,7 @@ private struct InkPreviewDrawingLayer: View {
         case .draw:
             selectedPathID = nil
             selectedPointIndex = nil
-            updateLiveStroke(with: p, secondary: value.secondary, shift: value.shift)
+            updateLiveStroke(with: p, secondary: value.secondary, shift: value.shift, charge: value.charge)
         case .select:
             if dragStartPaths.isEmpty {
                 dragStartPaths = paths
@@ -1916,7 +1934,7 @@ private struct InkPreviewDrawingLayer: View {
         dragStartPoint = nil
     }
 
-    private func updateLiveStroke(with point: CGPoint, secondary: Bool, shift: Bool) {
+    private func updateLiveStroke(with point: CGPoint, secondary: Bool, shift: Bool, charge: Float) {
         // Per move we send the latest point + params to the engine; the channel
         // accumulates every point so the engine injects along all of them
         // (dense). `current` accumulates locally for the committed path + dashed
@@ -1926,16 +1944,16 @@ private struct InkPreviewDrawingLayer: View {
             currentPathID = id
             currentStrokeMode = secondary ? .brush : brushMode
             current = [point]
-            onLive(makeSample(id: id, point: point, shift: shift))
+            onLive(makeSample(id: id, point: point, shift: shift, charge: charge))
             return
         }
         if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0015 }) ?? true {
             current.append(point)
         }
-        onLive(makeSample(id: currentPathID ?? UUID(), point: point, shift: shift))
+        onLive(makeSample(id: currentPathID ?? UUID(), point: point, shift: shift, charge: charge))
     }
 
-    private func makeSample(id: UUID, point: CGPoint, shift: Bool) -> InkLiveStrokeSample {
+    private func makeSample(id: UUID, point: CGPoint, shift: Bool, charge: Float) -> InkLiveStrokeSample {
         let strokeMode = currentStrokeMode ?? brushMode
         return InkLiveStrokeSample(
             id: id,
@@ -1947,7 +1965,8 @@ private struct InkPreviewDrawingLayer: View {
             brushInk: brushInk,
             color: inkRGBA,
             smoothBoost: shift,
-            destructive: strokeMode == .brush && immediateWash
+            destructive: strokeMode == .brush && immediateWash,
+            charge: charge
         )
     }
 

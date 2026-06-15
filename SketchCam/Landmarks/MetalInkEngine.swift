@@ -499,8 +499,15 @@ final class MetalInkEngine {
         // (cursor held still), settle/stir toward the last point.
         // Immediate wash is destructive: it re-mobilizes dried ink under the
         // brush so the velocity field pushes it. Pen and additive (committed)
-        // wash leave it at 0.
-        brushLift = (mode == .brush && sample.destructive) ? 0.4 : 0
+        // wash leave it at 0. Strength (slider) + charge (hold-before-drag)
+        // scale how much lifts per frame and how hard it's pushed — so a normal
+        // drag moves ink without rubbing, and a charged drag hits hard.
+        let destructiveWash = mode == .brush && sample.destructive
+        let smear = clamp01(settings.landmarks.inkSmearStrength)
+        let chargeMul: Float = 1 + clamp01(sample.charge) * 2
+        brushLift = destructiveWash ? min(1.0, (0.45 + 0.55 * smear) * chargeMul) : 0
+        let forceBoost: Float = destructiveWash ? (1 + smear * 1.5) * chargeMul : 1
+        let velCap: Float = destructiveWash ? 240 * chargeMul : 240
 
         var targets = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
         if targets.isEmpty { targets = [SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))] }
@@ -557,10 +564,10 @@ final class MetalInkEngine {
                 let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
-                let force = 15 + flow * 95
+                let force = (15 + flow * 95) * forceBoost
                 var vel = delta / max(subDt, 0.0001) * force
                 let vm = simd_length(vel)
-                if vm > 240 { vel *= 240 / vm }
+                if vm > velCap { vel *= velCap / vm }
                 let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
                 if dist < radius * 0.25 {
                     splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
