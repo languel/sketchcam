@@ -127,6 +127,7 @@ struct ContentView: View {
                 if tab == .ink, model.settings.landmarks.inkEnabled {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
+                        livePath: inkLivePathBinding,
                         outputSize: model.outputFormat.size,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -719,7 +720,7 @@ struct ContentView: View {
             }
             .controlSize(.small)
 
-            SectionHeader("Brush")
+            SectionHeader("Pen / Wash")
             Picker("Mode", selection: inkModeBinding) {
                 ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
@@ -752,6 +753,7 @@ struct ContentView: View {
     }
 
     private func deleteSelectedInk() {
+        model.settings.landmarks.inkLivePath = nil
         guard let selectedInkPathID,
               let pathIndex = model.settings.landmarks.inkPaths.firstIndex(where: { $0.id == selectedInkPathID }) else { return }
         var next = model.settings.landmarks.inkPaths
@@ -775,6 +777,7 @@ struct ContentView: View {
     }
 
     private func clearInk() {
+        model.settings.landmarks.inkLivePath = nil
         setInkPaths([])
         clearInkSelection()
     }
@@ -793,6 +796,7 @@ struct ContentView: View {
 
     private func undoInk() {
         guard let previous = inkUndoStack.popLast() else { return }
+        model.settings.landmarks.inkLivePath = nil
         inkRedoStack.append(model.settings.landmarks.inkPaths)
         model.settings.landmarks.inkPaths = previous
         clearInkSelection()
@@ -800,12 +804,14 @@ struct ContentView: View {
 
     private func redoInk() {
         guard let next = inkRedoStack.popLast() else { return }
+        model.settings.landmarks.inkLivePath = nil
         inkUndoStack.append(model.settings.landmarks.inkPaths)
         model.settings.landmarks.inkPaths = next
         clearInkSelection()
     }
 
     private func setInkPaths(_ paths: [InkEditorPath]) {
+        model.settings.landmarks.inkLivePath = nil
         let old = model.settings.landmarks.inkPaths
         guard old != paths else { return }
         inkUndoStack.append(old)
@@ -828,6 +834,13 @@ struct ContentView: View {
         Binding(
             get: { model.settings.landmarks.inkPaths },
             set: { setInkPaths($0) }
+        )
+    }
+
+    private var inkLivePathBinding: Binding<InkEditorPath?> {
+        Binding(
+            get: { model.settings.landmarks.inkLivePath },
+            set: { model.settings.landmarks.inkLivePath = $0 }
         )
     }
 
@@ -1198,7 +1211,7 @@ struct ContentView: View {
             guard tab == .ink else { return }
             deleteSelectedInk()
         }
-        r.register(id: "ink.mode.toggle", title: "Ink: Pen / Brush", category: "Ink",
+        r.register(id: "ink.mode.toggle", title: "Ink: Pen / Wash", category: "Ink",
                    default: KeyBinding(key: "b", modifiers: [])) {
             guard tab == .ink else { return }
             toggleInkMode()
@@ -1356,7 +1369,7 @@ private struct InkBottomHUD: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .bottom, spacing: 22) {
-                buttonControl("mode", value: mode.rawValue) { mode = mode.toggled }
+                buttonControl("mode", value: mode.title) { mode = mode.toggled }
                 buttonControl("ink", value: inkKind.rawValue) { inkKind = inkKind.toggled }
                 VStack(spacing: 7) {
                     Text("hue")
@@ -1614,8 +1627,87 @@ private struct InkEditorCanvas: View {
     }
 }
 
+private struct InkCanvasDragValue {
+    var location: CGPoint
+    var startLocation: CGPoint
+    var secondary: Bool
+}
+
+private struct InkCanvasEventOverlay: NSViewRepresentable {
+    var onChanged: (InkCanvasDragValue) -> Void
+    var onEnded: (Bool) -> Void
+
+    func makeNSView(context: Context) -> EventView {
+        let view = EventView()
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+        return view
+    }
+
+    func updateNSView(_ nsView: EventView, context: Context) {
+        nsView.onChanged = onChanged
+        nsView.onEnded = onEnded
+    }
+
+    final class EventView: NSView {
+        var onChanged: ((InkCanvasDragValue) -> Void)?
+        var onEnded: ((Bool) -> Void)?
+        private var startLocation: CGPoint?
+        private var secondaryDrag = false
+
+        override var isFlipped: Bool { true }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            begin(event, secondary: false)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            update(event)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            finish(event)
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            begin(event, secondary: true)
+        }
+
+        override func rightMouseDragged(with event: NSEvent) {
+            update(event)
+        }
+
+        override func rightMouseUp(with event: NSEvent) {
+            finish(event)
+        }
+
+        private func begin(_ event: NSEvent, secondary: Bool) {
+            secondaryDrag = secondary
+            let point = convert(event.locationInWindow, from: nil)
+            startLocation = point
+            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary))
+        }
+
+        private func update(_ event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag))
+        }
+
+        private func finish(_ event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag))
+            onEnded?(true)
+            startLocation = nil
+            secondaryDrag = false
+        }
+    }
+}
+
 private struct InkPreviewDrawingLayer: View {
     @Binding var paths: [InkEditorPath]
+    @Binding var livePath: InkEditorPath?
     let outputSize: CGSize
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -1632,6 +1724,7 @@ private struct InkPreviewDrawingLayer: View {
     @Binding var selectedPointIndex: Int?
     @State private var current: [CGPoint] = []
     @State private var currentPathID: UUID?
+    @State private var currentStrokeMode: InkBrushMode?
     @State private var dragStartPaths: [InkEditorPath] = []
     @State private var dragStartPoint: CGPoint?
 
@@ -1640,71 +1733,44 @@ private struct InkPreviewDrawingLayer: View {
             let rect = fittedRect(container: geo.size, content: outputSize)
             ZStack {
                 Color.black.opacity(0.001)
-                ForEach(paths) { path in
-                    strokedPath(path.points, in: rect)
-                        .stroke(path.id == selectedPathID ? Color.accentColor.opacity(0.8) : editorColor(for: path).opacity(0.24),
-                                style: StrokeStyle(lineWidth: path.id == selectedPathID ? 3 : 2, lineCap: .round, lineJoin: .round))
-                    if path.id == selectedPathID {
-                        selectionBounds(path.points, in: rect)
-                            .stroke(Color.accentColor.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                        ForEach(path.points.indices, id: \.self) { index in
-                            Circle()
-                                .fill(index == selectedPointIndex ? Color.accentColor : Color(nsColor: .windowBackgroundColor))
-                                .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
-                                .frame(width: 9, height: 9)
-                                .position(viewPoint(path.points[index], in: rect))
+                if showsEditorPaths {
+                    ForEach(paths) { path in
+                        strokedPath(path.points, in: rect)
+                            .stroke(path.id == selectedPathID ? Color.accentColor.opacity(0.8) : editorColor(for: path).opacity(0.24),
+                                    style: StrokeStyle(lineWidth: path.id == selectedPathID ? 3 : 2, lineCap: .round, lineJoin: .round))
+                        if path.id == selectedPathID {
+                            selectionBounds(path.points, in: rect)
+                                .stroke(Color.accentColor.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                            ForEach(path.points.indices, id: \.self) { index in
+                                Circle()
+                                    .fill(index == selectedPointIndex ? Color.accentColor : Color(nsColor: .windowBackgroundColor))
+                                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
+                                    .frame(width: 9, height: 9)
+                                    .position(viewPoint(path.points[index], in: rect))
+                            }
                         }
                     }
                 }
-                strokedPath(current, in: rect)
-                    .stroke(inkColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                if (currentStrokeMode ?? brushMode) == .pen {
+                    strokedPath(current, in: rect)
+                        .stroke(inkColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                }
+                InkCanvasEventOverlay(
+                    onChanged: { value in
+                        guard rect.contains(value.location) else { return }
+                        handleDragChanged(value, in: rect)
+                    },
+                    onEnded: { ended in
+                        handleDragEnded(committed: ended)
+                    }
+                )
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard rect.contains(value.location) else { return }
-                        let p = normalized(value.location, in: rect)
-                        switch tool {
-                        case .draw:
-                            selectedPathID = nil
-                            selectedPointIndex = nil
-                            updateLiveStroke(with: p, secondary: Self.secondaryMousePressed())
-                        case .select:
-                            if dragStartPaths.isEmpty {
-                                dragStartPaths = paths
-                                selectedPointIndex = nil
-                                if selectedPathID == nil || !hitSelectedPath(at: p) {
-                                    selectedPathID = nearestPath(to: p, threshold: 0.025)?.id
-                                }
-                            }
-                            moveSelectedPath(from: normalized(value.startLocation, in: rect), to: p)
-                        case .points:
-                            if dragStartPaths.isEmpty {
-                                dragStartPaths = paths
-                                let hit = nearestPoint(to: p, threshold: 0.025)
-                                selectedPathID = hit?.pathID ?? nearestPath(to: p, threshold: 0.025)?.id
-                                selectedPointIndex = hit?.pointIndex
-                                if selectedPointIndex == nil, let selectedPathID {
-                                    selectedPointIndex = insertPoint(on: selectedPathID, near: p, threshold: 0.028)
-                                    dragStartPaths = paths
-                                }
-                                dragStartPoint = selectedPoint()
-                            }
-                            moveSelectedPoint(to: p)
-                        }
-                    }
-                    .onEnded { _ in
-                        if tool == .draw, let currentPathID, let path = paths.first(where: { $0.id == currentPathID }), path.points.count <= 1 {
-                            paths.removeAll { $0.id == currentPathID }
-                        }
-                        current = []
-                        currentPathID = nil
-                        dragStartPaths = []
-                        dragStartPoint = nil
-                    }
-            )
         }
+    }
+
+    private var showsEditorPaths: Bool {
+        tool == .select || tool == .points
     }
 
     private func strokedPath(_ points: [CGPoint], in rect: CGRect) -> Path {
@@ -1721,12 +1787,44 @@ private struct InkPreviewDrawingLayer: View {
         CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
     }
 
-    private func updateLiveStroke(with point: CGPoint, secondary: Bool) {
-        let mode = secondary ? brushMode.toggled : brushMode
-        if currentPathID == nil {
-            let path = InkEditorPath(
-                points: [point],
-                brushMode: mode,
+    private func handleDragChanged(_ value: InkCanvasDragValue, in rect: CGRect) {
+        let p = normalized(value.location, in: rect)
+        switch tool {
+        case .draw:
+            selectedPathID = nil
+            selectedPointIndex = nil
+            updateLiveStroke(with: p, secondary: value.secondary)
+        case .select:
+            if dragStartPaths.isEmpty {
+                dragStartPaths = paths
+                selectedPointIndex = nil
+                if selectedPathID == nil || !hitSelectedPath(at: p) {
+                    selectedPathID = nearestPath(to: p, threshold: 0.025)?.id
+                }
+            }
+            moveSelectedPath(from: normalized(value.startLocation, in: rect), to: p)
+        case .points:
+            if dragStartPaths.isEmpty {
+                dragStartPaths = paths
+                let hit = nearestPoint(to: p, threshold: 0.025)
+                selectedPathID = hit?.pathID ?? nearestPath(to: p, threshold: 0.025)?.id
+                selectedPointIndex = hit?.pointIndex
+                if selectedPointIndex == nil, let selectedPathID {
+                    selectedPointIndex = insertPoint(on: selectedPathID, near: p, threshold: 0.028)
+                    dragStartPaths = paths
+                }
+                dragStartPoint = selectedPoint()
+            }
+            moveSelectedPoint(to: p)
+        }
+    }
+
+    private func handleDragEnded(committed: Bool) {
+        if tool == .draw, committed, current.count > 1 {
+            paths.append(InkEditorPath(
+                id: currentPathID ?? UUID(),
+                points: current,
+                brushMode: currentStrokeMode ?? brushMode,
                 inkKind: inkKind,
                 width: width,
                 flow: flow,
@@ -1735,17 +1833,47 @@ private struct InkPreviewDrawingLayer: View {
                 colorSeparation: colorSeparation,
                 brushInk: brushInk,
                 color: inkRGBA
-            )
-            paths.append(path)
-            currentPathID = path.id
-            current = path.points
+            ))
         }
-        guard let currentPathID,
-              let index = paths.firstIndex(where: { $0.id == currentPathID }) else { return }
-        if paths[index].points.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0025 }) ?? true {
-            paths[index].points.append(point)
-            current = paths[index].points
+        livePath = nil
+        current = []
+        currentPathID = nil
+        currentStrokeMode = nil
+        dragStartPaths = []
+        dragStartPoint = nil
+    }
+
+    private func updateLiveStroke(with point: CGPoint, secondary: Bool) {
+        if current.isEmpty {
+            let id = UUID()
+            currentPathID = id
+            currentStrokeMode = secondary ? .brush : brushMode
+            current = [point]
+            livePath = makeCurrentPath(id: id, points: current)
+            return
         }
+        if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0025 }) ?? true {
+            current.append(point)
+            livePath = makeCurrentPath(id: currentPathID ?? UUID(), points: current)
+        } else if let currentPathID {
+            livePath = makeCurrentPath(id: currentPathID, points: current)
+        }
+    }
+
+    private func makeCurrentPath(id: UUID, points: [CGPoint]) -> InkEditorPath {
+        InkEditorPath(
+            id: id,
+            points: points,
+            brushMode: currentStrokeMode ?? brushMode,
+            inkKind: inkKind,
+            width: width,
+            flow: flow,
+            bleed: bleed,
+            dry: dry,
+            colorSeparation: colorSeparation,
+            brushInk: brushInk,
+            color: inkRGBA
+        )
     }
 
     private func editorColor(for path: InkEditorPath) -> Color {
@@ -1753,10 +1881,6 @@ private struct InkPreviewDrawingLayer: View {
             return Color(red: 0.33, green: 0.42, blue: 0.74)
         }
         return (path.inkKind ?? .black) == .white ? .white : inkColor
-    }
-
-    private static func secondaryMousePressed() -> Bool {
-        NSEvent.pressedMouseButtons & (1 << 1) != 0
     }
 
     private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {

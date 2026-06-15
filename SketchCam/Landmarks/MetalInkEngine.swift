@@ -15,21 +15,15 @@ final class MetalInkEngine {
     private struct RebuildKey: Equatable {
         var outputWidth: Int
         var outputHeight: Int
-        var paths: [InkEditorPath]
-        var inkColor: RGBAColor
-        var width: Float
-        var flow: Float
-        var bleed: Float
-        var dry: Float
-        var paperEnabled: Bool
-        var paperGrain: Float
-        var washStrength: Float
         var curveFit: CurveFit
-        var seed: Int
-        var brushMode: InkBrushMode
-        var inkKind: InkKind
-        var colorSeparation: Float
-        var brushInk: Float
+    }
+
+    private struct LivePointerState {
+        var bx: Float
+        var by: Float
+        var speed: Float
+        var simPressure: Float
+        var stirPhase: Float
     }
 
     private struct SplatParams {
@@ -131,6 +125,9 @@ final class MetalInkEngine {
     private var fixTimer: Float = 0
     private var brushNow = SIMD3<Float>(0, 0, 0)
     private var activeFramesRemaining = 0
+    private var replayedPaths: [InkEditorPath] = []
+    private var livePointerStates: [UUID: LivePointerState] = [:]
+    private var liveInjectedPointCounts: [UUID: Int] = [:]
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -195,42 +192,38 @@ final class MetalInkEngine {
         fixTimer = 0
         brushNow = SIMD3(0, 0, 0)
         activeFramesRemaining = 0
+        replayedPaths = []
+        livePointerStates = [:]
+        liveInjectedPointCounts = [:]
     }
 
     func layer(settings: ProcessingSettings, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
         let l = settings.landmarks
         let width = max(1, Int(requested.width.rounded()))
         let height = max(1, Int(requested.height.rounded()))
-        guard l.inkPaperEnabled || !l.inkPaths.isEmpty else { return nil }
+        let replayablePaths = l.inkPaths.filter { $0.points.count > 1 }
+        let livePath = (l.inkLivePath?.points.isEmpty == false) ? l.inkLivePath : nil
+        guard l.inkPaperEnabled || !replayablePaths.isEmpty || livePath != nil else { return nil }
         guard let commandBuffer = queue.makeCommandBuffer() else { return nil }
 
         let key = RebuildKey(
             outputWidth: width,
             outputHeight: height,
-            paths: l.inkPaths,
-            inkColor: l.inkColor,
-            width: normalizedSize(l.inkWidth),
-            flow: clamp01(l.inkFlow),
-            bleed: clamp01(l.inkBleed),
-            dry: clamp01(l.inkDry),
-            paperEnabled: l.inkPaperEnabled,
-            paperGrain: clamp01(l.inkPaperGrain),
-            washStrength: clamp01(l.inkWashStrength),
-            curveFit: l.inkCurveFit,
-            seed: l.inkSeed,
-            brushMode: l.inkBrushMode ?? .pen,
-            inkKind: l.inkKind ?? .black,
-            colorSeparation: clamp01(l.inkColorSeparation ?? 0.5),
-            brushInk: clamp01(l.inkBrushInk ?? 0)
+            curveFit: l.inkCurveFit
         )
 
         if key != rebuildKey || outputBuffer == nil {
             guard configure(width: width, height: height) else { return nil }
             clearAll(commandBuffer)
-            replay(settings: settings, key: key, commandBuffer: commandBuffer)
+            replay(paths: replayablePaths, settings: settings, commandBuffer: commandBuffer)
+            replayedPaths = replayablePaths
+            livePointerStates = [:]
+            liveInjectedPointCounts = [:]
             rebuildKey = key
             lastFrameIndex = nil
-            activeFramesRemaining = key.paths.isEmpty ? 0 : 180
+            activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
+        } else {
+            reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
         }
 
         let fixRevision = l.inkFixRevision ?? 0
@@ -240,12 +233,19 @@ final class MetalInkEngine {
             activeFramesRemaining = max(activeFramesRemaining, 90)
         }
 
-        if lastFrameIndex != frameIndex, activeFramesRemaining > 0 {
-            step(settings: settings, key: key, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+        if lastFrameIndex != frameIndex {
+            let dt: Float = 1.0 / 60.0
+            let liveActive = updateLiveStroke(livePath, settings: settings, dt: dt, commandBuffer: commandBuffer)
+            if liveActive {
+                activeFramesRemaining = max(activeFramesRemaining, 120)
+            }
+            if activeFramesRemaining > 0 || liveActive {
+                step(settings: settings, dt: dt, commandBuffer: commandBuffer)
+                activeFramesRemaining = max(0, activeFramesRemaining - 1)
+            }
             lastFrameIndex = frameIndex
-            activeFramesRemaining -= 1
         }
-        render(settings: settings, key: key, commandBuffer: commandBuffer)
+        render(settings: settings, commandBuffer: commandBuffer)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
@@ -312,23 +312,53 @@ final class MetalInkEngine {
             .forEach { encodeClear($0, commandBuffer: commandBuffer) }
     }
 
-    private func replay(settings: ProcessingSettings, key: RebuildKey, commandBuffer: MTLCommandBuffer) {
-        guard !key.paths.isEmpty else { return }
-        for (index, path) in key.paths.enumerated() {
-            replay(path: path, index: index, settings: settings, key: key, commandBuffer: commandBuffer)
+    private func replay(paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
+        guard !paths.isEmpty else { return }
+        for (index, path) in paths.enumerated() {
+            replay(path: path, index: index, settings: settings, commandBuffer: commandBuffer)
         }
         for _ in 0..<6 {
-            step(settings: settings, key: key, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+            step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
         }
     }
 
-    private func replay(path: InkEditorPath, index: Int, settings: ProcessingSettings, key: RebuildKey, commandBuffer: MTLCommandBuffer) {
+    private func reconcileCommittedPaths(_ paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
+        guard paths != replayedPaths else { return }
+        if replayedPaths.isEmpty || isAppendOnly(previous: replayedPaths, next: paths) {
+            let appended = paths.dropFirst(replayedPaths.count)
+            for path in appended where path.points.count > 1 {
+                let liveCount = liveInjectedPointCounts[path.id] ?? 0
+                if liveCount < path.points.count {
+                    replay(path: path, index: replayedPaths.count, settings: settings, commandBuffer: commandBuffer)
+                    activeFramesRemaining = max(activeFramesRemaining, 90)
+                }
+            }
+            replayedPaths = paths
+            return
+        }
+        clearAll(commandBuffer)
+        replay(paths: paths, settings: settings, commandBuffer: commandBuffer)
+        replayedPaths = paths
+        livePointerStates = [:]
+        liveInjectedPointCounts = [:]
+        activeFramesRemaining = paths.isEmpty ? 0 : 180
+    }
+
+    private func isAppendOnly(previous: [InkEditorPath], next: [InkEditorPath]) -> Bool {
+        guard next.count >= previous.count else { return false }
+        for (a, b) in zip(previous, next) where a != b {
+            return false
+        }
+        return true
+    }
+
+    private func replay(path: InkEditorPath, index: Int, settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard let ink, let wet, let velocity else { return }
-        let mode = path.brushMode ?? key.brushMode
-        let kind = path.inkKind ?? key.inkKind
+        let mode = path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen
+        let kind = path.inkKind ?? settings.landmarks.inkKind ?? .black
         let size = normalizedSize(path.width ?? settings.landmarks.inkWidth)
-        let flow = clamp01(path.flow ?? key.flow)
-        let brushInk = clamp01(path.brushInk ?? key.brushInk)
+        let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
+        let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
         let color = path.color ?? settings.landmarks.inkColor
         let points = smoothed(points: path.points, fit: settings.landmarks.inkCurveFit)
             .map { SIMD2<Float>(Float($0.x), Float($0.y)) }
@@ -378,12 +408,106 @@ final class MetalInkEngine {
                 }
                 brushStepCounter += 1
                 if brushStepCounter.isMultiple(of: 8) {
-                    step(settings: settings, key: key, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+                    step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
                 }
             }
             previous = point
         }
         brushNow = SIMD3(0, 0, 0)
+    }
+
+    @discardableResult
+    private func updateLiveStroke(_ path: InkEditorPath?, settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let path, let targetPoint = path.points.last else {
+            livePointerStates = [:]
+            brushNow = SIMD3(0, 0, 0)
+            return false
+        }
+        guard let ink, let wet, let velocity else { return false }
+        let mode = path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen
+        let kind = path.inkKind ?? settings.landmarks.inkKind ?? .black
+        let size = normalizedSize(path.width ?? settings.landmarks.inkWidth)
+        let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
+        let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
+        let color = path.color ?? settings.landmarks.inkColor
+        let target = SIMD2<Float>(Float(targetPoint.x), Float(targetPoint.y))
+        var state = livePointerStates[path.id] ?? LivePointerState(
+            bx: target.x,
+            by: target.y,
+            speed: 0,
+            simPressure: 0.35,
+            stirPhase: Float(path.id.hashValue & 0x3ff) * 0.0061359
+        )
+
+        brushNow = SIMD3(0, 0, 0)
+        let previous = SIMD2<Float>(state.bx, state.by)
+        let k = 1 - exp(-dt * 14)
+        state.bx += (target.x - state.bx) * k
+        state.by += (target.y - state.by) * k
+        let current = SIMD2<Float>(state.bx, state.by)
+        let delta = current - previous
+        let dist = simd_length(delta)
+        let inst = dist / max(dt, 0.0001)
+        state.speed += (inst - state.speed) * (1 - exp(-dt * 10))
+        let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
+        state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-dt * 6))
+        let pressure = state.simPressure
+        let speed = state.speed
+
+        if mode == .pen {
+            let radius = penRadius(pressure: pressure, speed: speed, size: size)
+            let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
+            if dist < radius * 0.4 {
+                splat(texture: ink.read, point: current, radius: radius * 1.15, color: inkColor(kind: kind, base: color, density: density * dt * 4), blend: .add, commandBuffer: commandBuffer)
+                splat(texture: wet.read, point: current, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+            } else {
+                let spacing = radius * 0.6
+                let steps = min(max(1, Int(ceil(dist / max(spacing, 0.0008)))), 60)
+                for i in 1...steps {
+                    let t = Float(i) / Float(steps)
+                    let p = previous + delta * t
+                    splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
+                    if i % 2 == 0 || steps == 1 {
+                        splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                    }
+                }
+            }
+        } else {
+            let radius = brushRadius(pressure: pressure, speed: speed, size: size)
+            brushNow = SIMD3<Float>(current.x, current.y, radius)
+            let wetAmount = 0.5 + 0.5 * pressure
+            let force = 15 + flow * 95
+            var vel = delta / max(dt, 0.0001) * force
+            let vm = simd_length(vel)
+            if vm > 240 { vel *= 240 / vm }
+            let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
+            if dist < radius * 0.25 {
+                splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                state.stirPhase += 2.399963
+                let stir = (6 + 26 * flow) * pressure
+                let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
+                splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+                if loadedDensity > 0 {
+                    splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * dt * 5), blend: .add, commandBuffer: commandBuffer)
+                }
+            } else {
+                let spacing = radius * 0.7
+                let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
+                for i in 1...steps {
+                    let t = Float(i) / Float(steps)
+                    let p = previous + delta * t
+                    splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                    splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+                    if loadedDensity > 0 {
+                        splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                    }
+                }
+            }
+        }
+
+        livePointerStates = [path.id: state]
+        liveInjectedPointCounts[path.id] = max(liveInjectedPointCounts[path.id] ?? 0, path.points.count)
+        return true
     }
 
     private enum BlendMode: UInt32 { case add = 0, max = 1 }
@@ -411,8 +535,13 @@ final class MetalInkEngine {
                width: maxX - ox + 1, height: maxY - oy + 1, commandBuffer: commandBuffer)
     }
 
-    private func step(settings: ProcessingSettings, key: RebuildKey, dt: Float, commandBuffer: MTLCommandBuffer) {
+    private func step(settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) {
         guard let velocity, let pressure, let divergence, let curl, let wet, let ink, let fixed else { return }
+        let l = settings.landmarks
+        let flow = clamp01(l.inkFlow)
+        let dry = clamp01(l.inkDry)
+        let bleed = clamp01(l.inkBleed)
+        let washStrength = clamp01(l.inkWashStrength)
         let fixing = fixTimer > 0
         if fixing { fixTimer = max(0, fixTimer - dt) }
         let simTexel = SIMD2<Float>(1 / Float(velocity.read.width), 1 / Float(velocity.read.height))
@@ -420,14 +549,14 @@ final class MetalInkEngine {
         var advVel = AdvectVelocityParams(
             texel: simTexel,
             dt: dt,
-            dissipation: exp(-dt * (3.0 - key.flow * 2.4)) * (fixing ? exp(-dt * 7) : 1)
+            dissipation: exp(-dt * (3.0 - flow * 2.4 + dry * 5.0)) * (fixing ? exp(-dt * 7) : 1)
         )
         encode(advectVelocityPSO, textures: [velocity.read, wet.read, velocity.write], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
         encode(curlPSO, textures: [velocity.read, curl], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: curl, commandBuffer: commandBuffer)
 
-        var vort = VorticityParams(texel: simTexel, curlAmount: 4 + key.flow * 22, dt: dt)
+        var vort = VorticityParams(texel: simTexel, curlAmount: 4 + flow * 22, dt: dt)
         encode(vorticityPSO, textures: [velocity.read, curl, velocity.write], bytes: &vort, length: MemoryLayout<VorticityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
@@ -445,18 +574,19 @@ final class MetalInkEngine {
         encode(gradientSubtractPSO, textures: [pressure.read, velocity.read, velocity.write], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
-        let dryTau: Float = fixing ? 0.25 : 2 + (1 - key.dry) * 16
-        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau), spread: 0.12)
+        let dryTau: Float = fixing ? 0.22 : 0.12 + pow(1 - dry, 2.2) * 26
+        let spread: Float = 0.18 * (1 - dry * 0.78)
+        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau), spread: spread)
         encode(advectWetPSO, textures: [velocity.read, wet.read, wet.write], bytes: &advWet, length: MemoryLayout<AdvectWetParams>.stride, grid: wet.write, commandBuffer: commandBuffer)
         wet.swap()
 
-        let colorAmount = key.colorSeparation
+        let colorAmount = clamp01(l.inkColorSeparation ?? 0.5)
         let chroma = SIMD3<Float>(1.0 + 0.85 * colorAmount, 1.0 + 0.15 * colorAmount, max(0.25, 1.0 - 0.65 * colorAmount))
         var advInk = AdvectInkParams(
             velTexel: simTexel,
             inkTexel: dyeTexel,
             dt: dt,
-            bleed: key.bleed * key.washStrength,
+            bleed: bleed * washStrength,
             aspect: aspect,
             chroma: SIMD4(chroma.x, chroma.y, chroma.z, 0),
             brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, 0)
@@ -473,18 +603,19 @@ final class MetalInkEngine {
         ink.swap()
     }
 
-    private func render(settings: ProcessingSettings, key: RebuildKey, commandBuffer: MTLCommandBuffer) {
+    private func render(settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard let ink, let fixed, let wet, let outputTexture else { return }
+        let l = settings.landmarks
         let texel = SIMD2<Float>(1 / Float(ink.read.width), 1 / Float(ink.read.height))
         var params = DisplayParams(
             texel: texel,
             res: SIMD2(Float(outputTexture.width), Float(outputTexture.height)),
             inkStrength: 1.9,
             edge: 1.35,
-            grain: max(0, key.paperGrain),
-            whiteTint: key.colorSeparation * 0.35,
-            opacity: clamp01(settings.landmarks.inkOpacity),
-            paperOn: key.paperEnabled ? 1 : 0
+            grain: max(0, clamp01(l.inkPaperGrain)),
+            whiteTint: clamp01(l.inkColorSeparation ?? 0.5) * 0.35,
+            opacity: clamp01(l.inkOpacity),
+            paperOn: l.inkPaperEnabled ? 1 : 0
         )
         encode(displayPSO, textures: [ink.read, fixed.read, wet.read, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }

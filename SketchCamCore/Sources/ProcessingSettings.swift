@@ -73,7 +73,7 @@ public enum InkBrushMode: String, CaseIterable, Identifiable, Sendable, Codable 
     public var title: String {
         switch self {
         case .pen: return "Pen"
-        case .brush: return "Brush"
+        case .brush: return "Wash"
         }
     }
 
@@ -460,6 +460,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
     public var inkPaths: [InkEditorPath]
+    /// Transient in-progress stroke. The Metal ink engine consumes this as a
+    /// live local input without adding it to the replayable editor history.
+    public var inkLivePath: InkEditorPath?
     public var inkColor: RGBAColor
     public var inkWidth: Float
     public var inkFlow: Float
@@ -577,6 +580,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
         inkPaths: [InkEditorPath] = [],
+        inkLivePath: InkEditorPath? = nil,
         inkColor: RGBAColor = .ink,
         inkWidth: Float = 0.5,
         inkFlow: Float = 0.9,
@@ -684,6 +688,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
         self.inkPaths = inkPaths
+        self.inkLivePath = inkLivePath
         self.inkColor = inkColor
         self.inkWidth = inkWidth
         self.inkFlow = inkFlow

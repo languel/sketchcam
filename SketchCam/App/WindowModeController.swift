@@ -25,6 +25,13 @@ final class WindowModeController: ObservableObject {
 
     private var beforePresentation: Snapshot?
     private var frameBeforePIP: NSRect?
+    private var dragMonitor: Any?
+
+    deinit {
+        if let dragMonitor {
+            NSEvent.removeMonitor(dragMonitor)
+        }
+    }
 
     /// Park the window as a small picture-in-picture panel in the lower
     /// right of the current screen (~1/16 screen area); toggling back
@@ -88,7 +95,7 @@ final class WindowModeController: ObservableObject {
         } else {
             // keep .resizable so the borderless window can stay key
             window.styleMask = [.borderless, .resizable]
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
         }
         window.isOpaque = !transparent
         window.backgroundColor = transparent ? .clear : .windowBackgroundColor
@@ -103,6 +110,26 @@ final class WindowModeController: ObservableObject {
             window.collectionBehavior.remove([.canJoinAllSpaces, .fullScreenAuxiliary])
         }
         window.invalidateShadow()
+        updateDragMonitor()
+    }
+
+    private func updateDragMonitor() {
+        if presentationMode, dragMonitor == nil {
+            dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+                guard let self,
+                      let window = self.window,
+                      self.presentationMode,
+                      event.window === window,
+                      event.modifierFlags.contains(.control),
+                      event.modifierFlags.contains(.shift)
+                else { return event }
+                window.performDrag(with: event)
+                return nil
+            }
+        } else if !presentationMode, let dragMonitor {
+            NSEvent.removeMonitor(dragMonitor)
+            self.dragMonitor = nil
+        }
     }
 }
 
