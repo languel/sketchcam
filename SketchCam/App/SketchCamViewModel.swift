@@ -486,11 +486,17 @@ final class SketchCamViewModel: ObservableObject {
                         outputSize: outputFormat.size
                     )
                 }()
-                let inkLayer = self.inkCompositor.layer(
-                    settings: settings,
-                    outputSize: outputFormat.size,
-                    frameIndex: frameIndex
-                )
+                // The inkwash engine runs synchronously (Metal commit +
+                // waitUntilCompleted + CPU readback) inline on this queue, so
+                // measure it as its own stage; otherwise its cost only showed
+                // up buried in "Frame total".
+                let inkLayer = self.timings.measure(.ink) {
+                    self.inkCompositor.layer(
+                        settings: settings,
+                        outputSize: outputFormat.size,
+                        frameIndex: frameIndex
+                    )
+                }
                 // Overlay renders async; report the latest render duration
                 // (like detect/segment), not the ~0ms cache fetch.
                 self.timings.record(.overlay, seconds: self.overlayCompositor.lastRenderMillis / 1_000)

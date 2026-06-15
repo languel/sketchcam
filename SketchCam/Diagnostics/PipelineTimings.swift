@@ -4,6 +4,7 @@ import os
 enum PipelineStage: String, CaseIterable {
     case snapshot   // settings/format snapshot acquisition
     case overlay    // landmark overlay layer (cached; cost only on re-render)
+    case ink        // Metal inkwash simulate + render + readback (synchronous, inline)
     case process    // Core Image chain + composite + render to pixel buffer
     case preview    // preview CGImage creation
     case publish    // sink enqueue
@@ -15,6 +16,7 @@ enum PipelineStage: String, CaseIterable {
         switch self {
         case .snapshot: return "Snapshot"
         case .overlay: return "Overlay"
+        case .ink: return "Ink"
         case .process: return "Process"
         case .preview: return "Preview"
         case .publish: return "Publish"
