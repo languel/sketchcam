@@ -59,7 +59,13 @@ xcodebuild \
 
 ## Run Locally
 
-Use the project script:
+To run the newest existing Debug build without rebuilding:
+
+```sh
+./script/run.sh
+```
+
+Use the build-and-install script when you want a fresh build copied to `/Applications`:
 
 ```sh
 ./script/build_and_run.sh

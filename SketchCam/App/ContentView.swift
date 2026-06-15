@@ -3,6 +3,14 @@ import SketchCamCore
 import SketchCamShared
 import SwiftUI
 
+final class AppUIState: ObservableObject {
+    @Published var debugOverlayVisible = false
+
+    func toggleDebugOverlay() {
+        debugOverlayVisible.toggle()
+    }
+}
+
 private enum InkTool: String, CaseIterable, Identifiable {
     case draw = "Draw"
     case select = "Select"
@@ -56,6 +64,7 @@ struct ContentView: View {
     @StateObject private var model = SketchCamViewModel()
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
+    @EnvironmentObject private var appUI: AppUIState
     @State private var newPresetName = ""
     @State private var recallWholeState = false
     @State private var webURLField = ""
@@ -67,6 +76,7 @@ struct ContentView: View {
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
     @State private var inkHUDVisible = false
+    @State private var debugOverlayOffset = CGSize.zero
     @State private var inkUndoStack: [[InkEditorPath]] = []
     @State private var inkRedoStack: [[InkEditorPath]] = []
 
@@ -85,6 +95,21 @@ struct ContentView: View {
                                 .overlay(alignment: .leading) { Divider() }
                         }
                     }
+                }
+                if appUI.debugOverlayVisible {
+                    DebugOverlay(
+                        stats: model.stats,
+                        permission: model.cameraPermissionState.rawValue,
+                        threshold: model.settings.threshold,
+                        error: model.errorText,
+                        close: { appUI.debugOverlayVisible = false },
+                        offset: $debugOverlayOffset
+                    )
+                    .padding(.trailing, 14)
+                    .padding(.vertical, 14)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(100)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
@@ -244,6 +269,15 @@ struct ContentView: View {
                 Label("Export", systemImage: "square.and.arrow.down")
             }
             .help("Export current frame as PNG")
+            Button {
+                appUI.toggleDebugOverlay()
+            } label: {
+                Label(
+                    "Performance",
+                    systemImage: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle"
+                )
+            }
+            .help("Toggle performance overlay (Control-Option-P)")
         }
         .controlSize(.small)
     }
@@ -1181,6 +1215,10 @@ struct ContentView: View {
                    default: KeyBinding(key: "p", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.togglePIP() }
         r.register(id: "window.presentation", title: "Presentation Mode", category: "Window",
                    default: KeyBinding(key: "p", modifiers: .command)) { [weak windowMode] in windowMode?.togglePresentationMode() }
+        r.register(id: "debug.overlay", title: "Toggle Performance Overlay", category: "Debug",
+                   default: KeyBinding(key: "p", modifiers: [.control, .option])) {
+            appUI.toggleDebugOverlay()
+        }
         r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
                    default: KeyBinding(key: "v", modifiers: [])) {
             guard tab == .ink else { return }
@@ -2015,6 +2053,8 @@ private struct DebugGrid: View {
     let stats: DebugStats
     let permission: String
     let threshold: Float
+    var labelColor: Color = .primary
+    var valueColor: Color = .primary
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
@@ -2035,10 +2075,79 @@ private struct DebugGrid: View {
     private func row(_ label: String, _ value: String) -> some View {
         GridRow {
             Text(label)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(labelColor)
             Text(value)
+                .foregroundStyle(valueColor)
                 .lineLimit(2)
         }
+    }
+}
+
+private struct DebugOverlay: View {
+    let stats: DebugStats
+    let permission: String
+    let threshold: Float
+    let error: String?
+    let close: () -> Void
+    @Binding var offset: CGSize
+    @GestureState private var dragTranslation = CGSize.zero
+
+    private var visibleOffset: CGSize {
+        CGSize(
+            width: offset.width + dragTranslation.width,
+            height: offset.height + dragTranslation.height
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .help("Hide performance overlay")
+            }
+            DebugGrid(
+                stats: stats,
+                permission: permission,
+                threshold: threshold,
+                labelColor: Color.white.opacity(0.82),
+                valueColor: .white
+            )
+            if let error {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(width: 250, alignment: .leading)
+        .background(Color.black.opacity(0.46), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.regularMaterial.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
+        .offset(visibleOffset)
+        .gesture(
+            DragGesture()
+                .updating($dragTranslation) { value, state, _ in
+                    state = value.translation
+                }
+                .onEnded { value in
+                    offset.width += value.translation.width
+                    offset.height += value.translation.height
+                }
+        )
+        .help("Drag to move")
     }
 }
 
