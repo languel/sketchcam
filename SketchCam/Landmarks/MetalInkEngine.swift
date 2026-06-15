@@ -130,6 +130,7 @@ final class MetalInkEngine {
     private var rebuildKey: RebuildKey?
     private var lastFrameIndex: Int?
     private var lastFixRevision = 0
+    private var lastRebuildRevision = 0
     private var fixTimer: Float = 0
     private var brushNow = SIMD3<Float>(0, 0, 0)
     private var activeFramesRemaining = 0
@@ -202,6 +203,7 @@ final class MetalInkEngine {
         rebuildKey = nil
         lastFrameIndex = nil
         lastFixRevision = 0
+        lastRebuildRevision = 0
         fixTimer = 0
         brushNow = SIMD3(0, 0, 0)
         activeFramesRemaining = 0
@@ -219,7 +221,10 @@ final class MetalInkEngine {
         let replayablePaths = l.inkPaths.filter { $0.points.count > 1 }
 
         let key = RebuildKey(outputWidth: width, outputHeight: height)
-        let needRebuild = key != rebuildKey || outputBuffer == nil
+        let rebuildRevision = l.inkRebuildRevision
+        let forceRebuild = rebuildRevision != lastRebuildRevision
+        let needRebuild = key != rebuildKey || outputBuffer == nil || forceRebuild
+        if forceRebuild { lastRebuildRevision = rebuildRevision }
         let pathsChanged = replayablePaths != replayedPaths
         let fixRevision = l.inkFixRevision ?? 0
         let fixRequested = fixRevision != lastFixRevision

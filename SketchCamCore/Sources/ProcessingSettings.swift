@@ -483,6 +483,14 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Stroke smoothing: 0 = tracks the cursor tightly, 1 = heavily smoothed
     /// (rounder, more lag). Shift held while drawing boosts it.
     public var inkSmoothing: Float
+    /// Bumped by the UI to force the engine to clear and re-simulate every
+    /// committed path from scratch ("Rerender").
+    public var inkRebuildRevision: Int
+    /// Immediate mode: the stroke paints straight onto the canvas (the live
+    /// bake) without being added to the editable path buffer. Separate for pen
+    /// and wash so each can be toggled.
+    public var inkImmediatePen: Bool
+    public var inkImmediateWash: Bool
     /// Render LineWalk strokes on the GPU (Metal) instead of the CPU CGContext
     /// path. Experimental opt-in for the Metal overhaul A/B.
     public var useMetalDrawing: Bool
@@ -600,6 +608,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkFixRevision: Int? = 0,
         inkShowLivePath: Bool = false,
         inkSmoothing: Float = 0.5,
+        inkRebuildRevision: Int = 0,
+        inkImmediatePen: Bool = false,
+        inkImmediateWash: Bool = false,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
         yarnPalette: DrawingPalette = .default,
@@ -709,6 +720,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkFixRevision = inkFixRevision
         self.inkShowLivePath = inkShowLivePath
         self.inkSmoothing = inkSmoothing
+        self.inkRebuildRevision = inkRebuildRevision
+        self.inkImmediatePen = inkImmediatePen
+        self.inkImmediateWash = inkImmediateWash
         self.useMetalDrawing = useMetalDrawing
         self.beadStroke = beadStroke
         self.yarnPalette = yarnPalette

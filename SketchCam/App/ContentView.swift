@@ -153,6 +153,8 @@ struct ContentView: View {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
                         showLivePath: model.settings.landmarks.inkShowLivePath,
+                        immediatePen: model.settings.landmarks.inkImmediatePen,
+                        immediateWash: model.settings.landmarks.inkImmediateWash,
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
                         outputSize: model.outputFormat.size,
@@ -744,13 +746,20 @@ struct ContentView: View {
                 } label: {
                     Label("Clear", systemImage: "trash")
                 }
-                .disabled(model.settings.landmarks.inkPaths.isEmpty)
+                .help("Wipe the canvas (committed paths and immediate-mode marks).")
                 Button {
                     deleteSelectedInk()
                 } label: {
                     Label("Delete", systemImage: "delete.left")
                 }
                 .disabled(selectedInkPathID == nil)
+                Button {
+                    rerenderInk()
+                } label: {
+                    Label("Rerender", systemImage: "arrow.clockwise")
+                }
+                .disabled(model.settings.landmarks.inkPaths.isEmpty)
+                .help("Clear and re-simulate every committed path from scratch (with the current curve/params). Immediate-mode marks are not re-simulated.")
                 Text("\(model.settings.landmarks.inkPaths.count) paths")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -766,6 +775,11 @@ struct ContentView: View {
                 ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
             .pickerStyle(.segmented)
+            HStack {
+                Toggle("Immediate pen", isOn: $model.settings.landmarks.inkImmediatePen)
+                Toggle("Immediate wash", isOn: $model.settings.landmarks.inkImmediateWash)
+            }
+            .help("Immediate mode paints straight onto the canvas without adding an editable path — good for experimenting without filling the path buffer. These marks aren't selectable, editable, or re-rendered.")
             Picker("Ink", selection: inkKindBinding) {
                 ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
             }
@@ -820,11 +834,20 @@ struct ContentView: View {
     private func clearInk() {
         model.cancelInkLiveStroke()
         setInkPaths([])
+        // Force a rebuild so the canvas is wiped even when there were no
+        // committed paths (e.g. only immediate-mode marks).
+        model.settings.landmarks.inkRebuildRevision += 1
         clearInkSelection()
     }
 
     private func fixInk() {
         model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+    }
+
+    private func rerenderInk() {
+        model.cancelInkLiveStroke()
+        clearInkSelection()
+        model.settings.landmarks.inkRebuildRevision += 1
     }
 
     private func toggleInkMode() {
@@ -1748,6 +1771,8 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
 private struct InkPreviewDrawingLayer: View {
     @Binding var paths: [InkEditorPath]
     let showLivePath: Bool
+    let immediatePen: Bool
+    let immediateWash: Bool
     let onLive: (InkLiveStrokeSample) -> Void
     let onLiveEnd: () -> Void
     let outputSize: CGSize
@@ -1864,7 +1889,11 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func handleDragEnded(committed: Bool) {
-        if tool == .draw, committed, current.count > 1 {
+        let strokeMode = currentStrokeMode ?? brushMode
+        let immediate = (strokeMode == .pen && immediatePen) || (strokeMode == .brush && immediateWash)
+        // Immediate mode: the live ink is already baked onto the canvas — keep
+        // it, but don't add an editable path (so the buffer doesn't grow).
+        if tool == .draw, committed, current.count > 1, !immediate {
             paths.append(InkEditorPath(
                 id: currentPathID ?? UUID(),
                 points: current,
