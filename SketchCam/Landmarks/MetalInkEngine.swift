@@ -131,6 +131,7 @@ final class MetalInkEngine {
     private var lastFrameIndex: Int?
     private var lastFixRevision = 0
     private var lastRebuildRevision = 0
+    private var lastStepTime: CFAbsoluteTime = 0
     private var fixTimer: Float = 0
     private var brushNow = SIMD3<Float>(0, 0, 0)
     /// Destructive lift under the brush (immediate wash re-mobilizes dried ink);
@@ -207,6 +208,7 @@ final class MetalInkEngine {
         lastFrameIndex = nil
         lastFixRevision = 0
         lastRebuildRevision = 0
+        lastStepTime = 0
         fixTimer = 0
         brushNow = SIMD3(0, 0, 0)
         brushLift = 0
@@ -288,7 +290,12 @@ final class MetalInkEngine {
         }
 
         if lastFrameIndex != frameIndex {
-            let dt: Float = 1.0 / 60.0
+            // Real elapsed time, clamped, instead of a fixed 1/60 — so stroke
+            // speed/pressure and the fluid step stay correct when the frame rate
+            // is irregular (notably right after the app is tabbed out and back).
+            let now = CFAbsoluteTimeGetCurrent()
+            let dt: Float = lastStepTime > 0 ? Float(min(1.0 / 20.0, max(1.0 / 120.0, now - lastStepTime))) : 1.0 / 60.0
+            lastStepTime = now
             let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
@@ -542,8 +549,23 @@ final class MetalInkEngine {
             simPressure: 0.35,
             stirPhase: Float(sample.id.hashValue & 0x3ff) * 0.0061359
         )
+
+        // Pressure/width/velocity come from the smoothed cursor SPEED, computed
+        // once per frame from the real elapsed time below (using last frame's
+        // value here, one-frame lag) — so they're independent of how many
+        // sub-samples there are and of the frame rate.
+        let pressure = state.simPressure
+        let speed = state.speed
+        let radius = mode == .pen ? penRadius(pressure: pressure, speed: speed, size: size)
+                                  : brushRadius(pressure: pressure, speed: speed, size: size)
+        let penDensity = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
+        let wetAmount = 0.5 + 0.5 * pressure
+        let force = (15 + flow * 95) * forceBoost
+        let velMag = min(velCap, speed * force)
+        let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
         brushNow = SIMD3(0, 0, 0)
 
+        let startPos = SIMD2<Float>(state.bx, state.by)
         for target in targets {
             let previous = SIMD2<Float>(state.bx, state.by)
             state.bx += (target.x - state.bx) * k
@@ -551,18 +573,10 @@ final class MetalInkEngine {
             let current = SIMD2<Float>(state.bx, state.by)
             let delta = current - previous
             let dist = simd_length(delta)
-            let inst = dist / max(subDt, 0.0001)
-            state.speed += (inst - state.speed) * (1 - exp(-subDt * 10))
-            let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
-            state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-subDt * 6))
-            let pressure = state.simPressure
-            let speed = state.speed
 
             if mode == .pen {
-                let radius = penRadius(pressure: pressure, speed: speed, size: size)
-                let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
                 if dist < radius * 0.4 {
-                    splat(texture: ink.read, point: current, radius: radius * 1.15, color: inkColor(kind: kind, base: color, density: density * subDt * 4), blend: .add, commandBuffer: commandBuffer)
+                    splat(texture: ink.read, point: current, radius: radius * 1.15, color: inkColor(kind: kind, base: color, density: penDensity * subDt * 4), blend: .add, commandBuffer: commandBuffer)
                     splat(texture: wet.read, point: current, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                 } else {
                     let spacing = radius * 0.6
@@ -570,21 +584,16 @@ final class MetalInkEngine {
                     for i in 1...steps {
                         let t = Float(i) / Float(steps)
                         let p = previous + delta * t
-                        splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
+                        splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: penDensity), blend: .add, commandBuffer: commandBuffer)
                         if i % 2 == 0 || steps == 1 {
                             splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                         }
                     }
                 }
             } else {
-                let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
-                let wetAmount = 0.5 + 0.5 * pressure
-                let force = (15 + flow * 95) * forceBoost
-                var vel = delta / max(subDt, 0.0001) * force
-                let vm = simd_length(vel)
-                if vm > velCap { vel *= velCap / vm }
-                let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
+                let dir = dist > 1e-6 ? delta / dist : SIMD2<Float>(0, 0)
+                let vel = dir * velMag
                 if dist < radius * 0.25 {
                     splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                     state.stirPhase += 2.399963
@@ -609,6 +618,14 @@ final class MetalInkEngine {
                 }
             }
         }
+
+        // Update smoothed speed + pressure from the real damped motion this
+        // frame over the real elapsed time (frame-rate independent).
+        let frameMove = simd_length(SIMD2<Float>(state.bx, state.by) - startPos)
+        let inst = frameMove / max(dt, 0.0001)
+        state.speed += (inst - state.speed) * (1 - exp(-dt * 10))
+        let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
+        state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-dt * 6))
 
         livePointerStates = [sample.id: state]
         return true
