@@ -548,54 +548,61 @@ final class MetalInkEngine {
         let followRate: Float = 6 + (1 - smoothing) * 32
         let force = (15 + flow * 95) * forceBoost
 
-        // WASH (brush) is a fluid IMPULSE, not a geometric mark: follow the latest
-        // cursor point ONCE per frame and inject velocity along the actual motion,
-        // exactly like the reference. Injecting per dense substep (as the pen does)
-        // dumps many times more velocity into the field per frame, so vorticity
-        // confinement curls it into in-place turbulence instead of an accumulative
-        // directional smear. dt is the real elapsed time, so this stays correct as
-        // the frame rate varies.
+        // WASH (brush) is a fluid IMPULSE, not a geometric mark. Drive it from the
+        // RAW cursor samples this frame (~a handful), injecting the true local
+        // instantaneous velocity (delta/subDt · force) at each — this is the
+        // original accumulative smear: many small directional impulses with local
+        // speed variation per frame. (Two failure modes to avoid: the maxGap
+        // subdivision the pen uses explodes the substep count and over-drives the
+        // field into vorticity turbulence; collapsing to one frame-averaged
+        // impulse per frame makes the smear bland. Raw samples are the sweet spot.)
+        // dt is real elapsed time, so velocity magnitude (≈ speed·force) is
+        // frame-rate independent.
         if mode == .brush {
-            let kf = 1 - exp(-dt * followRate)
-            let tgt = rawPoints.last ?? fallback
-            let previous = SIMD2<Float>(state.bx, state.by)
-            state.bx += (tgt.x - state.bx) * kf
-            state.by += (tgt.y - state.by) * kf
-            let current = SIMD2<Float>(state.bx, state.by)
-            let delta = current - previous
-            let dist = simd_length(delta)
-            let inst = dist / max(dt, 0.0001)
-            state.speed += (inst - state.speed) * (1 - exp(-dt * 10))
-            let targetP = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
-            state.simPressure += (targetP - state.simPressure) * (1 - exp(-dt * 6))
-            let pressure = state.simPressure
-            let speed = state.speed
-            let radius = brushRadius(pressure: pressure, speed: speed, size: size)
-            let wetAmount = 0.5 + 0.5 * pressure
-            let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
-            brushNow = SIMD3<Float>(current.x, current.y, radius)
-            var vel = delta / max(dt, 0.0001) * force
-            let vm = simd_length(vel)
-            if vm > velCap { vel *= velCap / vm }
-            if dist < radius * 0.25 {
-                splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-                state.stirPhase += 2.399963
-                let stir = (6 + 26 * flow) * pressure
-                let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
-                splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
-                if loadedDensity > 0 {
-                    splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * dt * 5), blend: .add, commandBuffer: commandBuffer)
-                }
-            } else {
-                let spacing = radius * 0.7
-                let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
-                for i in 1...steps {
-                    let t = Float(i) / Float(steps)
-                    let p = previous + delta * t
-                    splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-                    splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+            var washTargets = rawPoints
+            if washTargets.isEmpty { washTargets = [fallback] }
+            let subDtW = dt / Float(washTargets.count)
+            let kW = 1 - exp(-subDtW * followRate)
+            for target in washTargets {
+                let previous = SIMD2<Float>(state.bx, state.by)
+                state.bx += (target.x - state.bx) * kW
+                state.by += (target.y - state.by) * kW
+                let current = SIMD2<Float>(state.bx, state.by)
+                let delta = current - previous
+                let dist = simd_length(delta)
+                let inst = dist / max(subDtW, 0.0001)
+                state.speed += (inst - state.speed) * (1 - exp(-subDtW * 10))
+                let targetP = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
+                state.simPressure += (targetP - state.simPressure) * (1 - exp(-subDtW * 6))
+                let pressure = state.simPressure
+                let speed = state.speed
+                let radius = brushRadius(pressure: pressure, speed: speed, size: size)
+                brushNow = SIMD3<Float>(current.x, current.y, radius)
+                let wetAmount = 0.5 + 0.5 * pressure
+                let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
+                var vel = delta / max(subDtW, 0.0001) * force
+                let vm = simd_length(vel)
+                if vm > velCap { vel *= velCap / vm }
+                if dist < radius * 0.25 {
+                    splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                    state.stirPhase += 2.399963
+                    let stir = (6 + 26 * flow) * pressure
+                    let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
+                    splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
                     if loadedDensity > 0 {
-                        splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                        splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * subDtW * 5), blend: .add, commandBuffer: commandBuffer)
+                    }
+                } else {
+                    let spacing = radius * 0.7
+                    let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
+                    for i in 1...steps {
+                        let t = Float(i) / Float(steps)
+                        let p = previous + delta * t
+                        splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                        splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
+                        if loadedDensity > 0 {
+                            splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                        }
                     }
                 }
             }

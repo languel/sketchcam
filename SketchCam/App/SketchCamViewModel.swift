@@ -108,6 +108,10 @@ final class SketchCamViewModel: ObservableObject {
     private var lastPreviewTime: CFAbsoluteTime = 0
     private var lastStatsTime: CFAbsoluteTime = 0
     private var lastPerfLogTime: CFAbsoluteTime = 0
+    #if DEBUG
+    private var perfLogHandle: FileHandle?
+    private var perfLogOpened = false
+    #endif
     private var frameIndex = 0
     private var fpsStartTime = CFAbsoluteTimeGetCurrent()
     private var fpsFrameCount = 0
@@ -591,9 +595,18 @@ final class SketchCamViewModel: ObservableObject {
             let stages = stageMillis.map { "\($0.stage.rawValue)=\(String(format: "%.1f", $0.millis))" }.joined(separator: " ")
             let line = String(format: "SketchCamPerf fps=%.1f %@ landmarks=%d\n", fps, stages, settings.landmarks.enabled ? 1 : 0)
             // Sandboxed: lands in ~/Library/Containers/io.github.languel.sketchcam/Data/tmp/
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("sketchcam-perf-live.txt")
-            let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            try? (existing + line).write(to: url, atomically: true, encoding: .utf8)
+            // Append via a held FileHandle (O(1)), truncating once at session start —
+            // the old read-whole-file + rewrite was O(n) per tick and grew the file
+            // unbounded across sessions.
+            if !perfLogOpened {
+                perfLogOpened = true
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("sketchcam-perf-live.txt")
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+                perfLogHandle = try? FileHandle(forWritingTo: url)
+            }
+            if let data = line.data(using: .utf8) {
+                try? perfLogHandle?.write(contentsOf: data)
+            }
         }
         #endif
         DispatchQueue.main.async {

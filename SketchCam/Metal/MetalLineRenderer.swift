@@ -92,6 +92,9 @@ final class MetalLineRenderer {
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        // Release cached CVMetalTextures now the GPU is done (periodic flush keeps
+        // the cache from pinning IOSurfaces over a long session).
+        CVMetalTextureCacheFlush(textureCache, 0)
         return true
     }
 

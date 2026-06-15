@@ -93,6 +93,10 @@ final class MetalEffects {
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        // The GPU is done; let the cache release the CVMetalTextures it's holding.
+        // Without a periodic flush the cache pins IOSurfaces and GPU scheduling
+        // degrades over a long session (textures still referenced aren't flushed).
+        CVMetalTextureCacheFlush(textureCache, 0)
         return true
     }
 
