@@ -512,6 +512,22 @@ final class MetalInkEngine {
         var targets = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
         if targets.isEmpty { targets = [SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))] }
 
+        // Subdivide the incoming cursor samples so the damped trajectory is
+        // densely sampled regardless of how many points arrived this frame.
+        // Without this, a low/varying event-or-frame rate yields few samples per
+        // frame → the splat interpolates long straight chords → polygonal,
+        // "choppy" strokes (and it drifts as the rate changes over a session).
+        let maxGap: Float = 0.01
+        var dense: [SIMD2<Float>] = [targets[0]]
+        dense.reserveCapacity(targets.count * 2)
+        for i in 1..<targets.count {
+            let a = targets[i - 1], b = targets[i]
+            let seg = simd_length(b - a)
+            let n = max(1, min(64, Int(ceil(seg / maxGap))))
+            for j in 1...n { dense.append(a + (b - a) * (Float(j) / Float(n))) }
+        }
+        targets = dense
+
         // Smoothing = a low-pass on the cursor: higher = rounder/laggier, lower
         // = tracks tighter. Shift held boosts it.
         let smoothing = clamp01(max(settings.landmarks.inkSmoothing, sample.smoothBoost ? 0.85 : 0))
