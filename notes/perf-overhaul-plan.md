@@ -364,3 +364,56 @@ moves ink; you have to "rub" until lift accumulates. Likely the gradual lift
 rate + velocity dissipation/scale. Plan: a wash Strength slider and/or a
 "charge" mechanic (hold-before-drag builds power). Also: tldraw-style path
 smoothing slider for committed pen paths.
+
+---
+
+## Inkwash live-drawing rework (2026-06-15, branch `perf/inkwash`)
+
+Studied the original reference (johnowhitaker/inkwash, `~/Desktop/inkwash/index.html`)
+and fixed how live strokes are laid down. Strokes had degraded over a session
+and after tab-out/in: thin → faceted ("choppy") → chunky ("salami"), and the
+smear had gone turbulent. Root cause was a frame-rate-dependent engine that also
+lost cursor samples and over-/under-drove the fluid field.
+
+- **Real, clamped `dt`** per engine frame (1/120..1/20) instead of a hard-coded
+  1/60, reset on engine reset — speed/width/velocity stay correct as the camera
+  frame rate varies (notably right after tab-in).
+- **No dropped samples**: `NSEvent.isMouseCoalescingEnabled = false` (macOS was
+  coalescing drag events under load → straight chords). Each frame's follow
+  trajectory is seeded from the brush's current position and densely subdivided,
+  so large/irregular inter-frame gaps stay smooth instead of faceting.
+- **Pen = ribbon, not dots**: new `ink_splat_capsule` kernel stamps one
+  variable-width rounded segment per centerline step, `max`-blended into a smooth
+  union — the GPU-texture analogue of perfect-freehand's filled outline. Replaces
+  the row of additive Gaussian discs that beaded into "salami" when the radius
+  wobbled. Width/pressure update per substep along the smoothed path (continuous
+  taper, no per-frame lumps), frame-rate independent.
+- **Wash = the original accumulative smear, restored**: driven by the RAW cursor
+  samples this frame (~a handful), injecting the true local velocity
+  `delta/subDt · force` at each. The maxGap subdivision the pen uses over-drives
+  the velocity field into vorticity turbulence; collapsing to one frame-averaged
+  impulse/frame (the reference's own model) feels bland — raw samples are the
+  sweet spot. Charge / smear-strength / destructive-lift ride on top unchanged.
+  (Resolves the "smear is slow to start" KNOWN ISSUE above.)
+
+### Two safe perf fixes (found while profiling the "slows down over a session" report)
+
+The processing pipeline itself stays **flat ~2.5 ms** across a whole session
+(per the DEBUG perf log) and idle memory is flat — so the reported slowdown is
+NOT the GPU pipeline; it lives on the main thread / display path, which the
+overlay can't see. These two address real accumulation regardless:
+
+- **`CVMetalTextureCacheFlush` per frame** in `MetalEffects` and
+  `MetalLineRenderer` (both wrap a fresh pixel buffer each frame). Apple requires
+  a periodic flush; without it the cache pins IOSurfaces and GPU scheduling
+  degrades over a long session. The ink engine reuses one long-lived output
+  texture, so it is intentionally left unflushed.
+- **DEBUG perf log** now appends via a held `FileHandle` (truncated once at
+  session start) instead of read-whole-file + concat + rewrite every 5 s into a
+  temp file that grew unbounded across sessions (had reached 21k+ lines).
+
+### Next (deferred)
+Main-thread responsiveness meter (runloop tick jitter) surfaced next to the
+pipeline stats, to localize the session-long responsiveness decay the overlay
+is blind to (suspects: `@Published settings` re-eval churn, canvas redrawing all
+paths, display-layer enqueue).
