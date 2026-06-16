@@ -461,6 +461,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var lineWalkHalo: Bool
     public var inkPaths: [InkEditorPath]
     public var inkColor: RGBAColor
+    /// Tint the wet wash leaves on the paper (the wet field's transmission
+    /// colour). Default ≈ light blue-grey reproduces the built-in look; pick a
+    /// colour for tinted wash blobs. Optional for back-compat with old presets.
+    public var inkWashColor: RGBAColor?
     public var inkWidth: Float
     public var inkFlow: Float
     public var inkBleed: Float
@@ -596,6 +600,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkHalo: Bool = false,
         inkPaths: [InkEditorPath] = [],
         inkColor: RGBAColor = .ink,
+        inkWashColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
         inkWidth: Float = 0.5,
         inkFlow: Float = 0.9,
         inkBleed: Float = 0.8,
@@ -709,6 +714,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkHalo = lineWalkHalo
         self.inkPaths = inkPaths
         self.inkColor = inkColor
+        self.inkWashColor = inkWashColor
         self.inkWidth = inkWidth
         self.inkFlow = inkFlow
         self.inkBleed = inkBleed

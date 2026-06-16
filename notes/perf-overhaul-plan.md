@@ -417,3 +417,23 @@ Main-thread responsiveness meter (runloop tick jitter) surfaced next to the
 pipeline stats, to localize the session-long responsiveness decay the overlay
 is blind to (suspects: `@Published settings` re-eval churn, canvas redrawing all
 paths, display-layer enqueue).
+
+### Inkwash follow-ups (2026-06-15, later)
+
+- **White-ink → purple** fixed: `absorption()` normalized `a/m` which amplified a
+  tiny channel imbalance in a near-white pick into a saturated hue. Now desaturates
+  toward neutral by the colour's saturation — saturated colours unchanged, near-white
+  → neutral/faint, pure white → invisible (use the White ink *kind* for opaque white).
+- **White wash clears to paper**: `destructiveWash` is now
+  `mode == .brush && (sample.destructive || kind == .white)`, so any white wash gets
+  the re-mobilizing lift (not just immediate mode) and clears/covers consistently
+  instead of leaving a gray residue. Colored/black committed wash stays additive.
+- **Ctrl-drag = wash**: `mouseDown` treats a Ctrl-held left-drag as secondary (wash),
+  same as a right-drag.
+- **Wash tint colour**: the wash blob's blue-grey is the wet field's display
+  transmission (`col *= mix(1, washTint, ws)`), not ink. New `inkWashColor` setting +
+  "Wash tint" picker (default (0.84,0.85,0.89) reproduces the built-in look); pick a
+  colour for tinted washes. Threaded through the display params + render signature
+  (re-renders, no re-sim). Both ink/wash pickers have a tiny reset-to-default button.
+- **Shortcuts** (Ink tab, rebindable): `I`/`O` toggle immediate pen/wash, `[`/`]`
+  brush size.

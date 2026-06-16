@@ -24,6 +24,7 @@ final class MetalInkEngine {
         var grain: Float
         var opacity: Float
         var colorSep: Float
+        var washTint: SIMD4<Float>
     }
 
     private struct LivePointerState {
@@ -96,6 +97,7 @@ final class MetalInkEngine {
         var whiteTint: Float
         var opacity: Float
         var paperOn: Float
+        var washTint: SIMD4<Float>
     }
 
     private final class DoubleTexture {
@@ -255,7 +257,8 @@ final class MetalInkEngine {
             paperOn: l.inkPaperEnabled,
             grain: clamp01(l.inkPaperGrain),
             opacity: clamp01(l.inkOpacity),
-            colorSep: clamp01(l.inkColorSeparation ?? 0.5)
+            colorSep: clamp01(l.inkColorSeparation ?? 0.5),
+            washTint: Self.washTint(l.inkWashColor)
         )
         let sigChanged = renderSig != lastRenderSig
         let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil
@@ -521,12 +524,15 @@ final class MetalInkEngine {
         // All cursor points captured since the last frame (dense), so fast
         // drags don't get connected by long straight segments. If none arrived
         // (cursor held still), settle/stir toward the last point.
-        // Immediate wash is destructive: it re-mobilizes dried ink under the
-        // brush so the velocity field pushes it. Pen and additive (committed)
-        // wash leave it at 0. Strength (slider) + charge (hold-before-drag)
-        // scale how much lifts per frame and how hard it's pushed — so a normal
-        // drag moves ink without rubbing, and a charged drag hits hard.
-        let destructiveWash = mode == .brush && sample.destructive
+        // A destructive wash re-mobilizes dried (fixed) ink under the brush so
+        // the velocity field pushes it and white pigment can cover it to paper.
+        // This is on for an immediate wash AND for any WHITE wash (white's job is
+        // to clear/cover — without the lift it only partially covers already-dried
+        // ink and leaves a gray residue). Colored/black committed wash stays
+        // additive (lift 0) so its accumulative smear is unchanged. Strength
+        // (slider) + charge (hold-before-drag) scale how much lifts per frame and
+        // how hard it's pushed.
+        let destructiveWash = mode == .brush && (sample.destructive || kind == .white)
         let smear = clamp01(settings.landmarks.inkSmearStrength)
         let chargeMul: Float = 1 + clamp01(sample.charge) * 2
         brushLift = destructiveWash ? min(1.0, (0.45 + 0.55 * smear) * chargeMul) : 0
@@ -807,7 +813,8 @@ final class MetalInkEngine {
             grain: max(0, clamp01(l.inkPaperGrain)),
             whiteTint: clamp01(l.inkColorSeparation ?? 0.5) * 0.35,
             opacity: clamp01(l.inkOpacity),
-            paperOn: l.inkPaperEnabled ? 1 : 0
+            paperOn: l.inkPaperEnabled ? 1 : 0,
+            washTint: Self.washTint(l.inkWashColor)
         )
         encode(displayPSO, textures: [ink.read, fixed.read, wet.read, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }
@@ -871,11 +878,29 @@ final class MetalInkEngine {
 
     private func absorption(for color: RGBAColor) -> SIMD3<Float> {
         let rgb = SIMD3<Float>(color.red, color.green, color.blue)
-        if max(rgb.x, max(rgb.y, rgb.z)) < 0.16 { return Self.inkAbs }
+        let maxC = max(rgb.x, max(rgb.y, rgb.z))
+        if maxC < 0.16 { return Self.inkAbs }
+        let minC = min(rgb.x, min(rgb.y, rgb.z))
         let clamped = SIMD3<Float>(max(rgb.x, 0.02), max(rgb.y, 0.02), max(rgb.z, 0.02))
         let a = SIMD3<Float>(-log(clamped.x), -log(clamped.y), -log(clamped.z))
         let m = max(max(a.x, a.y), max(a.z, 0.25))
-        return a / m
+        let chromatic = a / m
+        // Desaturate toward neutral for low-saturation (near-white / grey) picks.
+        // The a/m normalization otherwise amplifies a tiny channel imbalance in a
+        // light colour into a saturated hue — a white pick came out purple.
+        // Saturated colours (sat≈1) keep their full hue; pure white → 0 (invisible,
+        // use the White ink kind for opaque white pigment).
+        let sat = maxC > 0 ? (maxC - minC) / maxC : 0
+        let mean = (chromatic.x + chromatic.y + chromatic.z) / 3
+        let neutral = SIMD3<Float>(repeating: mean)
+        return neutral + (chromatic - neutral) * sat
+    }
+
+    /// Wet-field transmission colour for the display kernel. Default (no value /
+    /// old presets) ≈ light blue-grey, reproducing the built-in wash tint.
+    private static func washTint(_ color: RGBAColor?) -> SIMD4<Float> {
+        let c = color ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89)
+        return SIMD4<Float>(c.red, c.green, c.blue, 0)
     }
 
     private func clamp01(_ v: Float) -> Float {

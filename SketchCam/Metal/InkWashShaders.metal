@@ -81,6 +81,7 @@ struct InkDisplayParams {
     float whiteTint;
     float opacity;
     float paperOn;
+    float4 washTint; // wet field's transmission colour (rgb)
 };
 
 static float2 uv_for(uint2 gid, uint w, uint h) {
@@ -389,7 +390,9 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     col = mix(col, wcol, cov);
     float wraw = wet.sample(s, uv).x;
     float ws = smoothstep(0.02, 0.6, wraw);
-    col *= float3(1.0) - ws * float3(0.16, 0.15, 0.11);
+    // Wet paper transmits the wash tint (default ≈ (0.84,0.85,0.89) reproduces
+    // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Pick a colour for tinted washes.
+    col *= mix(float3(1.0), p.washTint.rgb, ws);
     float2 q = uv - 0.5;
     col *= 1.0 - dot(q, q) * 0.16;
 

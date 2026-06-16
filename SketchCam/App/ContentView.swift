@@ -786,7 +786,14 @@ struct ContentView: View {
                 ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
             }
             .pickerStyle(.segmented)
-            ColorPicker("Ink", selection: rgbaBinding(\.landmarks.inkColor), supportsOpacity: true)
+            HStack {
+                ColorPicker("Ink", selection: rgbaBinding(\.landmarks.inkColor), supportsOpacity: true)
+                colorResetButton("Reset ink color") { model.settings.landmarks.inkColor = .ink }
+            }
+            HStack {
+                ColorPicker("Wash tint", selection: inkWashColorBinding, supportsOpacity: false)
+                colorResetButton("Reset wash tint") { model.settings.landmarks.inkWashColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) }
+            }
             SliderRow(title: "Size", value: inkSizeBinding)
             SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow))
             SliderRow(title: "Bleed", value: floatBinding(\.landmarks.inkBleed))
@@ -860,6 +867,18 @@ struct ContentView: View {
         model.settings.landmarks.inkKind = currentInkKind.toggled
     }
 
+    private func toggleImmediatePen() {
+        model.settings.landmarks.inkImmediatePen.toggle()
+    }
+
+    private func toggleImmediateWash() {
+        model.settings.landmarks.inkImmediateWash.toggle()
+    }
+
+    private func adjustInkWidth(by delta: Float) {
+        model.settings.landmarks.inkWidth = min(1, max(0, model.settings.landmarks.inkWidth + delta))
+    }
+
     private func undoInk() {
         guard let previous = inkUndoStack.popLast() else { return }
         model.cancelInkLiveStroke()
@@ -930,6 +949,34 @@ struct ContentView: View {
 
     private var inkBrushInkBinding: Binding<Double> {
         optionalLandmarkFloatBinding(\.inkBrushInk, defaultValue: 0)
+    }
+
+    @ViewBuilder private func colorResetButton(_ help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "arrow.uturn.backward")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .foregroundStyle(.secondary)
+        .help(help)
+    }
+
+    private var inkWashColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                let c = model.settings.landmarks.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89)
+                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+            },
+            set: { newValue in
+                guard let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                model.settings.landmarks.inkWashColor = RGBAColor(
+                    red: Float(converted.redComponent),
+                    green: Float(converted.greenComponent),
+                    blue: Float(converted.blueComponent),
+                    alpha: Float(converted.alphaComponent)
+                )
+            }
+        )
     }
 
     @ViewBuilder private var overlayOffHint: some View {
@@ -1313,6 +1360,26 @@ struct ContentView: View {
                    default: KeyBinding(key: "z", modifiers: [.command, .shift])) {
             guard tab == .ink else { return }
             redoInk()
+        }
+        r.register(id: "ink.immediate.pen", title: "Ink: Toggle Immediate Pen", category: "Ink",
+                   default: KeyBinding(key: "i", modifiers: [])) {
+            guard tab == .ink else { return }
+            toggleImmediatePen()
+        }
+        r.register(id: "ink.immediate.wash", title: "Ink: Toggle Immediate Wash", category: "Ink",
+                   default: KeyBinding(key: "o", modifiers: [])) {
+            guard tab == .ink else { return }
+            toggleImmediateWash()
+        }
+        r.register(id: "ink.size.decrease", title: "Ink: Decrease Brush Size", category: "Ink",
+                   default: KeyBinding(key: "[", modifiers: [])) {
+            guard tab == .ink else { return }
+            adjustInkWidth(by: -0.05)
+        }
+        r.register(id: "ink.size.increase", title: "Ink: Increase Brush Size", category: "Ink",
+                   default: KeyBinding(key: "]", modifiers: [])) {
+            guard tab == .ink else { return }
+            adjustInkWidth(by: 0.05)
         }
     }
 
@@ -1735,7 +1802,10 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) {
-            begin(event, secondary: false)
+            // Ctrl-drag smears like a right-drag (wash), without needing a second
+            // mouse button. (If the system already promoted ctrl-click to a
+            // rightMouseDown, that path handles it; otherwise we see it here.)
+            begin(event, secondary: event.modifierFlags.contains(.control))
         }
 
         override func mouseDragged(with event: NSEvent) {
