@@ -81,11 +81,38 @@ struct ContentView: View {
     @State private var inkRedoStack: [[InkEditorPath]] = []
 
     var body: some View {
+        Group {
+            if windowMode.panelVisible && windowMode.panelFit {
+                // Fit mode: panel sits beside the canvas; the canvas shrinks to
+                // the remaining space (fully visible, never under the panel).
+                HStack(spacing: 0) {
+                    previewPane
+                    controlsPane
+                        .frame(width: 360)
+                        .background(Color(nsColor: .windowBackgroundColor))
+                        .overlay(alignment: .leading) { Divider() }
+                }
+            } else {
+                contentWithOverlayPanel
+            }
+        }
+        .overlay { debugOverlay }
+        .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
+        .background(WindowAccessor(controller: windowMode))
+        .onAppear {
+            model.start()
+            registerShortcuts()
+            ShortcutRegistry.shared.start()
+        }
+        .onDisappear { model.stop() }
+    }
+
+    private var contentWithOverlayPanel: some View {
         previewPane
             .overlay {
-                // Tray overlay inside a GeometryReader: GeometryReader
-                // reports no minimum size, so the 360pt panel can never
-                // constrain how small the window may shrink (PIP).
+                // Overlay mode: panel floats over the canvas inside a
+                // GeometryReader (which reports no minimum size, so the 360pt
+                // panel can never constrain how small the window may shrink, PIP).
                 if windowMode.panelVisible {
                     GeometryReader { _ in
                         HStack(spacing: 0) {
@@ -96,30 +123,25 @@ struct ContentView: View {
                         }
                     }
                 }
-                if appUI.debugOverlayVisible {
-                    LiveDebugOverlay(
-                        live: model.live,
-                        permission: model.cameraPermissionState.rawValue,
-                        threshold: model.settings.threshold,
-                        error: model.errorText,
-                        close: { appUI.debugOverlayVisible = false },
-                        offset: $debugOverlayOffset
-                    )
-                    .padding(.trailing, 14)
-                    .padding(.vertical, 14)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .zIndex(100)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                }
             }
-        .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
-        .background(WindowAccessor(controller: windowMode))
-        .onAppear {
-            model.start()
-            registerShortcuts()
-            ShortcutRegistry.shared.start()
+    }
+
+    @ViewBuilder private var debugOverlay: some View {
+        if appUI.debugOverlayVisible {
+            LiveDebugOverlay(
+                live: model.live,
+                permission: model.cameraPermissionState.rawValue,
+                threshold: model.settings.threshold,
+                error: model.errorText,
+                close: { appUI.debugOverlayVisible = false },
+                offset: $debugOverlayOffset
+            )
+            .padding(.trailing, 14)
+            .padding(.vertical, 14)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+            .zIndex(100)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
-        .onDisappear { model.stop() }
     }
 
     // MARK: - Preview
@@ -160,6 +182,7 @@ struct ContentView: View {
                         brushMode: currentInkMode,
                         inkKind: currentInkKind,
                         width: Float(inkSizeBinding.wrappedValue),
+                        washWidth: Float(inkWashSizeBinding.wrappedValue),
                         flow: model.settings.landmarks.inkFlow,
                         bleed: model.settings.landmarks.inkBleed,
                         dry: model.settings.landmarks.inkDry,
@@ -709,7 +732,8 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.segmented)
-            SliderRow(title: "Opacity", value: floatBinding(\.landmarks.inkOpacity))
+            SliderRow(title: "Opacity", value: floatBinding(\.landmarks.inkOpacity), defaultValue: 1,
+                      hint: "Opacity of the whole ink layer over the drawing/camera.")
 
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
@@ -763,7 +787,7 @@ struct ContentView: View {
             .controlSize(.small)
             Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
                 .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
-            SliderRow(title: "Smoothing", value: floatBinding(\.landmarks.inkSmoothing),
+            SliderRow(title: "Smooth", value: floatBinding(\.landmarks.inkSmoothing), defaultValue: 0.5,
                       hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.")
 
             SectionHeader("Pen / Wash")
@@ -771,42 +795,65 @@ struct ContentView: View {
                 ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
             .pickerStyle(.segmented)
-            HStack {
-                Toggle("Immediate pen", isOn: $model.settings.landmarks.inkImmediatePen)
-                Toggle("Immediate wash", isOn: $model.settings.landmarks.inkImmediateWash)
+            .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
+            // Ink + Wash colours on one row; the checkbox next to each toggles
+            // "save stroke" for that tool (off = immediate: paints straight onto
+            // the canvas without recording an editable path).
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
+                    colorResetButton("Reset ink color") { model.settings.landmarks.inkColor = .ink }
+                    Toggle("", isOn: savePenStrokeBinding)
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
+                        .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
+                }
+                Spacer(minLength: 6)
+                HStack(spacing: 6) {
+                    RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
+                    colorResetButton("Reset wash color") { model.settings.landmarks.inkWashColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) }
+                    Toggle("", isOn: saveWashStrokeBinding)
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
+                        .help("Save wash stroke as an editable path. Off = immediate.")
+                }
             }
-            .help("Immediate mode paints straight onto the canvas without adding an editable path — good for experimenting without filling the path buffer. These marks aren't selectable, editable, or re-rendered.")
-            SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength),
-                      hint: "Immediate-wash push strength — how aggressively the wet brush re-mobilizes and drags dried ink. Hold the mouse still before dragging to 'charge' an extra-strong push.")
             Picker("Ink", selection: inkKindBinding) {
                 ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
             }
             .pickerStyle(.segmented)
-            HStack {
-                ColorPicker("Ink", selection: rgbaBinding(\.landmarks.inkColor), supportsOpacity: true)
-                colorResetButton("Reset ink color") { model.settings.landmarks.inkColor = .ink }
-            }
-            HStack {
-                ColorPicker("Wash tint", selection: inkWashColorBinding, supportsOpacity: false)
-                colorResetButton("Reset wash tint") { model.settings.landmarks.inkWashColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) }
-            }
-            SliderRow(title: "Size", value: inkSizeBinding)
-            SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow))
-            SliderRow(title: "Bleed", value: floatBinding(\.landmarks.inkBleed))
-            SliderRow(title: "Dry", value: floatBinding(\.landmarks.inkDry))
-            SliderRow(title: "Color", value: inkColorSeparationBinding)
-            SliderRow(title: "Brush ink", value: inkBrushInkBinding)
+            .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
+            SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5,
+                      hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.")
+            SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5,
+                      hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.")
+            SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength), defaultValue: 0.5,
+                      hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.")
+            SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow), defaultValue: 0.9,
+                      hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.")
+            SliderRow(title: "Bleed", value: floatBinding(\.landmarks.inkBleed), defaultValue: 0.8,
+                      hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)")
+            SliderRow(title: "Dry", value: floatBinding(\.landmarks.inkDry), defaultValue: 0.25,
+                      hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.")
+            SliderRow(title: "Fade", value: optionalLandmarkFloatBinding(\.inkFadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
+                      hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.")
+            SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5,
+                      hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.")
+            SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0,
+                      hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).")
             Picker("Curve", selection: $model.settings.landmarks.inkCurveFit) {
                 ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
             }
             .pickerStyle(.segmented)
+            .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
             seedRow(\.landmarks.inkSeed)
 
             SectionHeader("Paper")
             Toggle("Paper layer", isOn: $model.settings.landmarks.inkPaperEnabled)
             ColorPicker("Paper", selection: rgbaBinding(\.landmarks.inkPaperColor), supportsOpacity: true)
                 .disabled(!model.settings.landmarks.inkPaperEnabled)
-            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain))
+            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain), defaultValue: 0.45,
+                      hint: "Paper texture / grain strength.")
                 .disabled(!model.settings.landmarks.inkPaperEnabled)
         }
         .disabled(!model.settings.landmarks.inkEnabled)
@@ -839,9 +886,10 @@ struct ContentView: View {
     private func clearInk() {
         model.cancelInkLiveStroke()
         setInkPaths([])
-        // Force a rebuild so the canvas is wiped even when there were no
-        // committed paths (e.g. only immediate-mode marks).
-        model.settings.landmarks.inkRebuildRevision += 1
+        // Fade the canvas out over the Fade duration, then wipe — the engine
+        // fades the live-baked + committed ink (incl. immediate-mode marks) and
+        // clears the textures when the fade completes.
+        model.settings.landmarks.inkClearFadeRevision = (model.settings.landmarks.inkClearFadeRevision ?? 0) + 1
         clearInkSelection()
     }
 
@@ -872,7 +920,12 @@ struct ContentView: View {
     }
 
     private func adjustInkWidth(by delta: Float) {
-        model.settings.landmarks.inkWidth = min(1, max(0, model.settings.landmarks.inkWidth + delta))
+        model.settings.landmarks.inkWidth = min(1.5, max(0, model.settings.landmarks.inkWidth + delta))
+    }
+
+    private func adjustInkWashWidth(by delta: Float) {
+        let v = (model.settings.landmarks.inkWashWidth ?? 0.5) + delta
+        model.settings.landmarks.inkWashWidth = min(1.5, max(0, v))
     }
 
     private func undoInk() {
@@ -934,8 +987,17 @@ struct ContentView: View {
 
     private var inkSizeBinding: Binding<Double> {
         Binding(
-            get: { Double(min(1, max(0, model.settings.landmarks.inkWidth))) },
+            // No upper clamp: the slider stays 0…1, but the editable field can
+            // type past 1 for a bigger pen (engine caps it safely).
+            get: { Double(max(0, model.settings.landmarks.inkWidth)) },
             set: { model.settings.landmarks.inkWidth = Float($0) }
+        )
+    }
+
+    private var inkWashSizeBinding: Binding<Double> {
+        Binding(
+            get: { Double(max(0, model.settings.landmarks.inkWashWidth ?? 0.5)) },
+            set: { model.settings.landmarks.inkWashWidth = Float($0) }
         )
     }
 
@@ -955,6 +1017,24 @@ struct ContentView: View {
         .controlSize(.small)
         .foregroundStyle(.secondary)
         .help(help)
+    }
+
+    private var inkColorRGBA: Binding<RGBAColor> {
+        Binding(get: { model.settings.landmarks.inkColor },
+                set: { model.settings.landmarks.inkColor = $0 })
+    }
+    private var inkWashColorRGBA: Binding<RGBAColor> {
+        Binding(get: { model.settings.landmarks.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89) },
+                set: { model.settings.landmarks.inkWashColor = $0 })
+    }
+    // "Save stroke" = the inverse of immediate mode (off = immediate).
+    private var savePenStrokeBinding: Binding<Bool> {
+        Binding(get: { !model.settings.landmarks.inkImmediatePen },
+                set: { model.settings.landmarks.inkImmediatePen = !$0 })
+    }
+    private var saveWashStrokeBinding: Binding<Bool> {
+        Binding(get: { !model.settings.landmarks.inkImmediateWash },
+                set: { model.settings.landmarks.inkImmediateWash = !$0 })
     }
 
     private var inkWashColorBinding: Binding<Color> {
@@ -1271,8 +1351,10 @@ struct ContentView: View {
                    default: KeyBinding(key: "f", modifiers: .command)) { [weak model] in model?.toggleFreezeOrPause() }
         r.register(id: "transport.export", title: "Export Frame", category: "Transport",
                    default: KeyBinding(key: "e", modifiers: .command)) { [weak model] in model?.exportCurrentFrame() }
-        r.register(id: "window.panel", title: "Toggle Side Panel", category: "Window",
-                   default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.panelVisible.toggle() }
+        r.register(id: "window.panel", title: "Toggle Side Panel (fit canvas)", category: "Window",
+                   default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.togglePanelFit() }
+        r.register(id: "window.panelOverlay", title: "Toggle Side Panel (overlay)", category: "Window",
+                   default: KeyBinding(key: "u", modifiers: [.shift, .option])) { [weak windowMode] in windowMode?.togglePanelOverlay() }
         r.register(id: "window.decoration", title: "Toggle Window Decoration", category: "Window",
                    default: KeyBinding(key: "d", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.decorated.toggle() }
         r.register(id: "window.transparent", title: "Toggle Transparent Window", category: "Window",
@@ -1377,6 +1459,18 @@ struct ContentView: View {
             guard tab == .ink else { return }
             adjustInkWidth(by: 0.05)
         }
+        // Shift+[ / Shift+] resize the WASH brush (the chars are { } once Shift is
+        // applied). Pen size uses plain [ ].
+        r.register(id: "ink.washSize.decrease", title: "Ink: Decrease Wash Size", category: "Ink",
+                   default: KeyBinding(key: "{", modifiers: .shift)) {
+            guard tab == .ink else { return }
+            adjustInkWashWidth(by: -0.05)
+        }
+        r.register(id: "ink.washSize.increase", title: "Ink: Increase Wash Size", category: "Ink",
+                   default: KeyBinding(key: "}", modifiers: .shift)) {
+            guard tab == .ink else { return }
+            adjustInkWashWidth(by: 0.05)
+        }
     }
 
     // MARK: - Bindings
@@ -1455,25 +1549,82 @@ private struct SectionHeader: View {
     }
 }
 
+/// ColorPicker bound to an `RGBAColor`. Keeps the picker's own `Color` state and
+/// only writes to the model on real changes (and resyncs only on EXTERNAL model
+/// changes) — round-tripping the model binding through sRGB on every micro-edit
+/// made the system picker re-derive HSB and jump (hue moved when dragging
+/// brightness). This breaks that feedback loop.
+private struct RGBAColorPicker: View {
+    let label: String
+    @Binding var rgba: RGBAColor
+    var supportsOpacity: Bool = true
+    @State private var color: Color
+
+    init(_ label: String, rgba: Binding<RGBAColor>, supportsOpacity: Bool = true) {
+        self.label = label
+        self._rgba = rgba
+        self.supportsOpacity = supportsOpacity
+        self._color = State(initialValue: Self.toColor(rgba.wrappedValue))
+    }
+
+    var body: some View {
+        ColorPicker(label, selection: $color, supportsOpacity: supportsOpacity)
+            .onChange(of: color) { _, new in
+                let c = Self.toRGBA(new)
+                if c != rgba { rgba = c }
+            }
+            .onChange(of: rgba) { _, new in
+                // Only resync when the model changed externally (e.g. reset),
+                // not from our own write above (compare in RGBA space).
+                if Self.toRGBA(color) != new { color = Self.toColor(new) }
+            }
+    }
+
+    static func toColor(_ c: RGBAColor) -> Color {
+        Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+    }
+    static func toRGBA(_ color: Color) -> RGBAColor {
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? .black
+        return RGBAColor(red: Float(ns.redComponent), green: Float(ns.greenComponent), blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))
+    }
+}
+
 private struct SliderRow: View {
     let title: String
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
     var precision: Int = 2
+    var defaultValue: Double?
     var hint: String?
+    @FocusState private var editing: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
                 .frame(width: 64, alignment: .leading)
+                .contentShape(Rectangle())
+                // Double-click the label to reset this parameter to its default.
+                .onTapGesture(count: 2) { if let defaultValue { value = defaultValue } }
+                .help(hint ?? title)
             Slider(value: $value, in: range)
                 .controlSize(.small)
-            Text(value, format: .number.precision(.fractionLength(precision)))
+            // Editable: click/double-click to type an exact value — and you can
+            // go OUTSIDE the slider range (e.g. a slightly negative Bleed) to
+            // experiment; the slider thumb just pins to its end. Enter or Escape
+            // commits and releases focus so keyboard shortcuts ([, ], etc.) work
+            // again (clicking the canvas also releases it).
+            TextField("", value: $value, format: .number.precision(.fractionLength(precision)))
+                .textFieldStyle(.plain)
                 .monospacedDigit()
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 38, alignment: .trailing)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 42, alignment: .trailing)
+                .focused($editing)
+                .onSubmit { editing = false }
+                .onExitCommand { editing = false }
         }
+        .contentShape(Rectangle())
         .help(hint ?? title)
     }
 }
@@ -1872,6 +2023,7 @@ private struct InkPreviewDrawingLayer: View {
     let brushMode: InkBrushMode
     let inkKind: InkKind
     let width: Float
+    let washWidth: Float
     let flow: Float
     let bleed: Float
     let dry: Float
@@ -1989,7 +2141,7 @@ private struct InkPreviewDrawingLayer: View {
                 points: current,
                 brushMode: currentStrokeMode ?? brushMode,
                 inkKind: inkKind,
-                width: width,
+                width: (currentStrokeMode ?? brushMode) == .brush ? washWidth : width,
                 flow: flow,
                 bleed: bleed,
                 dry: dry,
@@ -2032,7 +2184,7 @@ private struct InkPreviewDrawingLayer: View {
             point: point,
             brushMode: strokeMode,
             inkKind: inkKind,
-            width: width,
+            width: strokeMode == .brush ? washWidth : width,
             flow: flow,
             brushInk: brushInk,
             color: inkRGBA,

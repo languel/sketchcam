@@ -81,6 +81,7 @@ struct InkDisplayParams {
     float whiteTint;
     float opacity;
     float paperOn;
+    float inkFade;   // scales pigment + wet tint (1 = normal, 0 = cleared); paper unaffected
     float4 washTint; // wet field's transmission colour (rgb)
 };
 
@@ -314,7 +315,9 @@ kernel void ink_advect_ink(texture2d<float, access::sample> velocity [[texture(0
                 inkIn.sample(s, coord - float2(b.x, 0.0)) +
                 inkIn.sample(s, coord + float2(0.0, b.y)) +
                 inkIn.sample(s, coord - float2(0.0, b.y))) * 0.25;
-    float4 bleedAmt = clamp(p.bleed * (0.25 + 1.3 * brush) * mob * float4(p.chroma, 1.05), 0.0, 0.92);
+    // Lower bound goes slightly negative so a negative Bleed (typed into the
+    // editable field) anti-diffuses — sharpens/condenses ink instead of spreading.
+    float4 bleedAmt = clamp(p.bleed * (0.25 + 1.3 * brush) * mob * float4(p.chroma, 1.05), -0.5, 0.92);
     float4 mixed = mix(adv, n, bleedAmt);
     inkOut.write(mix(cur, mixed, mob), gid);
 }
@@ -364,7 +367,7 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
-    auto pig = [&](float2 q) { return ink.sample(s, q) + fixedTex.sample(s, q); };
+    auto pig = [&](float2 q) { return (ink.sample(s, q) + fixedTex.sample(s, q)) * p.inkFade; };
     float4 pw = pig(uv);
     float3 dens = pw.rgb;
     float c = dot(dens, float3(1.0));
@@ -389,10 +392,10 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float3 wcol = mix(float3(0.985, 0.982, 0.972), float3(0.945, 0.955, 1.0), p.whiteTint);
     col = mix(col, wcol, cov);
     float wraw = wet.sample(s, uv).x;
-    float ws = smoothstep(0.02, 0.6, wraw);
+    float ws = smoothstep(0.02, 0.6, wraw) * p.inkFade;
     // Wet paper transmits the wash tint (default ≈ (0.84,0.85,0.89) reproduces
     // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Pick a colour for tinted washes.
-    col *= mix(float3(1.0), p.washTint.rgb, ws);
+    col *= mix(float3(1.0), p.washTint.rgb, ws * p.washTint.a);
     float2 q = uv - 0.5;
     col *= 1.0 - dot(q, q) * 0.16;
 

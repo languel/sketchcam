@@ -97,6 +97,7 @@ final class MetalInkEngine {
         var whiteTint: Float
         var opacity: Float
         var paperOn: Float
+        var inkFade: Float
         var washTint: SIMD4<Float>
     }
 
@@ -155,6 +156,11 @@ final class MetalInkEngine {
     /// 0 = additive wash. Rides in the exchange brush.w.
     private var brushLift: Float = 0
     private var activeFramesRemaining = 0
+    // Clear fade-out: when triggered, the layer fades to transparent over the
+    // fade duration, then the textures are wiped (instead of an instant clear).
+    private var clearFade: Float = 1
+    private var clearFadeActive = false
+    private var lastClearFadeRevision = 0
     private var replayedPaths: [InkEditorPath] = []
     private var livePointerStates: [UUID: LivePointerState] = [:]
     /// Strokes whose ink was injected live (already on the canvas); the
@@ -232,6 +238,9 @@ final class MetalInkEngine {
         brushNow = SIMD3(0, 0, 0)
         brushLift = 0
         activeFramesRemaining = 0
+        clearFade = 1
+        clearFadeActive = false
+        lastClearFadeRevision = 0
         replayedPaths = []
         livePointerStates = [:]
         bakedLiveIDs = []
@@ -253,6 +262,9 @@ final class MetalInkEngine {
         let pathsChanged = replayablePaths != replayedPaths
         let fixRevision = l.inkFixRevision ?? 0
         let fixRequested = fixRevision != lastFixRevision
+        let fadeDuration = max(0.15, l.inkFadeDuration ?? 1.2)
+        let clearFadeRev = l.inkClearFadeRevision ?? 0
+        let clearFadeRequested = clearFadeRev != lastClearFadeRevision && !needRebuild
         let renderSig = RenderSignature(
             paperOn: l.inkPaperEnabled,
             grain: clamp01(l.inkPaperGrain),
@@ -261,7 +273,7 @@ final class MetalInkEngine {
             washTint: Self.washTint(l.inkWashColor)
         )
         let sigChanged = renderSig != lastRenderSig
-        let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil
+        let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
 
         // Nothing to draw at all → blank.
         if !l.inkPaperEnabled, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
@@ -294,19 +306,34 @@ final class MetalInkEngine {
             rebuildKey = key
             lastFrameIndex = nil
             activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
-        } else if pathsChanged {
+        } else if pathsChanged && !clearFadeRequested && !clearFadeActive {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
         }
 
-        // Dry the just-finished stroke into the fixed paper layer.
+        // Clear via fade: keep the current textures, fade the layer to
+        // transparent over the fade duration, THEN wipe — instead of an instant
+        // clear. The UI empties inkPaths at the same time; adopt that as the
+        // replayed set so the emptied paths don't trigger an instant reconcile.
+        if clearFadeRequested {
+            lastClearFadeRevision = clearFadeRev
+            clearFadeActive = true
+            clearFade = 1
+            replayedPaths = replayablePaths
+            activeFramesRemaining = max(activeFramesRemaining, Int(fadeDuration * 60) + 30)
+        }
+
+        // Dry the just-finished stroke into the fixed paper layer. The settle
+        // window length is the Fade duration (longer = the wash keeps drifting
+        // and settling longer before it locks in).
+        let fadeFrames = Int(fadeDuration * 60) + 30
         if endedLiveID != nil {
-            fixTimer = max(fixTimer, 1.2)
-            activeFramesRemaining = max(activeFramesRemaining, 90)
+            fixTimer = max(fixTimer, fadeDuration)
+            activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
         }
         if fixRequested {
-            fixTimer = 1.2
+            fixTimer = fadeDuration
             lastFixRevision = fixRevision
-            activeFramesRemaining = max(activeFramesRemaining, 90)
+            activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
         }
 
         if lastFrameIndex != frameIndex {
@@ -316,6 +343,18 @@ final class MetalInkEngine {
             let now = CFAbsoluteTimeGetCurrent()
             let dt: Float = lastStepTime > 0 ? Float(min(1.0 / 20.0, max(1.0 / 120.0, now - lastStepTime))) : 1.0 / 60.0
             lastStepTime = now
+            if clearFadeActive {
+                clearFade = max(0, clearFade - dt / fadeDuration)
+                if clearFade <= 0.001 {
+                    clearAll(commandBuffer)
+                    bakedLiveIDs = []
+                    livePointerStates = [:]
+                    clearFadeActive = false
+                    clearFade = 1
+                    activeFramesRemaining = 0
+                    fixTimer = 0
+                }
+            }
             let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
@@ -534,10 +573,20 @@ final class MetalInkEngine {
         // how hard it's pushed.
         let destructiveWash = mode == .brush && (sample.destructive || kind == .white)
         let smear = clamp01(settings.landmarks.inkSmearStrength)
-        let chargeMul: Float = 1 + clamp01(sample.charge) * 2
-        brushLift = destructiveWash ? min(1.0, (0.45 + 0.55 * smear) * chargeMul) : 0
-        let forceBoost: Float = destructiveWash ? (1 + smear * 1.5) * chargeMul : 1
-        let velCap: Float = destructiveWash ? 240 * chargeMul : 240
+        // Every wash re-mobilizes a little dried pigment so smearing EXISTING
+        // (dried) strokes is consistent — previously a wash only moved still-wet
+        // ink, so the same gesture did a lot on a fresh stroke and nothing on a
+        // dried one. Immediate/white wash lifts harder (clears/covers). Strength
+        // scales it. (Hold-to-charge removed: it multiplied force up to 3x by
+        // pre-drag hold time, which you don't consciously control → wildly
+        // variable. Strength + actual movement now drive the smear predictably.)
+        brushLift = mode == .brush ? (destructiveWash ? min(1.0, 0.5 + 0.5 * smear) : 0.05 + 0.65 * smear) : 0
+        let forceBoost: Float = mode == .brush ? (0.15 + 1.9 * smear) * (destructiveWash ? 1.4 : 1.0) : 1
+        // The Smear slider also sets the movement SENSITIVITY: low Smear needs a
+        // deliberate move before it smears (fine control), high Smear smears on
+        // the slightest motion (dramatic). One dial spanning subtle → dramatic.
+        let smearThreshold: Float = 0.0008 + (1 - smear) * 0.010
+        let velCap: Float = 240
 
         let rawPoints = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
         let fallback = SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))
@@ -589,12 +638,13 @@ final class MetalInkEngine {
                 var vel = delta / max(subDtW, 0.0001) * force
                 let vm = simd_length(vel)
                 if vm > velCap { vel *= velCap / vm }
-                if dist < radius * 0.25 {
+                if dist < smearThreshold {
+                    // Below the Smear-controlled sensitivity threshold: just
+                    // wet/pool, no velocity. (Was radius*0.25 — a velocity-
+                    // dependent cutoff that made slow drags fail to smear. Now it's
+                    // an absolute distance the Smear slider dials from delicate to
+                    // hair-trigger.)
                     splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-                    state.stirPhase += 2.399963
-                    let stir = (6 + 26 * flow) * pressure
-                    let jitter = SIMD2<Float>(cos(state.stirPhase) * stir, sin(state.stirPhase) * stir)
-                    splat(texture: velocity.read, point: current, radius: radius * 0.9, color: SIMD4<Float>(jitter.x, jitter.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
                     if loadedDensity > 0 {
                         splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * subDtW * 5), blend: .add, commandBuffer: commandBuffer)
                     }
@@ -742,19 +792,25 @@ final class MetalInkEngine {
         let washStrength = clamp01(l.inkWashStrength)
         let fixing = fixTimer > 0
         if fixing { fixTimer = max(0, fixTimer - dt) }
+        // Longer Fade → gentler freeze, so the motion keeps drifting/settling for
+        // the whole window instead of snapping still (1.2s is the baseline feel).
+        let fadeScale = 1.2 / max(0.3, l.inkFadeDuration ?? 1.2)
         let simTexel = SIMD2<Float>(1 / Float(velocity.read.width), 1 / Float(velocity.read.height))
         let dyeTexel = SIMD2<Float>(1 / Float(ink.read.width), 1 / Float(ink.read.height))
         var advVel = AdvectVelocityParams(
             texel: simTexel,
             dt: dt,
-            dissipation: exp(-dt * (3.0 - flow * 2.4 + dry * 5.0)) * (fixing ? exp(-dt * 7) : 1)
+            dissipation: exp(-dt * (3.0 - flow * 2.4 + dry * 5.0)) * (fixing ? exp(-dt * 7 * fadeScale) : 1)
         )
         encode(advectVelocityPSO, textures: [velocity.read, wet.read, velocity.write], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
         encode(curlPSO, textures: [velocity.read, curl], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: curl, commandBuffer: commandBuffer)
 
-        var vort = VorticityParams(texel: simTexel, curlAmount: 4 + flow * 22, dt: dt)
+        // Lower vorticity confinement so the wash translates ink in the drag
+        // DIRECTION rather than curling it into fast swirls/turbulence. Some curl
+        // stays for organic character; it's no longer the dominant motion.
+        var vort = VorticityParams(texel: simTexel, curlAmount: 2 + flow * 8, dt: dt)
         encode(vorticityPSO, textures: [velocity.read, curl, velocity.write], bytes: &vort, length: MemoryLayout<VorticityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
@@ -772,7 +828,9 @@ final class MetalInkEngine {
         encode(gradientSubtractPSO, textures: [pressure.read, velocity.read, velocity.write], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
-        let dryTau: Float = fixing ? 0.22 : 0.12 + pow(1 - dry, 2.2) * 26
+        // Longer Fade → larger tau while fixing → wet lingers longer, so the
+        // settle/diffusion stretches over the whole fade window.
+        let dryTau: Float = fixing ? 0.22 / fadeScale : 0.12 + pow(1 - dry, 2.2) * 26
         let spread: Float = 0.18 * (1 - dry * 0.78)
         var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau), spread: spread)
         encode(advectWetPSO, textures: [velocity.read, wet.read, wet.write], bytes: &advWet, length: MemoryLayout<AdvectWetParams>.stride, grid: wet.write, commandBuffer: commandBuffer)
@@ -792,7 +850,7 @@ final class MetalInkEngine {
         encode(advectInkPSO, textures: [velocity.read, ink.read, wet.read, ink.write], bytes: &advInk, length: MemoryLayout<AdvectInkParams>.stride, grid: ink.write, commandBuffer: commandBuffer)
         ink.swap()
 
-        let settle: Float = fixing ? 1 - exp(-dt * 5) : 0
+        let settle: Float = fixing ? 1 - exp(-dt * 5 * fadeScale) : 0
         var exch = ExchangeParams(settle: settle, dt: dt, aspect: aspect, mode: 0, brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, brushLift))
         encode(exchangePSO, textures: [fixed.read, ink.read, wet.read, fixed.write], bytes: &exch, length: MemoryLayout<ExchangeParams>.stride, grid: fixed.write, commandBuffer: commandBuffer)
         exch.mode = 1
@@ -814,6 +872,9 @@ final class MetalInkEngine {
             whiteTint: clamp01(l.inkColorSeparation ?? 0.5) * 0.35,
             opacity: clamp01(l.inkOpacity),
             paperOn: l.inkPaperEnabled ? 1 : 0,
+            // Clear fade scales the PIGMENT (and wet tint) to 0, leaving the paper
+            // fully opaque — so a fade-out doesn't show through to the camera.
+            inkFade: clearFadeActive ? clearFade : 1,
             washTint: Self.washTint(l.inkWashColor)
         )
         encode(displayPSO, textures: [ink.read, fixed.read, wet.read, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
@@ -852,12 +913,15 @@ final class MetalInkEngine {
     }
 
     private func normalizedSize(_ value: Float) -> Float {
-        if value <= 1 { return clamp01(value) }
-        return clamp01((value - 0.5) / 27.5)
+        // 0…1 is the normal slider range; values >1 (typed into the editable
+        // field) make the brush bigger, capped at 1.5 so it stays usable/safe.
+        min(1.5, max(0, value))
     }
 
     private func sizeMult(_ size: Float) -> Float {
-        pow(3, (clamp01(size) - 0.5) * 2)
+        // size 0.5 = 1×; 0 ≈ 0.33×; 1 = 3×; 1.5 ≈ 11× (don't clamp the top so the
+        // override past 1 actually enlarges the brush).
+        pow(3, (min(1.5, max(0, size)) - 0.5) * 2)
     }
 
     private func penRadius(pressure: Float, speed: Float, size: Float) -> Float {
@@ -900,7 +964,9 @@ final class MetalInkEngine {
     /// old presets) ≈ light blue-grey, reproducing the built-in wash tint.
     private static func washTint(_ color: RGBAColor?) -> SIMD4<Float> {
         let c = color ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89)
-        return SIMD4<Float>(c.red, c.green, c.blue, 0)
+        // .w carries opacity = tint strength (how strongly the wash colours the
+        // wet paper); rgb is the tint colour.
+        return SIMD4<Float>(c.red, c.green, c.blue, c.alpha)
     }
 
     private func clamp01(_ v: Float) -> Float {

@@ -460,3 +460,36 @@ Fix: moved the high-frequency `stats` + `previewImage` to a dedicated
 views (`LivePreviewImage` / `LiveDebugGrid` / `LiveDebugOverlay`); guarded
 `errorText` so it's only cleared when non-nil. After: ControlTab tags 4–5,
 Observation dicts ~38, footprint ~495MB — flat under idle AND drawing.
+
+### Drawing-feel + ink UX pass (2026-06-15, branch `drawing-tweaks`)
+
+Made the wash expressive and the ink panel friendlier (all in MetalInkEngine +
+ContentView; defaults preserve prior look unless noted):
+
+- **Wash smear**: removed the rotating dwell-jitter and cut vorticity (4+flow·22
+  → 2+flow·8) so it pushes ink directionally instead of trembling. Every wash
+  re-mobilizes a little dried pigment so smearing existing strokes is consistent.
+  The **Smear** slider is now a single subtle→dramatic dial (it scales force, lift
+  AND the movement-sensitivity threshold). Removed the hold-to-charge mechanic
+  (made the same gesture unpredictable).
+- **Acrylic spreading**: documented that **Bleed**=0 = conserve-and-push pigment
+  (no dissolve); shader lower-clamp now allows slightly negative Bleed (anti-
+  diffuse/sharpen) via the editable field.
+- **Fade**: new setting — seconds the ink settles after release (softens the
+  motion-freeze/dry/settle rates so it keeps drifting) AND the Clear fade-out
+  duration. Clear (C) now dissolves the pigment to 0 over Fade then wipes (paper
+  stays opaque — the fade scales pigment via a display `inkFade`, not layer alpha).
+- **Sizes**: separate **Pen size** and **Wash size**; editable fields accept >1
+  for bigger brushes (normalizedSize/sizeMult now grow past 1, capped ~11×).
+- **Wash colour**: `inkWashColor` tints the wet paper (was a fixed blue-grey);
+  picker supports opacity (alpha = tint strength). Relabelled "Wash".
+- **Ink kind** relabelled **Color / Dissolve** (was Black / White).
+- **Immediate → "Save stroke"**: checkboxes next to the colour pickers; off =
+  immediate (now the default).
+- **Editable param fields** (type exact / out-of-range values; Enter/Esc release
+  focus), **hover tips** on ink params + pickers, **double-click a label to reset**
+  to default, and a `RGBAColorPicker` that fixes the system picker's hue-jump
+  (kept the picker's own state; only writes the model on real changes).
+- **Panel**: ⌘⌥U shows the panel beside the canvas (canvas shrinks to fit); ⇧⌥U
+  is the old overlay behaviour.
+- **Shortcuts**: `[`/`]` pen size, ⇧`[`/⇧`]` wash size, `I`/`O` toggle immediate.

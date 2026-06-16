@@ -93,8 +93,8 @@ public enum InkKind: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var title: String {
         switch self {
-        case .black: return "Black"
-        case .white: return "White"
+        case .black: return "Color"     // chromatic ink (uses the Ink colour)
+        case .white: return "Dissolve"  // opaque white pigment — covers / erases / clears
         }
     }
 
@@ -465,7 +465,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// colour). Default ≈ light blue-grey reproduces the built-in look; pick a
     /// colour for tinted wash blobs. Optional for back-compat with old presets.
     public var inkWashColor: RGBAColor?
+    /// Pen tip size.
     public var inkWidth: Float
+    /// Wash brush size — separate from the pen so each tool keeps its own size.
+    public var inkWashWidth: Float?
     public var inkFlow: Float
     public var inkBleed: Float
     public var inkDry: Float
@@ -490,6 +493,13 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Bumped by the UI to force the engine to clear and re-simulate every
     /// committed path from scratch ("Rerender").
     public var inkRebuildRevision: Int
+    /// Seconds the ink takes to settle after a stroke ends, and to fade out on
+    /// Clear. Longer = the wash keeps drifting/settling longer (nice for live
+    /// performance); also the Clear fade-out duration.
+    public var inkFadeDuration: Float?
+    /// Bumped by the UI's Clear to fade the canvas out over `inkFadeDuration`
+    /// before wiping, instead of an instant clear.
+    public var inkClearFadeRevision: Int?
     /// Immediate mode: the stroke paints straight onto the canvas (the live
     /// bake) without being added to the editable path buffer. Separate for pen
     /// and wash so each can be toggled.
@@ -602,6 +612,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkColor: RGBAColor = .ink,
         inkWashColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
         inkWidth: Float = 0.5,
+        inkWashWidth: Float? = 0.5,
         inkFlow: Float = 0.9,
         inkBleed: Float = 0.8,
         inkDry: Float = 0.25,
@@ -618,8 +629,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkShowLivePath: Bool = false,
         inkSmoothing: Float = 0.5,
         inkRebuildRevision: Int = 0,
-        inkImmediatePen: Bool = false,
-        inkImmediateWash: Bool = false,
+        inkFadeDuration: Float? = 1.2,
+        inkClearFadeRevision: Int? = 0,
+        inkImmediatePen: Bool = true,
+        inkImmediateWash: Bool = true,
         inkSmearStrength: Float = 0.5,
         useMetalDrawing: Bool = false,
         beadStroke: Bool = false,
@@ -716,6 +729,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkColor = inkColor
         self.inkWashColor = inkWashColor
         self.inkWidth = inkWidth
+        self.inkWashWidth = inkWashWidth
         self.inkFlow = inkFlow
         self.inkBleed = inkBleed
         self.inkDry = inkDry
@@ -732,6 +746,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkShowLivePath = inkShowLivePath
         self.inkSmoothing = inkSmoothing
         self.inkRebuildRevision = inkRebuildRevision
+        self.inkFadeDuration = inkFadeDuration
+        self.inkClearFadeRevision = inkClearFadeRevision
         self.inkImmediatePen = inkImmediatePen
         self.inkImmediateWash = inkImmediateWash
         self.inkSmearStrength = inkSmearStrength

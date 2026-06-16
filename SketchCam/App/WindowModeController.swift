@@ -6,7 +6,22 @@ import SwiftUI
 /// the window, so `WindowAccessor` hands it over after the view appears.
 final class WindowModeController: ObservableObject {
     @Published var panelVisible = true
+    /// true = panel sits beside the canvas and the canvas shrinks to fit;
+    /// false = panel floats over the canvas (canvas full-size, partly obscured).
+    @Published var panelFit = true
     @Published var decorated = true { didSet { apply() } }
+
+    /// Show the panel in fit-beside-canvas mode (or hide if already shown that way).
+    func togglePanelFit() {
+        if panelVisible && panelFit { panelVisible = false }
+        else { panelFit = true; panelVisible = true }
+    }
+
+    /// Show the panel floating over the canvas (or hide if already shown that way).
+    func togglePanelOverlay() {
+        if panelVisible && !panelFit { panelVisible = false }
+        else { panelFit = false; panelVisible = true }
+    }
     @Published var transparent = false { didSet { apply() } }
     @Published var alwaysOnTop = false { didSet { apply() } }
     @Published private(set) var presentationMode = false
