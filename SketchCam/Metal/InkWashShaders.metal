@@ -358,16 +358,29 @@ kernel void ink_exchange(texture2d<float, access::sample> fixedIn [[texture(0)]]
     }
 }
 
+// Accumulate one dye texture into another: target += src (same resolution).
+// Used by Fix to bake ink+fixed into the permanent "locked" layer.
+kernel void ink_accumulate(texture2d<float, access::read_write> target [[texture(0)]],
+                           texture2d<float, access::sample> src [[texture(1)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= target.get_width() || gid.y >= target.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 uv = (float2(gid) + 0.5) / float2(target.get_width(), target.get_height());
+    target.write(target.read(gid) + src.sample(s, uv), gid);
+}
+
 kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
                         texture2d<float, access::sample> fixedTex [[texture(1)]],
                         texture2d<float, access::sample> wet [[texture(2)]],
-                        texture2d<float, access::write> outTex [[texture(3)]],
+                        texture2d<float, access::sample> locked [[texture(3)]],
+                        texture2d<float, access::write> outTex [[texture(4)]],
                         constant InkDisplayParams &p [[buffer(0)]],
                         uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
-    auto pig = [&](float2 q) { return (ink.sample(s, q) + fixedTex.sample(s, q)) * p.inkFade; };
+    // locked = pigment baked permanent by Fix (the wash lift never touches it).
+    auto pig = [&](float2 q) { return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade; };
     float4 pw = pig(uv);
     float3 dens = pw.rgb;
     float c = dot(dens, float3(1.0));

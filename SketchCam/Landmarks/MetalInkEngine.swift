@@ -122,6 +122,7 @@ final class MetalInkEngine {
     private let copyPSO: MTLComputePipelineState
     private let splatPSO: MTLComputePipelineState
     private let capsulePSO: MTLComputePipelineState
+    private let accumulatePSO: MTLComputePipelineState
     private let advectVelocityPSO: MTLComputePipelineState
     private let curlPSO: MTLComputePipelineState
     private let vorticityPSO: MTLComputePipelineState
@@ -138,6 +139,9 @@ final class MetalInkEngine {
     private var ink: DoubleTexture?
     private var fixed: DoubleTexture?
     private var wet: DoubleTexture?
+    /// Pigment baked permanent by Fix — displayed but never re-mobilized by the
+    /// wash lift, so a fixed drawing can't be washed/displaced.
+    private var locked: MTLTexture?
     private var divergence: MTLTexture?
     private var curl: MTLTexture?
     private var outputBuffer: CVPixelBuffer?
@@ -183,6 +187,7 @@ final class MetalInkEngine {
               let copy = pso("ink_copy"),
               let splat = pso("ink_splat"),
               let capsule = pso("ink_splat_capsule"),
+              let accumulate = pso("ink_accumulate"),
               let advectVelocity = pso("ink_advect_velocity"),
               let curl = pso("ink_curl"),
               let vorticity = pso("ink_vorticity"),
@@ -204,6 +209,7 @@ final class MetalInkEngine {
         self.copyPSO = copy
         self.splatPSO = splat
         self.capsulePSO = capsule
+        self.accumulatePSO = accumulate
         self.advectVelocityPSO = advectVelocity
         self.curlPSO = curl
         self.vorticityPSO = vorticity
@@ -222,6 +228,7 @@ final class MetalInkEngine {
         ink = nil
         fixed = nil
         wet = nil
+        locked = nil
         divergence = nil
         curl = nil
         outputBuffer = nil
@@ -331,9 +338,19 @@ final class MetalInkEngine {
             activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
         }
         if fixRequested {
-            fixTimer = fadeDuration
             lastFixRevision = fixRevision
-            activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
+            // Lock the current pigment into the permanent layer so the wash can no
+            // longer displace it (the wash lift only re-mobilizes `fixed`). New
+            // strokes drawn after Fix stay washable.
+            if let ink, let fixed, let locked {
+                encode(accumulatePSO, textures: [locked, fixed.read], bytes: nil, length: 0, grid: locked, commandBuffer: commandBuffer)
+                encode(accumulatePSO, textures: [locked, ink.read], bytes: nil, length: 0, grid: locked, commandBuffer: commandBuffer)
+                encodeClear(ink.read, commandBuffer: commandBuffer)
+                encodeClear(ink.write, commandBuffer: commandBuffer)
+                encodeClear(fixed.read, commandBuffer: commandBuffer)
+                encodeClear(fixed.write, commandBuffer: commandBuffer)
+            }
+            activeFramesRemaining = max(activeFramesRemaining, 2)
         }
 
         if lastFrameIndex != frameIndex {
@@ -397,8 +414,9 @@ final class MetalInkEngine {
         ink = makeDouble(width: dyeW, height: dyeH, format: .rgba16Float)
         fixed = makeDouble(width: dyeW, height: dyeH, format: .rgba16Float)
         wet = makeDouble(width: dyeW, height: dyeH, format: .r16Float)
+        locked = makeTexture(width: dyeW, height: dyeH, format: .rgba16Float)
         guard velocity != nil, pressure != nil, divergence != nil, curl != nil,
-              ink != nil, fixed != nil, wet != nil else { return false }
+              ink != nil, fixed != nil, wet != nil, locked != nil else { return false }
 
         guard let buffer = try? PixelBufferUtils.makePixelBuffer(format: FrameFormat(id: "metal-ink-layer", width: width, height: height)) else {
             return false
@@ -430,7 +448,7 @@ final class MetalInkEngine {
     }
 
     private func clearAll(_ commandBuffer: MTLCommandBuffer) {
-        ([velocity?.read, velocity?.write, pressure?.read, pressure?.write, ink?.read, ink?.write, fixed?.read, fixed?.write, wet?.read, wet?.write, divergence, curl] as [MTLTexture?])
+        ([velocity?.read, velocity?.write, pressure?.read, pressure?.write, ink?.read, ink?.write, fixed?.read, fixed?.write, wet?.read, wet?.write, locked, divergence, curl] as [MTLTexture?])
             .compactMap { $0 }
             .forEach { encodeClear($0, commandBuffer: commandBuffer) }
     }
@@ -860,7 +878,7 @@ final class MetalInkEngine {
     }
 
     private func render(settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
-        guard let ink, let fixed, let wet, let outputTexture else { return }
+        guard let ink, let fixed, let wet, let locked, let outputTexture else { return }
         let l = settings.landmarks
         let texel = SIMD2<Float>(1 / Float(ink.read.width), 1 / Float(ink.read.height))
         var params = DisplayParams(
@@ -877,7 +895,7 @@ final class MetalInkEngine {
             inkFade: clearFadeActive ? clearFade : 1,
             washTint: Self.washTint(l.inkWashColor)
         )
-        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
+        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }
 
     private func encodeClear(_ texture: MTLTexture, commandBuffer: MTLCommandBuffer) {

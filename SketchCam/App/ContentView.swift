@@ -766,7 +766,19 @@ struct ContentView: View {
                 } label: {
                     Label("Clear", systemImage: "trash")
                 }
-                .help("Wipe the canvas (committed paths and immediate-mode marks).")
+                .help("Fade the canvas out (over Fade) then wipe it — committed paths, immediate marks, and fixed ink.")
+                Button {
+                    fixInk()
+                } label: {
+                    Label("Fix", systemImage: "lock")
+                }
+                .help("Bake the current ink into the paper permanently (also D). Fixed ink can't be pushed or washed any more; new strokes still can.")
+                Button {
+                    model.exportCurrentFrame()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .help("Save the current frame as a PNG (also S).")
                 Button {
                     deleteSelectedInk()
                 } label: {

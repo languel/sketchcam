@@ -493,3 +493,13 @@ ContentView; defaults preserve prior look unless noted):
 - **Panel**: ⌘⌥U shows the panel beside the canvas (canvas shrinks to fit); ⇧⌥U
   is the old overlay behaviour.
 - **Shortcuts**: `[`/`]` pen size, ⇧`[`/⇧`]` wash size, `I`/`O` toggle immediate.
+
+### Fix = permanent lock (2026-06-15, later)
+
+Making every wash re-mobilize dried pigment (the consistency fix) also let a wash
+displace FIX-dried ink, so Fix no longer "locked" anything. Added a separate
+`locked` dye texture: **Fix** now bakes ink+fixed into it and clears ink+fixed;
+the display adds `locked` but the wash lift only touches `fixed`, so locked
+pigment is permanent while freshly-drawn ink stays smearable. New `ink_accumulate`
+kernel; clearAll/clear-fade also clear/fade `locked`. Added **Fix** and **Save**
+buttons to the ink panel next to Clear (Fix = D, Save = S).
