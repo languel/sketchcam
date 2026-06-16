@@ -437,3 +437,26 @@ paths, display-layer enqueue).
   (re-renders, no re-sim). Both ink/wash pickers have a tiny reset-to-default button.
 - **Shortcuts** (Ink tab, rebindable): `I`/`O` toggle immediate pen/wash, `[`/`]`
   brush size.
+
+### Session-slowdown leak fixed (2026-06-15)
+
+"Slows down the longer I use it, only a restart fixes it" was a SwiftUI
+re-evaluation leak, NOT the GPU pipeline (stage times flat ~2.5ms all session).
+
+Diagnosis with `heap <pid>` + `footprint <pid>` (not `leaks` — the objects were
+reachable, so `leaks` reported ~0): the heap was dominated by SwiftUI
+`TagIndexProjection<ControlTab>` (climbing 7k→9k) and `ObservationRegistrar`
+dicts (77k→92k), 1.3M live nodes, 855MB footprint, all ratcheting up with use and
+NOT released by Clear.
+
+Root cause: `stats` was `@Published` on `SketchCamViewModel` (an
+`ObservableObject`) and updated every 0.25s, plus `errorText = nil` was assigned
+every tick. With `ObservableObject`, any `@Published` change invalidates the
+WHOLE `ContentView` body, so the tab `Picker` + ~20 Pickers re-evaluated 4×/s
+forever and SwiftUI leaked a tag projection + observation registrar each pass.
+
+Fix: moved the high-frequency `stats` + `previewImage` to a dedicated
+`LiveReadouts: ObservableObject` (`model.live`), observed only by small leaf
+views (`LivePreviewImage` / `LiveDebugGrid` / `LiveDebugOverlay`); guarded
+`errorText` so it's only cleared when non-nil. After: ControlTab tags 4–5,
+Observation dicts ~38, footprint ~495MB — flat under idle AND drawing.

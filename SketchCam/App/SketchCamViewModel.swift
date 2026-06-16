@@ -8,6 +8,14 @@ import SketchCamCore
 import SketchCamShared
 import UniformTypeIdentifiers
 
+/// Separate observable for the high-frequency preview image + debug stats, so
+/// updating them (~4 Hz) only invalidates the small views that read them, not
+/// the whole control panel. See `SketchCamViewModel.live`.
+final class LiveReadouts: ObservableObject {
+    @Published var previewImage: CGImage?
+    @Published var stats = DebugStats()
+}
+
 final class SketchCamViewModel: ObservableObject {
     enum FrameSource: String, CaseIterable, Identifiable {
         case camera
@@ -61,8 +69,12 @@ final class SketchCamViewModel: ObservableObject {
     @Published var outputFormat = SketchCamFormats.defaultFormat {
         didSet { store.outputFormat = outputFormat }
     }
-    @Published var previewImage: CGImage?
-    @Published var stats = DebugStats()
+    /// High-frequency live readouts (preview image + per-stage stats) live on a
+    /// SEPARATE observable so their ~4 Hz updates don't fire the view model's
+    /// objectWillChange and re-evaluate the entire ContentView body (which leaks
+    /// SwiftUI Picker tag projections / Observation registrars on every pass).
+    /// Only the small views that show them observe this store.
+    let live = LiveReadouts()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -123,7 +135,7 @@ final class SketchCamViewModel: ObservableObject {
     init() {
         captureService.onConfigurationChanged = { [weak self] size in
             DispatchQueue.main.async {
-                self?.stats.cameraResolution = size
+                self?.live.stats.cameraResolution = size
             }
         }
         captureService.onSampleBuffer = { [weak self] sampleBuffer in
@@ -174,7 +186,7 @@ final class SketchCamViewModel: ObservableObject {
             if let movieURL {
                 movieSource.play(url: movieURL, rate: Float(movieRate))
                 DispatchQueue.main.async {
-                    self.stats.cameraResolution = .zero
+                    self.live.stats.cameraResolution = .zero
                 }
             }
         }
@@ -614,15 +626,17 @@ final class SketchCamViewModel: ObservableObject {
                 self.previewDisplay.enqueue(displayBuffer)
             }
             if let image {
-                self.previewImage = image
+                self.live.previewImage = image
             }
             if shouldUpdateStats {
-                self.stats.outputFormat = outputFormat
-                self.stats.fps = fps
-                self.stats.frameIndex = frameIndexSnapshot
-                self.stats.virtualCameraStatus = virtualStatus
-                self.stats.stageMillis = stageMillis
-                self.errorText = nil
+                self.live.stats.outputFormat = outputFormat
+                self.live.stats.fps = fps
+                self.live.stats.frameIndex = frameIndexSnapshot
+                self.live.stats.virtualCameraStatus = virtualStatus
+                self.live.stats.stageMillis = stageMillis
+                // Only clear the error when there actually is one — assigning nil
+                // every tick would fire the view model's objectWillChange at 4 Hz.
+                if self.errorText != nil { self.errorText = nil }
             }
         }
     }

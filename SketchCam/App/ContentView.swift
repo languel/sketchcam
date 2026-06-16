@@ -97,8 +97,8 @@ struct ContentView: View {
                     }
                 }
                 if appUI.debugOverlayVisible {
-                    DebugOverlay(
-                        stats: model.stats,
+                    LiveDebugOverlay(
+                        live: model.live,
                         permission: model.cameraPermissionState.rawValue,
                         threshold: model.settings.threshold,
                         error: model.errorText,
@@ -140,14 +140,10 @@ struct ContentView: View {
                 } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
                     // Zero-readback GPU display (also the presentation-mode output).
                     SampleBufferDisplayView(controller: model.previewDisplay)
-                } else if let previewImage = model.previewImage {
-                    Image(previewImage, scale: 1, label: Text("SketchCam preview"))
-                        .resizable()
-                        .interpolation(.none)
-                        .aspectRatio(contentMode: .fit)
                 } else {
-                    ProgressView()
-                        .controlSize(.large)
+                    // Observes the live store, so the ~4 Hz image updates don't
+                    // re-evaluate the whole ContentView body.
+                    LivePreviewImage(live: model.live)
                 }
                 if tab == .ink, model.settings.landmarks.inkEnabled {
                     InkPreviewDrawingLayer(
@@ -1216,7 +1212,7 @@ struct ContentView: View {
     // MARK: - Debug tab
 
     @ViewBuilder private var debugTab: some View {
-        DebugGrid(stats: model.stats, permission: model.cameraPermissionState.rawValue, threshold: model.settings.threshold)
+        LiveDebugGrid(live: model.live, permission: model.cameraPermissionState.rawValue, threshold: model.settings.threshold)
 
 
         if let error = model.errorText {
@@ -2178,6 +2174,46 @@ private struct InkPreviewDrawingLayer: View {
             width: size.width,
             height: size.height
         )
+    }
+}
+
+/// Observers of the high-frequency `LiveReadouts` store. Keeping the observation
+/// here (not in ContentView) means the ~4 Hz stats/preview updates only
+/// re-evaluate these leaf views, not the whole control panel — which otherwise
+/// leaked SwiftUI Picker tag projections / Observation registrars on every pass.
+private struct LivePreviewImage: View {
+    @ObservedObject var live: LiveReadouts
+    var body: some View {
+        if let image = live.previewImage {
+            Image(image, scale: 1, label: Text("SketchCam preview"))
+                .resizable()
+                .interpolation(.none)
+                .aspectRatio(contentMode: .fit)
+        } else {
+            ProgressView()
+                .controlSize(.large)
+        }
+    }
+}
+
+private struct LiveDebugGrid: View {
+    @ObservedObject var live: LiveReadouts
+    let permission: String
+    let threshold: Float
+    var body: some View {
+        DebugGrid(stats: live.stats, permission: permission, threshold: threshold)
+    }
+}
+
+private struct LiveDebugOverlay: View {
+    @ObservedObject var live: LiveReadouts
+    let permission: String
+    let threshold: Float
+    let error: String?
+    let close: () -> Void
+    @Binding var offset: CGSize
+    var body: some View {
+        DebugOverlay(stats: live.stats, permission: permission, threshold: threshold, error: error, close: close, offset: $offset)
     }
 }
 
