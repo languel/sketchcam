@@ -117,12 +117,13 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
     public var amount: Float        // threshold level / edge strength / blur radius
     public var color: RGBAColor     // outline colour
     public var thickness: Float     // outline thickness
-    public var invert: Bool         // threshold invert
+    public var invert: Bool         // threshold invert / personKey: key out person
     public var inkOnly: Bool        // threshold: transparent paper
+    public var silhouette: Bool     // personKey: fill the matte with `color` instead of the content
 
     public init(id: UUID = UUID(), kind: EffectKind, enabled: Bool = true,
                 amount: Float = 0.5, color: RGBAColor = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
-                thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false) {
+                thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false, silhouette: Bool = false) {
         self.id = id
         self.kind = kind
         self.enabled = enabled
@@ -131,6 +132,24 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
         self.thickness = thickness
         self.invert = invert
         self.inkOnly = inkOnly
+        self.silhouette = silhouette
+    }
+
+    // Tolerant decoding so chains persisted before a field existed still load.
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, enabled, amount, color, thickness, invert, inkOnly, silhouette
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decode(EffectKind.self, forKey: .kind)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? 0.5
+        color = try c.decodeIfPresent(RGBAColor.self, forKey: .color) ?? RGBAColor(red: 0, green: 0, blue: 0, alpha: 1)
+        thickness = try c.decodeIfPresent(Float.self, forKey: .thickness) ?? 2
+        invert = try c.decodeIfPresent(Bool.self, forKey: .invert) ?? false
+        inkOnly = try c.decodeIfPresent(Bool.self, forKey: .inkOnly) ?? false
+        silhouette = try c.decodeIfPresent(Bool.self, forKey: .silhouette) ?? false
     }
 }
 

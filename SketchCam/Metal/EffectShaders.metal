@@ -159,6 +159,21 @@ kernel void effect_mirror(texture2d<float, access::read> inTex [[texture(0)]],
     outTex.write(inTex.read(uint2(w - 1 - gid.x, gid.y)), gid);
 }
 
+// Silhouette: fill the person matte region with a flat colour (ignores the
+// layer content). invert flips which side is filled. Premultiplied output.
+struct SilhouetteParams { float4 color; uint invert; };
+kernel void effect_silhouette(texture2d<float, access::read> matteTex [[texture(0)]],
+                              texture2d<float, access::write> outTex [[texture(1)]],
+                              constant SilhouetteParams &p [[buffer(0)]],
+                              uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 ms = matteTex.read(gid);
+    float m = dot(ms.rgb, kLuma) * ms.a;
+    if (p.invert == 1u) m = 1.0 - m;
+    float a = m * p.color.a;
+    outTex.write(float4(p.color.rgb * a, a), gid);
+}
+
 // Apply a matte (from another stream) to a layer's content. mode: 0=luma,
 // 1=threshold, 2=invThreshold; invert flips the final matte. Premultiplied
 // content is scaled by the matte value, masking both colour and alpha.

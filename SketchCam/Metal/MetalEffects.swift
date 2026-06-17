@@ -15,6 +15,7 @@ final class MetalEffects {
     private struct BlurParams { var radius: Int32 }
     private struct CompositeParams { var opacity: Float }
     private struct MaskParams { var level: Float; var mode: UInt32; var invert: UInt32 }
+    private struct SilhouetteParams { var color: SIMD4<Float>; var invert: UInt32 }
 
     let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -28,6 +29,7 @@ final class MetalEffects {
     private let maskPSO: MTLComputePipelineState
     private let invertPSO: MTLComputePipelineState
     private let mirrorPSO: MTLComputePipelineState
+    private let silhouettePSO: MTLComputePipelineState
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -41,7 +43,7 @@ final class MetalEffects {
               let m = pso("effect_morphology"), let b = pso("effect_box_blur"),
               let c = pso("effect_composite"), let co = pso("effect_composite_op"),
               let mk = pso("effect_mask"), let iv = pso("effect_invert"),
-              let mir = pso("effect_mirror") else { return nil }
+              let mir = pso("effect_mirror"), let sil = pso("effect_silhouette") else { return nil }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         self.device = device
@@ -49,7 +51,7 @@ final class MetalEffects {
         self.textureCache = cache
         self.thresholdPSO = t; self.outlinePSO = o; self.morphPSO = m; self.blurPSO = b
         self.compositePSO = c; self.compositeOpPSO = co; self.maskPSO = mk
-        self.invertPSO = iv; self.mirrorPSO = mir
+        self.invertPSO = iv; self.mirrorPSO = mir; self.silhouettePSO = sil
     }
 
     // MARK: - Public ops (each runs on its own command buffer, synchronous)
@@ -94,6 +96,14 @@ final class MetalEffects {
     func mirror(input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
         guard let inTex = texture(input), let outTex = texture(output) else { return false }
         return run(mirrorPSO, textures: [inTex, outTex], bytes: nil, length: 0, grid: outTex)
+    }
+
+    /// Fill the matte region with a flat colour (silhouette); ignores `output`'s
+    /// prior content. `color` is straight-alpha.
+    func silhouette(matte: CVPixelBuffer, output: CVPixelBuffer, color: SIMD4<Float>, invert: Bool) -> Bool {
+        guard let mTex = texture(matte), let outTex = texture(output) else { return false }
+        var p = SilhouetteParams(color: color, invert: invert ? 1 : 0)
+        return run(silhouettePSO, textures: [mTex, outTex], bytes: &p, length: MemoryLayout<SilhouetteParams>.stride, grid: outTex)
     }
 
     func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
@@ -156,6 +166,10 @@ final class MetalEffects {
             // Key to the person matte (invert = key the person OUT). Without a
             // matte (segmentation idle), pass through rather than blanking.
             guard let matte else { return copy(input: input, output: output) }
+            if e.silhouette {
+                let c = SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha)
+                return silhouette(matte: matte, output: output, color: c, invert: e.invert)
+            }
             return mask(content: input, matte: matte, output: output, mode: .luma, level: 0.5, invert: e.invert)
         }
     }

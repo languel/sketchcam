@@ -29,7 +29,8 @@ private enum InkTool: String, CaseIterable, Identifiable {
 struct ContentView: View {
     private enum ControlTab: String, CaseIterable, Identifiable {
         case input = "Settings"
-        case sources = "Sources"
+        case camera = "Camera"
+        case movie = "Movie"
         case layers = "Layers"
         case marks = "Marks"
         case yarn = "Yarn"
@@ -46,7 +47,8 @@ struct ContentView: View {
         var icon: String {
             switch self {
             case .input: "gearshape"
-            case .sources: "camera"
+            case .camera: "camera"
+            case .movie: "film"
             case .layers: "square.3.layers.3d"
             case .marks: "point.3.connected.trianglepath.dotted"
             case .yarn: "scribble.variable"
@@ -234,7 +236,7 @@ struct ContentView: View {
 
     /// Tabs that can never be hidden — the manage menu lives here, and you always
     /// need a way back to the core panels.
-    private static let pinnedTabs: Set<ControlTab> = [.input, .sources, .layers]
+    private static let pinnedTabs: Set<ControlTab> = [.input, .camera, .layers]
 
     /// The tabs currently shown in the tab bar, in canonical order.
     private var visibleTabs: [ControlTab] {
@@ -303,7 +305,8 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     switch tab {
                     case .input: inputTab
-                    case .sources: sourcesTab
+                    case .camera: cameraTab
+                    case .movie: movieTab
                     case .layers: layersTab
                     case .marks: marksTab
                     case .yarn: yarnTab
@@ -368,59 +371,63 @@ struct ContentView: View {
         return model.inputFrozen ? "Unfreeze" : "Freeze"
     }
 
-    // MARK: - Input tab
 
-    /// Sources tab: the input streams (camera / movie) + the live input layer.
-    /// These feed the Camera layer in the stack (and, ahead, can be assigned to
-    /// any layer's content).
-    @ViewBuilder private var sourcesTab: some View {
-        SectionHeader("Source")
-        Picker("Source", selection: $model.frameSource) {
-            ForEach(SketchCamViewModel.FrameSource.allCases) { source in
-                Text(source.title).tag(source)
+    // MARK: - Camera tab
+
+    @ViewBuilder private var cameraTab: some View {
+        SectionHeader("Camera")
+        if model.frameSource != .camera {
+            Button("Use Camera as source") { model.frameSource = .camera }
+                .help("Switch the captured source to the camera (Camera/Movie streams share one capture for now).")
+        }
+        Picker("Camera", selection: Binding(
+            get: { model.selectedDeviceID ?? "" },
+            set: {
+                model.frameSource = .camera
+                model.selectCamera($0.isEmpty ? nil : $0)
+            }
+        )) {
+            ForEach(model.cameraDevices) { device in
+                Text(device.name).tag(device.id)
             }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-
-        if model.frameSource == .camera {
-            Picker("Camera", selection: Binding(
-                get: { model.selectedDeviceID ?? "" },
-                set: { model.selectCamera($0.isEmpty ? nil : $0) }
-            )) {
-                ForEach(model.cameraDevices) { device in
-                    Text(device.name).tag(device.id)
-                }
+        Picker("Resolution", selection: $model.inputResolution) {
+            ForEach(CameraInputResolution.allCases) { resolution in
+                Text(resolution.title).tag(resolution)
             }
-            Picker("Resolution", selection: $model.inputResolution) {
-                ForEach(CameraInputResolution.allCases) { resolution in
-                    Text(resolution.title).tag(resolution)
-                }
-            }
-            .help("Capture resolution requested from the camera. Higher = more detail into effects/detection but more bandwidth.")
-        } else {
-            HStack {
-                Button("Open Movie…") { model.openMoviePanel() }
-                Button("Demo clip") { model.loadDemoClip() }
-                Text(model.movieURL?.lastPathComponent ?? "No movie selected")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            HStack {
-                TextField("https://… (stream URL)", text: $movieURLField)
-                    .textFieldStyle(.roundedBorder)
-                Button("Load") { model.openMovieURL(movieURLField) }
-                    .disabled(movieURLField.isEmpty)
-            }
-            SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, hint: "0 pauses")
         }
+        .help("Capture resolution requested from the camera. Higher = more detail into effects/detection but more bandwidth.")
 
         SectionHeader("Frame")
         Toggle("Mirror", isOn: $model.settings.mirror)
             .help("Mirror the source (selfie view). For a creative per-layer flip, add a Mirror effect to a layer instead.")
         Toggle("Test pattern", isOn: $model.settings.testPatternMode)
+    }
+
+    // MARK: - Movie tab
+
+    @ViewBuilder private var movieTab: some View {
+        SectionHeader("Movie")
+        if model.frameSource != .movie {
+            Button("Use Movie as source") { model.frameSource = .movie }
+                .help("Switch the captured source to the movie/file.")
+        }
+        HStack {
+            Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
+            Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
+            Text(model.movieURL?.lastPathComponent ?? "No movie selected")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        HStack {
+            TextField("https://… (stream URL)", text: $movieURLField)
+                .textFieldStyle(.roundedBorder)
+            Button("Load") { model.frameSource = .movie; model.openMovieURL(movieURLField) }
+                .disabled(movieURLField.isEmpty)
+        }
+        SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, hint: "0 pauses")
     }
 
     @ViewBuilder private var inputTab: some View {
@@ -1714,6 +1721,10 @@ private struct EffectPanel: View {
         }
         if effect.kind == .personKey {
             Toggle("Key out person (invert)", isOn: $effect.invert).controlSize(.small)
+            Toggle("Silhouette (flat fill)", isOn: $effect.silhouette).controlSize(.small)
+            if effect.silhouette {
+                ColorPicker("Fill", selection: colorBinding, supportsOpacity: true).controlSize(.small)
+            }
             Picker("Matte", selection: $personMatteQuality) {
                 ForEach(SegmentationQuality.allCases) { q in Text(q.title).tag(q) }
             }
