@@ -19,6 +19,7 @@
 		27345D7CD692FAAF45911F2B /* ShortcutRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */; };
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
+		34FE163B36F97ECD02BD4C25 /* LayerGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5219B099618056834D2AEF4C /* LayerGraphTests.swift */; };
 		3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */; };
 		3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */; };
 		4BDCEC52901FF67A5655DEA1 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
@@ -27,6 +28,7 @@
 		57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177F3E230DF6259E3ECAE346 /* BodyHull.swift */; };
 		580729A8AFF47997B30CF672 /* InkLiveStroke.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */; };
 		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
+		66D99898FC53D50F55AFB2E3 /* LayerGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02169792350DA5793406338 /* LayerGraph.swift */; };
 		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
 		6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4135559A8BC68C4F5B49E8B7 /* VisionLandmarkTracker.swift */; };
 		705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */; };
@@ -164,6 +166,7 @@
 		43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
 		4F2A2598E845123A35AB7F0C /* MetalEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalEffects.swift; sourceTree = "<group>"; };
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
+		5219B099618056834D2AEF4C /* LayerGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerGraphTests.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
 		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
@@ -185,6 +188,7 @@
 		ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkLayerCompositor.swift; sourceTree = "<group>"; };
 		ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticLandmarkGenerator.swift; sourceTree = "<group>"; };
 		AF4F80977B2AC11156B00993 /* MetalInkEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalInkEngine.swift; sourceTree = "<group>"; };
+		B02169792350DA5793406338 /* LayerGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerGraph.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowModeController.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
@@ -340,6 +344,7 @@
 				2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */,
 				01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */,
 				61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */,
+				5219B099618056834D2AEF4C /* LayerGraphTests.swift */,
 				52C5A560087A8027F400A91B /* LineWalkTests.swift */,
 				BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */,
 				FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */,
@@ -469,6 +474,7 @@
 				177F3E230DF6259E3ECAE346 /* BodyHull.swift */,
 				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
 				7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */,
+				B02169792350DA5793406338 /* LayerGraph.swift */,
 				2836CF880DAF3F0A8928640F /* LineWalk.swift */,
 				33A62B38FB62959937129F6F /* ProcessingSettings.swift */,
 				69372C0E7B99EADDD8731E11 /* SketchCamState.swift */,
@@ -716,6 +722,7 @@
 				57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */,
 				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
 				D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */,
+				66D99898FC53D50F55AFB2E3 /* LayerGraph.swift in Sources */,
 				D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */,
 				1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */,
 				E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */,
@@ -731,6 +738,7 @@
 				E5383731BB4BFCECB3CC7913 /* BodyHullTests.swift in Sources */,
 				117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */,
 				AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */,
+				34FE163B36F97ECD02BD4C25 /* LayerGraphTests.swift in Sources */,
 				8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */,
 				CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */,
 				8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */,
