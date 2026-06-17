@@ -13,7 +13,7 @@ final class MetalEffects {
     private struct OutlineParams { var inSize: SIMD2<Float>; var outSize: SIMD2<Float>; var color: SIMD4<Float>; var strength: Float }
     private struct MorphParams { var radius: Int32; var dilate: UInt32 }
     private struct BlurParams { var radius: Int32 }
-    private struct CompositeParams { var opacity: Float }
+    private struct CompositeParams { var opacity: Float; var blendMode: UInt32 }
     private struct MaskParams { var level: Float; var mode: UInt32; var invert: UInt32 }
     private struct SilhouetteParams { var color: SIMD4<Float>; var invert: UInt32 }
 
@@ -111,11 +111,27 @@ final class MetalEffects {
         return run(compositePSO, textures: [baseTex, overlayTex, outTex], bytes: nil, length: 0, grid: outTex)
     }
 
-    /// Source-over with a per-layer opacity (0…1).
-    func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer, opacity: Float) -> Bool {
+    /// Source-over with a per-layer opacity (0...1) and blend mode.
+    func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer, opacity: Float, blend: BlendMode = .normal) -> Bool {
         guard let baseTex = texture(base), let overlayTex = texture(overlay), let outTex = texture(output) else { return false }
-        var p = CompositeParams(opacity: max(0, min(1, opacity)))
+        var p = CompositeParams(opacity: max(0, min(1, opacity)), blendMode: Self.blendCode(blend))
         return run(compositeOpPSO, textures: [baseTex, overlayTex, outTex], bytes: &p, length: MemoryLayout<CompositeParams>.stride, grid: outTex)
+    }
+
+    private static func blendCode(_ blend: BlendMode) -> UInt32 {
+        switch blend {
+        case .normal: return 0
+        case .multiply: return 1
+        case .screen: return 2
+        case .add: return 3
+        case .overlay: return 4
+        case .darken: return 5
+        case .lighten: return 6
+        case .difference: return 7
+        case .subtract: return 8
+        case .hue, .saturation, .color, .luminosity:
+            return 0
+        }
     }
 
     /// Mask `content` by a matte stream; `mode`/`level`/`invert` mirror MaskBinding.

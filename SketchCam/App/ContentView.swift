@@ -376,10 +376,6 @@ struct ContentView: View {
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
-        if model.frameSource != .camera {
-            Button("Use Camera as source") { model.frameSource = .camera }
-                .help("Switch the captured source to the camera (Camera/Movie streams share one capture for now).")
-        }
         Picker("Camera", selection: Binding(
             get: { model.selectedDeviceID ?? "" },
             set: {
@@ -408,10 +404,6 @@ struct ContentView: View {
 
     @ViewBuilder private var movieTab: some View {
         SectionHeader("Movie")
-        if model.frameSource != .movie {
-            Button("Use Movie as source") { model.frameSource = .movie }
-                .help("Switch the captured source to the movie/file.")
-        }
         HStack {
             Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
             Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
@@ -1613,6 +1605,7 @@ private struct RGBAColorPicker: View {
 /// Person / another named stream) and, when set, the keying mode + invert.
 private struct MaskEditor: View {
     @Binding var mask: MaskBinding?
+    @Binding var personMatteQuality: SegmentationQuality
     /// Other layers that can serve as a matte (node id + display name).
     let sources: [(id: UUID, name: String)]
 
@@ -1622,7 +1615,7 @@ private struct MaskEditor: View {
                 Text("Mask").font(.caption).foregroundStyle(.secondary)
                 Menu(currentLabel) {
                     Button("None") { mask = nil }
-                    Button("Person matte") { setSource(.source(.personMatte)) }
+                    Button("Person Key") { setSource(.source(.personMatte)) }
                     if !sources.isEmpty {
                         Divider()
                         ForEach(sources, id: \.id) { src in
@@ -1634,6 +1627,17 @@ private struct MaskEditor: View {
                 .fixedSize()
             }
             if mask != nil {
+                if isPersonKeyMask {
+                    Toggle("Key out person (invert)", isOn: personKeyInvertBinding).controlSize(.small)
+                    Toggle("Silhouette (flat fill)", isOn: personKeySilhouetteBinding).controlSize(.small)
+                    if mask?.personKeySilhouette == true {
+                        ColorPicker("Fill", selection: personKeyColorBinding, supportsOpacity: true).controlSize(.small)
+                    }
+                    Picker("Matte", selection: $personMatteQuality) {
+                        ForEach(SegmentationQuality.allCases) { q in Text(q.title).tag(q) }
+                    }
+                    .pickerStyle(.segmented).controlSize(.small)
+                }
                 Picker("Mode", selection: modeBinding) {
                     Text("Luma").tag(MaskBinding.Mode.luma)
                     Text("Threshold").tag(MaskBinding.Mode.threshold)
@@ -1657,7 +1661,7 @@ private struct MaskEditor: View {
         guard let mask else { return "None" }
         switch mask.source {
         case .none: return "None"
-        case .source(let s): return s == .personMatte ? "Person matte" : "Source"
+        case .source(let s): return s == .personMatte ? "Person Key" : "Source"
         case .node(let id): return sources.first { $0.id == id }?.name ?? "Layer"
         }
     }
@@ -1665,6 +1669,11 @@ private struct MaskEditor: View {
     private func setSource(_ source: PortBinding) {
         if var m = mask { m.source = source; mask = m }
         else { mask = MaskBinding(source: source) }
+    }
+
+    private var isPersonKeyMask: Bool {
+        guard case .source(.personMatte)? = mask?.source else { return false }
+        return true
     }
 
     private var modeBinding: Binding<MaskBinding.Mode> {
@@ -1675,6 +1684,115 @@ private struct MaskEditor: View {
     }
     private var invertBinding: Binding<Bool> {
         Binding(get: { mask?.invert ?? false }, set: { v in if var m = mask { m.invert = v; mask = m } })
+    }
+    private var personKeyInvertBinding: Binding<Bool> {
+        Binding(get: { mask?.personKeyInvert ?? false }, set: { v in if var m = mask { m.personKeyInvert = v; mask = m } })
+    }
+    private var personKeySilhouetteBinding: Binding<Bool> {
+        Binding(get: { mask?.personKeySilhouette ?? false }, set: { v in if var m = mask { m.personKeySilhouette = v; mask = m } })
+    }
+    private var personKeyColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                let c = mask?.personKeyColor ?? RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
+                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+            },
+            set: { newValue in
+                guard var m = mask, let ns = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                m.personKeyColor = RGBAColor(red: Float(ns.redComponent), green: Float(ns.greenComponent),
+                                             blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))
+                mask = m
+            }
+        )
+    }
+}
+
+private struct InputBindingsEditor: View {
+    let node: Node
+    let binding: (Int) -> Binding<PortBinding>
+    let layerSources: (SignalType) -> [(id: UUID, name: String)]
+
+    var body: some View {
+        if !node.kind.ports.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Inputs").font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(node.kind.ports.enumerated()), id: \.offset) { index, port in
+                    let value = binding(index)
+                    HStack(spacing: 6) {
+                        Text(port.name.capitalized)
+                            .font(.caption2)
+                            .frame(width: 56, alignment: .leading)
+                        Menu(label(for: value.wrappedValue, port: port)) {
+                            Button("Default") { value.wrappedValue = .none }
+                            let sources = SourceID.allCases.filter { $0.signalType == port.type }
+                            if !sources.isEmpty {
+                                Divider()
+                                Section("Sources") {
+                                    ForEach(sources, id: \.self) { source in
+                                        Button(source.title) { value.wrappedValue = .source(source) }
+                                    }
+                                }
+                            }
+                            let layers = layerSources(port.type)
+                            if !layers.isEmpty {
+                                Divider()
+                                Section("Layers") {
+                                    ForEach(layers, id: \.id) { source in
+                                        Button(source.name) { value.wrappedValue = .node(source.id) }
+                                    }
+                                }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    }
+                }
+            }
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+        }
+    }
+
+    private func label(for binding: PortBinding, port: SketchCamCore.Port) -> String {
+        switch binding {
+        case .none:
+            return "Default"
+        case .source(let source):
+            return source.signalType == port.type ? source.title : "Invalid source"
+        case .node(let id):
+            return layerSources(port.type).first { $0.id == id }?.name ?? "Layer"
+        }
+    }
+}
+
+private extension SourceID {
+    var title: String {
+        switch self {
+        case .camera: return "Camera"
+        case .landmarks: return "Landmarks"
+        case .mouse: return "Mouse"
+        case .personMatte: return "Person matte"
+        }
+    }
+}
+
+private extension SketchCamCore.BlendMode {
+    var title: String {
+        switch self {
+        case .normal: return "Normal"
+        case .multiply: return "Multiply"
+        case .screen: return "Screen"
+        case .add: return "Add"
+        case .overlay: return "Overlay"
+        case .darken: return "Darken"
+        case .lighten: return "Lighten"
+        case .difference: return "Difference"
+        case .subtract: return "Subtract"
+        case .hue: return "Hue"
+        case .saturation: return "Saturation"
+        case .color: return "Color"
+        case .luminosity: return "Luminosity"
+        }
     }
 }
 
@@ -1837,6 +1955,9 @@ private struct LayerStackEditor: View {
     @State private var editingLayer: UUID?
     @State private var editText: String = ""
     @FocusState private var nameFieldFocused: Bool
+    private static let availableBlendModes: [SketchCamCore.BlendMode] = [
+        .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract
+    ]
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
     private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
@@ -1907,6 +2028,14 @@ private struct LayerStackEditor: View {
                         }
                         Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
                             .help("Layer opacity")
+                        Menu(layer.blend.title) {
+                            ForEach(Self.availableBlendModes, id: \.self) { blend in
+                                Button(blend.title) { setBlend(layer.id, blend) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 78, alignment: .leading)
+                        .help("Layer blend mode")
                         Button { toggleExpanded(layer.id) } label: {
                             Image(systemName: expanded.contains(layer.id) ? "chevron.down.circle.fill" : "chevron.down.circle")
                             if layer.effects.isEmpty == false {
@@ -1924,7 +2053,16 @@ private struct LayerStackEditor: View {
                     }
                     if expanded.contains(layer.id) {
                         VStack(alignment: .leading, spacing: 4) {
-                            MaskEditor(mask: maskBinding(layer.id), sources: maskSources(excluding: layer.id))
+                            if let node = node(for: layer) {
+                                InputBindingsEditor(
+                                    node: node,
+                                    binding: { inputBinding(node.id, index: $0) },
+                                    layerSources: { inputSources(excluding: node.id, type: $0) }
+                                )
+                            }
+                            MaskEditor(mask: maskBinding(layer.id),
+                                       personMatteQuality: $model.settings.segmentation.quality,
+                                       sources: maskSources(excluding: layer.id))
                             EffectChainEditor(effects: effectsBinding(layer.id),
                                               personMatteQuality: $model.settings.segmentation.quality)
                         }
@@ -1981,6 +2119,35 @@ private struct LayerStackEditor: View {
     /// stream kind). Other streams can reference a layer by this name as a source.
     private func displayName(_ layer: Layer) -> String {
         model.settings.layerGraph?.node(layer.node)?.name ?? "Layer"
+    }
+
+    private func node(for layer: Layer) -> Node? {
+        model.settings.layerGraph?.node(layer.node)
+    }
+
+    private func inputBinding(_ nodeID: UUID, index: Int) -> Binding<PortBinding> {
+        Binding(
+            get: {
+                guard let node = model.settings.layerGraph?.node(nodeID),
+                      node.inputs.indices.contains(index) else { return .none }
+                return node.inputs[index]
+            },
+            set: { newValue in
+                mutateValidated { g in
+                    guard let nodeIndex = g.nodes.firstIndex(where: { $0.id == nodeID }),
+                          g.nodes[nodeIndex].inputs.indices.contains(index) else { return }
+                    g.nodes[nodeIndex].inputs[index] = newValue
+                }
+            }
+        )
+    }
+
+    private func inputSources(excluding nodeID: UUID, type: SignalType) -> [(id: UUID, name: String)] {
+        guard let g = model.settings.layerGraph else { return [] }
+        return g.layers.compactMap { layer in
+            guard layer.node != nodeID, let node = g.node(layer.node), node.kind.output == type else { return nil }
+            return (id: node.id, name: node.name)
+        }
     }
 
     private func commitRename(_ id: UUID) {
@@ -2084,6 +2251,13 @@ private struct LayerStackEditor: View {
         model.settings.layerGraph = g
     }
 
+    private func mutateValidated(_ body: (inout LayerGraph) -> Void) {
+        guard var g = model.settings.layerGraph else { return }
+        body(&g)
+        guard (try? g.validate()) != nil else { return }
+        model.settings.layerGraph = g
+    }
+
     private func toggleVisible(_ id: UUID) {
         mutate { g in
             if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].visible.toggle() }
@@ -2097,6 +2271,12 @@ private struct LayerStackEditor: View {
                 if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].opacity = Float(v) }
             } }
         )
+    }
+
+    private func setBlend(_ id: UUID, _ blend: SketchCamCore.BlendMode) {
+        mutate { g in
+            if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].blend = blend }
+        }
     }
 
     /// towardTop = toward the visual top = later in the bottom→top array.

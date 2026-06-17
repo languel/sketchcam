@@ -30,7 +30,7 @@ final class MetalLayerCompositor {
     // Persistent working buffers, reallocated on size change. Holding all of
     // them alive at once keeps the pool vending distinct IOSurfaces.
     private var size: CGSize = .zero
-    private var accumA, accumB, content, masked, fxScratch, matteBuf: CVPixelBuffer?
+    private var accumA, accumB, content, masked, fxScratch, matteBuf, sourceFx: CVPixelBuffer?
 
     init?(ciContext: CIContext) {
         guard let fx = MetalEffects() else { return nil }
@@ -44,7 +44,7 @@ final class MetalLayerCompositor {
                    frameIndex: Int, timestamp: CMTime, mirror: Bool) -> ProcessedFrame? {
         guard ensureBuffers(for: outputFormat) else { return nil }
         let rect = CGRect(origin: .zero, size: outputFormat.size)
-        guard let accumA, let accumB, let content, let masked, let fxScratch, let matteBuf else { return nil }
+        guard let accumA, let accumB, let content, let masked, let fxScratch, let matteBuf, let sourceFx else { return nil }
 
         // Start from a transparent canvas.
         rasterize(CIImage(color: .clear).cropped(to: rect), into: accumA)
@@ -54,6 +54,43 @@ final class MetalLayerCompositor {
             guard let node = graph.node(layer.node), let img = streams.image(node) else { continue }
             rasterize(img, into: content)
 
+            // Layer masks clip the raw source first. Effect-chain Person Key still
+            // lives in the chain below, so it affects the chain at its own position.
+            var chainInput = content
+            var chainOutput = masked
+            if let mask = layer.mask {
+                if case .source(.personMatte) = mask.source, let personMatte = streams.personMatte {
+                    rasterize(personMatte, into: matteBuf)
+                    let invert = mask.personKeyInvert != mask.invert
+                    if mask.personKeySilhouette {
+                        let c = SIMD4<Float>(mask.personKeyColor.red, mask.personKeyColor.green,
+                                             mask.personKeyColor.blue, mask.personKeyColor.alpha)
+                        guard effects.silhouette(matte: matteBuf, output: masked, color: c, invert: invert) else { return nil }
+                        if mask.mode != .luma {
+                            guard effects.mask(content: masked, matte: matteBuf, output: content,
+                                               mode: mask.mode, level: mask.level, invert: invert) else { return nil }
+                            chainInput = content
+                            chainOutput = masked
+                        } else {
+                            chainInput = masked
+                            chainOutput = content
+                        }
+                    } else {
+                        guard effects.mask(content: content, matte: matteBuf, output: masked,
+                                           mode: mask.mode, level: mask.level, invert: invert) else { return nil }
+                        chainInput = masked
+                        chainOutput = content
+                    }
+                } else if let matte = maskBuffer(for: mask.source, graph: graph, streams: streams,
+                                                 raw: matteBuf, processed: fxScratch, scratch: masked,
+                                                 personMatteScratch: sourceFx) {
+                    guard effects.mask(content: content, matte: matte, output: masked,
+                                       mode: mask.mode, level: mask.level, invert: mask.invert) else { return nil }
+                    chainInput = masked
+                    chainOutput = content
+                }
+            }
+
             // A personKey (or other matte-using) effect needs the person matte
             // rasterized into a buffer for the chain.
             var chainMatte: CVPixelBuffer? = nil
@@ -62,22 +99,13 @@ final class MetalLayerCompositor {
                 chainMatte = matteBuf
             }
 
-            // Per-layer effect chain (content → masked).
-            guard effects.applyChain(input: content, output: masked, scratch: fxScratch,
+            // Per-layer effect chain after source masking.
+            guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
                                      effects: layer.effects, matte: chainMatte) else { return nil }
 
-            // Mask (masked → content, reusing content as the masked output).
-            var layerBuf = masked
-            if let mask = layer.mask, let matteImg = matte(for: mask.source, graph: graph, streams: streams) {
-                rasterize(matteImg, into: matteBuf)
-                if effects.mask(content: masked, matte: matteBuf, output: content,
-                                mode: mask.mode, level: mask.level, invert: mask.invert) {
-                    layerBuf = content
-                }
-            }
-
-            // Composite onto the accumulator with the layer opacity.
-            guard effects.composite(base: cur, overlay: layerBuf, output: other, opacity: layer.opacity) else { return nil }
+            // Composite onto the accumulator with the layer opacity/blend mode.
+            guard effects.composite(base: cur, overlay: chainOutput, output: other,
+                                    opacity: layer.opacity, blend: layer.blend) else { return nil }
             swap(&cur, &other)
         }
 
@@ -97,11 +125,32 @@ final class MetalLayerCompositor {
 
     // MARK: - Helpers
 
-    private func matte(for source: PortBinding, graph: LayerGraph, streams: Streams) -> CIImage? {
+    private func maskBuffer(for source: PortBinding, graph: LayerGraph, streams: Streams,
+                            raw: CVPixelBuffer, processed: CVPixelBuffer, scratch: CVPixelBuffer,
+                            personMatteScratch: CVPixelBuffer) -> CVPixelBuffer? {
         switch source {
-        case .none: return nil
-        case .source(let s): return s == .personMatte ? streams.personMatte : nil
-        case .node(let id): return graph.node(id).flatMap { streams.image($0) }
+        case .none:
+            return nil
+        case .source(let s):
+            guard s == .personMatte, let personMatte = streams.personMatte else { return nil }
+            rasterize(personMatte, into: raw)
+            return raw
+        case .node(let id):
+            guard let node = graph.node(id), let image = streams.image(node) else { return nil }
+            rasterize(image, into: raw)
+            guard let layer = graph.layers.first(where: { $0.node == id }),
+                  layer.effects.contains(where: { $0.enabled }) else {
+                return raw
+            }
+            var chainMatte: CVPixelBuffer? = nil
+            if layer.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }),
+               let personMatte = streams.personMatte {
+                rasterize(personMatte, into: personMatteScratch)
+                chainMatte = personMatteScratch
+            }
+            guard effects.applyChain(input: raw, output: processed, scratch: scratch,
+                                     effects: layer.effects, matte: chainMatte) else { return nil }
+            return processed
         }
     }
 
@@ -114,8 +163,8 @@ final class MetalLayerCompositor {
         if size == format.size, accumA != nil { return true }
         func make() -> CVPixelBuffer? { try? pool.makeBuffer(format: format) }
         guard let a = make(), let b = make(), let c = make(),
-              let m = make(), let s = make(), let mt = make() else { return false }
-        accumA = a; accumB = b; content = c; masked = m; fxScratch = s; matteBuf = mt
+              let m = make(), let s = make(), let mt = make(), let sf = make() else { return false }
+        accumA = a; accumB = b; content = c; masked = m; fxScratch = s; matteBuf = mt; sourceFx = sf
         size = format.size
         return true
     }

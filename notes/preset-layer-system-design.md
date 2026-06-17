@@ -184,8 +184,9 @@ picker. Stacking order is *only* the layer stack.
 - **Mask dropdown at the top of every stream panel:** `NONE` or any other stream,
   with an optional **threshold / inverted-threshold** mode (luma-key the chosen
   stream into a matte).
-- **Effects are an ordered chain *per layer*** (decision: chain, not a single slot),
-  applied to that layer's content before mask + composite.
+- **Effects are an ordered chain *per layer*** (decision: chain, not a single slot).
+  The layer mask clips the raw source first; the ordered effect chain then runs on
+  that masked result; final blend/opacity happen only at composite time.
 - **Video: separate `camera` and `movie` streams** (decision), both available at once
   → two simultaneous capture sources (capture-layer change, phase G4).
 
@@ -203,8 +204,9 @@ picker. Stacking order is *only* the layer stack.
   stream kinds, migration legacy→graph, routing source bindings. Renderers still read
   legacy → no behaviour change. Tests + Codable round-trip.
 - **G2 — unified compositor. DONE (GPU, behind `useGPUCompositor`).** `MetalLayerCompositor`
-  renders EVERY visible layer from the graph on the GPU — per-layer Metal effect chain
-  (threshold/outline/blur) → GPU mask → source-over with opacity — no hardcoded base.
+  renders EVERY visible layer from the graph on the GPU — raw stream → layer mask →
+  per-layer Metal effect chain (threshold/outline/blur/personKey) → source-over with
+  opacity/blend — no hardcoded base.
   Keying = the camera layer's personMatte mask. defaultGraph re-homes legacy threshold/
   outline onto the camera chain; reconcile refreshes managed layers' kind/effects/mask
   from settings so the legacy tabs still drive it until G3. Verified live (CUA): raw
@@ -231,33 +233,51 @@ the layer stack is the sole source of truth. Global `backgroundMode` / `inputLay
 deprecated (no injection; background = a Solid layer, camera always a layer). 51 Core
 tests green; effects self-check PASS.
 
-DONE: G1, G2, and G3 except producer source-routing. Latest since the first checkpoint:
+Default runtime path is now Metal-first for fresh settings: layer graph on, GPU
+compositor on, zero-readback Metal preview on, and Metal drawing on.
+
+DONE: G1, G2, G3, G4 code, routing v1 for ink texture, and common blend modes.
+Latest since the first checkpoint:
 - Mask dropdown per layer (None / Person matte / any named stream + Luma/Threshold/Inv +
   level + invert) — `MaskEditor` in ContentView; compositor applies `layer.mask`.
 - Person Key effect with Silhouette flat-fill + matte Quality in-panel.
-- Camera & Movie are separate tabs (combined source picker gone) — but still ONE capture
-  (see G4 below).
+- Camera & Movie are separate tabs (combined source picker gone); they shared one
+  capture path until G4.
 - Any layer is deletable (incl. Camera → use a Solid instead); `reconciled()` only
   auto-inserts flag families (overlay/ink/web), source families are user-curated and
   never resurrected; reconcile no longer overwrites user masks/effects.
+- G4 dual capture code: camera and movie handlers keep separate latest buffers behind
+  a lock; `frameSource` is now the processing/output clock; GPU stream resolution maps
+  `.video` to latest camera and `.movie` to latest movie. 51 Core tests green; still
+  worth doing a live camera+movie visual smoke pass before calling it field-verified.
+- Removed the old "Use Camera/Movie as source" buttons from the source panels.
+- Producer input UI landed in expanded layer panels. The first runtime-backed route is
+  `ink.texture`: bind it to Camera/Movie/Solid/Paper/Person matte/Drawing/Web, and the
+  VM resolves that stream before producing the Ink layer. Routed texture replaces the
+  shader paper and the ink pigment composites over the selected substrate.
+- GPU layer blends now support Normal, Multiply, Screen, Add, Overlay, Darken, Lighten,
+  Difference, and Subtract, with a blend menu in each layer row.
+- Mask/effect ordering was corrected to `source -> layer mask -> effect chain -> blend`.
+  The mask menu now labels the built-in matte as "Person Key"; choosing it there clips
+  the source directly with the same key-out / silhouette / fill / matte-quality controls
+  as the Person Key effect, while adding Person Key as an effect keeps it inside the
+  chain. The mask's Mode/Level/Invert controls still refine the matte after those
+  Person Key options. Layer-as-mask sources now include that source layer's enabled
+  effect chain before being used as a matte.
+- Ink idle disappearance was fixed in the Metal ink producer: immediate/live strokes
+  can leave pigment in the engine without replayable saved paths, so the paperless idle
+  branch now keeps returning the cached rendered layer instead of declaring the layer
+  empty until the next mouse/input event.
 
-### Remaining work (priority order) — NEXT UP is #1 (G4 dual capture)
-1. **G4 — dual camera+movie capture (the next task).** Today `applyFrameSource()` in
-   SketchCamViewModel STOPS the inactive source, so `.video` and `.movie` layers both map
-   to the one active buffer. To run both live: keep both sources started; store each one's
-   latest CVPixelBuffer in the VM behind a lock (handlers are `captureService.onSampleBuffer`
-   / `movieSource.onPixelBuffer`, on capture threads; `process()` runs on the processing
-   queue — needs thread-safe handoff); pick one source as the output clock; in
-   `compositeOnGPU` resolve `.video`→latest camera image, `.movie`→latest movie image
-   (currently both → `cameraImage`). Files: SketchCamViewModel.swift (applyFrameSource,
-   handleCameraSample/handleMovieFrame, compositeOnGPU).
-2. **Routing/source-binding UI (last of G3):** per-stream source dropdowns for PRODUCER
-   inputs (ink.texture ← a stream, drawing ← landmark source). Harder than masks: the
-   compositor must resolve a `.node(id)` PIXEL input and feed it INTO the producer (ink/
-   drawing are computed in the VM), not just read another layer's image. Mask routing is
-   already done; this is node→node producer routing.
-3. **Blend modes:** only `normal` (source-over) today. Add multiply/screen/etc. to the
-   GPU composite (per-layer `blend`), plus a blend menu in the layer row.
+### Remaining work (priority order) — NEXT UP is #1 (live G4/routing smoke)
+1. **Live G4 smoke pass:** run the app with both Camera and Movie layers visible, load a
+   clip, switch the processing/output clock both ways, and confirm the two layers remain
+   independent on screen. Also smoke `ink.texture ← Web/Paper/Camera`.
+2. **Routing follow-up:** path producer inputs are still mostly declarative. Drawing still
+   uses the VM's landmark pipeline; a future pass should make drawing/brush producers
+   consume routed path inputs for landmarks/mouse/OSC.
+3. **Blend modes follow-up:** HSL-family modes (Hue/Saturation/Color/Luminosity) are
+   still not exposed in the UI; add full HSL math before surfacing them.
 4. **GPU-native producers:** overlay/ink/web are still CoreImage images rasterized into
    buffers each frame before GPU compositing — make them Metal-native to cut the CI round
    trips (perf + consistency).

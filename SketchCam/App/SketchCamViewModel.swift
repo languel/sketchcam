@@ -110,6 +110,10 @@ final class SketchCamViewModel: ObservableObject {
     private let timings = PipelineTimings()
     private let frameGate = NSLock()
     private var cameraFrameInFlight = false
+    private let sourceFrameLock = NSLock()
+    private var activeFrameSource = FrameSource.camera
+    private var latestCameraFrame: CVPixelBuffer?
+    private var latestMovieFrame: CVPixelBuffer?
     /// Keeps the OS from throttling us (App Nap / timer coalescing / QoS
     /// clamping) while live — the closest real lever to Apple's "Game Mode"
     /// for a non-fullscreen app. Held for the capture session's lifetime.
@@ -177,20 +181,23 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func applyFrameSource() {
-        switch frameSource {
-        case .camera:
-            movieSource.stop()
-            if cameraPermissionState == .authorized {
-                captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+        sourceFrameLock.withLock {
+            activeFrameSource = frameSource
+            if movieURL == nil {
+                latestMovieFrame = nil
             }
-        case .movie:
-            captureService.stop()
-            if let movieURL {
+        }
+        if cameraPermissionState == .authorized {
+            captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+        }
+        if let movieURL {
+            if movieSource.currentURL != movieURL || !movieSource.isPlaying {
                 movieSource.play(url: movieURL, rate: Float(movieRate))
-                DispatchQueue.main.async {
-                    self.live.stats.cameraResolution = .zero
-                }
+            } else {
+                movieSource.setRate(Float(movieRate))
             }
+        } else {
+            movieSource.stop()
         }
     }
 
@@ -247,12 +254,18 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
+        let shouldProcess = sourceFrameLock.withLock {
+            latestMovieFrame = pixelBuffer
+            return activeFrameSource == .movie
+        }
+        guard shouldProcess else { return }
         guard beginCameraFrame() else { return }
         let effective = effectiveInputFrame(pixelBuffer)
         process(
             pixelBuffer: effective,
             timestamp: CMClockGetTime(CMClockGetHostTimeClock()),
-            originalPixelBuffer: effective
+            originalPixelBuffer: effective,
+            clockSource: .movie
         )
     }
 
@@ -324,6 +337,11 @@ final class SketchCamViewModel: ObservableObject {
 
     func stop() {
         captureService.stop()
+        movieSource.stop()
+        sourceFrameLock.withLock {
+            latestCameraFrame = nil
+            latestMovieFrame = nil
+        }
         testPatternTimer?.cancel()
         testPatternTimer = nil
         publisher.disconnect()
@@ -361,11 +379,16 @@ final class SketchCamViewModel: ObservableObject {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
+        let shouldProcess = sourceFrameLock.withLock {
+            latestCameraFrame = pixelBuffer
+            return activeFrameSource == .camera
+        }
+        guard shouldProcess else { return }
         // Drop frames while one is in flight instead of queueing them up —
         // backlog on the processing queue turns into unbounded latency.
         guard beginCameraFrame() else { return }
         let effective = effectiveInputFrame(pixelBuffer)
-        process(pixelBuffer: effective, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: effective)
+        process(pixelBuffer: effective, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: effective, clockSource: .camera)
     }
 
     /// When frozen, the first incoming frame is deep-copied (camera buffers
@@ -423,6 +446,17 @@ final class SketchCamViewModel: ObservableObject {
         frameGate.unlock()
     }
 
+    private func sourceFrames(clockFrame: CVPixelBuffer, clockSource: FrameSource) -> (camera: CVPixelBuffer?, movie: CVPixelBuffer?) {
+        sourceFrameLock.withLock {
+            switch clockSource {
+            case .camera:
+                return (clockFrame, latestMovieFrame)
+            case .movie:
+                return (latestCameraFrame, clockFrame)
+            }
+        }
+    }
+
     private func startTestPatternTimer() {
         let timer = DispatchSource.makeTimerSource(queue: processingQueue)
         timer.schedule(deadline: .now(), repeating: 1.0 / 30.0, leeway: .milliseconds(5))
@@ -443,7 +477,7 @@ final class SketchCamViewModel: ObservableObject {
         timer.resume()
     }
 
-    private func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime, originalPixelBuffer: CVPixelBuffer) {
+    private func process(pixelBuffer: CVPixelBuffer, timestamp: CMTime, originalPixelBuffer: CVPixelBuffer, clockSource: FrameSource) {
         processingQueue.async { [weak self] in
             guard let self else { return }
             defer { self.endCameraFrame() }
@@ -515,11 +549,22 @@ final class SketchCamViewModel: ObservableObject {
                         outputSize: outputFormat.size
                     )
                 }()
+                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 // The inkwash engine runs synchronously (Metal commit +
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
                 // up buried in "Frame total".
                 let liveInk = self.inkLiveStroke.consume()
+                let inkTexture = self.routedInkTexture(
+                    graph: graph,
+                    settings: settings,
+                    outputFormat: outputFormat,
+                    pixelBuffer: pixelBuffer,
+                    clockSource: clockSource,
+                    matte: matte,
+                    overlay: overlay,
+                    webLayer: webLayer
+                )
                 let inkLayer = self.timings.measure(.ink) {
                     self.inkCompositor.layer(
                         settings: settings,
@@ -527,7 +572,8 @@ final class SketchCamViewModel: ObservableObject {
                         livePoints: liveInk.points,
                         endedLiveID: liveInk.ended,
                         outputSize: outputFormat.size,
-                        frameIndex: frameIndex
+                        frameIndex: frameIndex,
+                        textureInput: inkTexture
                     )
                 }
                 // Overlay renders async; report the latest render duration
@@ -539,7 +585,8 @@ final class SketchCamViewModel: ObservableObject {
                        let frame = self.compositeOnGPU(
                             gpu, pixelBuffer: pixelBuffer, settings: settings,
                             outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
-                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer) {
+                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer,
+                            clockSource: clockSource) {
                         return frame
                     }
                     return try self.processor.process(
@@ -564,11 +611,76 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     /// True when the reconciled layer graph contains an enabled Person Key effect
-    /// (so segmentation must run to supply the matte).
+    /// or mask (so segmentation must run to supply the matte).
     private static func graphWantsPersonMatte(_ settings: ProcessingSettings) -> Bool {
         let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
         return graph.layers.contains { layer in
-            layer.visible && layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte }
+            layer.visible &&
+            (layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte } ||
+             layer.mask?.source == .source(.personMatte))
+        }
+    }
+
+    private func routedInkTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
+                                  pixelBuffer: CVPixelBuffer, clockSource: FrameSource, matte: CIImage?,
+                                  overlay: CIImage?, webLayer: CIImage?) -> CIImage? {
+        guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
+              let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
+              inkNode.inputs.indices.contains(textureIndex) else { return nil }
+        let binding = inkNode.inputs[textureIndex]
+        guard binding != .none else { return nil }
+
+        let outputRect = CGRect(origin: .zero, size: outputFormat.size)
+        let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
+        let srcW = CGFloat(CVPixelBufferGetWidth(pixelBuffer)), srcH = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let cameraImage = sourceFrames.camera.map {
+            CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
+        }
+        let movieImage = sourceFrames.movie.map {
+            CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
+        }
+        let personMatteImage: CIImage? = matte.map { m in
+            let inSrc = m.transformed(by: CGAffineTransform(
+                scaleX: srcW / max(1, m.extent.width), y: srcH / max(1, m.extent.height)))
+            return CoreImageFrameProcessor.aspectFill(inSrc, in: outputRect, mirrored: settings.mirror)
+        }
+
+        func nodeImage(_ node: Node) -> CIImage? {
+            switch node.kind {
+            case .video:
+                return cameraImage
+            case .movie:
+                return movieImage
+            case .solid(let cfg):
+                return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
+                                              blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)
+            case .paper:
+                return CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: outputRect)
+            case .personMatte:
+                return personMatteImage
+            case .overlay, .marks, .drawing:
+                return overlay
+            case .web:
+                return webLayer
+            case .ink, .effect:
+                return nil
+            }
+        }
+
+        switch binding {
+        case .none:
+            return nil
+        case .source(let source):
+            switch source {
+            case .camera:
+                return cameraImage
+            case .personMatte:
+                return personMatteImage
+            case .landmarks, .mouse:
+                return nil
+            }
+        case .node(let id):
+            return graph.node(id).flatMap(nodeImage)
         }
     }
 
@@ -577,11 +689,17 @@ final class SketchCamViewModel: ObservableObject {
     private func compositeOnGPU(_ gpu: MetalLayerCompositor, pixelBuffer: CVPixelBuffer,
                                 settings: ProcessingSettings, outputFormat: FrameFormat,
                                 frameIndex: Int, timestamp: CMTime,
-                                overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?) -> ProcessedFrame? {
+                                overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?,
+                                clockSource: FrameSource) -> ProcessedFrame? {
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
+        let cameraImage: CIImage? = sourceFrames.camera.map {
+            CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
+        }
+        let movieImage: CIImage? = sourceFrames.movie.map {
+            CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
+        }
         let srcW = CGFloat(CVPixelBufferGetWidth(pixelBuffer)), srcH = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let cameraImage = CoreImageFrameProcessor.aspectFill(source, in: outputRect, mirrored: settings.mirror)
 
         // Person matte scaled into output space (matches the legacy keyer).
         let personMatteImage: CIImage? = matte.map { m in
@@ -594,8 +712,10 @@ final class SketchCamViewModel: ObservableObject {
         let streams = MetalLayerCompositor.Streams(
             image: { node in
                 switch node.kind {
-                case .video, .movie:
+                case .video:
                     return cameraImage   // v2: camera is always a layer (hide it with the eye)
+                case .movie:
+                    return movieImage
                 case .solid(let cfg):
                     return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                                                   blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)

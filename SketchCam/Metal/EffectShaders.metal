@@ -126,8 +126,22 @@ kernel void effect_composite(texture2d<float, access::read> baseTex [[texture(0)
     outTex.write(o + b * (1.0 - o.a), gid);
 }
 
-// Source-over with a layer opacity (premultiplied overlay scaled by opacity).
-struct CompositeParams { float opacity; };
+// Source-over with a layer opacity (premultiplied overlay scaled by opacity)
+// and common straight-colour blend modes.
+struct CompositeParams { float opacity; uint blendMode; };
+static float3 blend_color(float3 b, float3 o, uint mode) {
+    switch (mode) {
+        case 1: return b * o;                                      // multiply
+        case 2: return 1.0 - (1.0 - b) * (1.0 - o);                // screen
+        case 3: return min(b + o, 1.0);                            // add
+        case 4: return mix(2.0 * b * o, 1.0 - 2.0 * (1.0 - b) * (1.0 - o), step(0.5, b));
+        case 5: return min(b, o);                                  // darken
+        case 6: return max(b, o);                                  // lighten
+        case 7: return abs(b - o);                                 // difference
+        case 8: return max(b - o, 0.0);                            // subtract
+        default: return o;                                         // normal / unsupported HSL modes
+    }
+}
 kernel void effect_composite_op(texture2d<float, access::read> baseTex [[texture(0)]],
                                 texture2d<float, access::read> overlayTex [[texture(1)]],
                                 texture2d<float, access::write> outTex [[texture(2)]],
@@ -136,7 +150,16 @@ kernel void effect_composite_op(texture2d<float, access::read> baseTex [[texture
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
     float4 b = baseTex.read(gid);
     float4 o = overlayTex.read(gid) * p.opacity;   // premultiplied scale
-    outTex.write(o + b * (1.0 - o.a), gid);
+    if (p.blendMode == 0u || o.a <= 0.0) {
+        outTex.write(o + b * (1.0 - o.a), gid);
+        return;
+    }
+    float3 bRGB = b.a > 0.0 ? clamp(b.rgb / b.a, 0.0, 1.0) : float3(0.0);
+    float3 oRGB = clamp(o.rgb / max(o.a, 1e-6), 0.0, 1.0);
+    float3 blended = blend_color(bRGB, oRGB, p.blendMode);
+    float outA = o.a + b.a * (1.0 - o.a);
+    float3 outRGB = blended * o.a + b.rgb * (1.0 - o.a);
+    outTex.write(float4(outRGB, outA), gid);
 }
 
 // Invert colour (premultiplied-aware): un-premultiply, 1−rgb, re-premultiply.

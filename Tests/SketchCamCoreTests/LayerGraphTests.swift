@@ -108,7 +108,9 @@ final class LayerGraphTests: XCTestCase {
         let cam = Node(name: "Camera", kind: .video)
         let maskSrc = Node(name: "Solid", kind: .solid(SolidConfig()), managed: false)
         let layer = Layer(node: cam.id,
-                          mask: MaskBinding(source: .node(maskSrc.id), mode: .threshold, level: 0.3, invert: true),
+                          mask: MaskBinding(source: .node(maskSrc.id), mode: .threshold, level: 0.3, invert: true,
+                                            personKeyInvert: true, personKeySilhouette: true,
+                                            personKeyColor: RGBAColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 0.8)),
                           effects: [EffectConfig(kind: .threshold, amount: 0.4),
                                     EffectConfig(kind: .blur, amount: 3)])
         let g = LayerGraph(nodes: [cam, maskSrc], layers: [layer])
@@ -117,6 +119,7 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded, g)
         XCTAssertEqual(decoded.layers.first?.effects.count, 2)
         XCTAssertEqual(decoded.layers.first?.mask?.mode, .threshold)
+        XCTAssertEqual(decoded.layers.first?.mask?.personKeyColor.alpha, 0.8)
     }
 
     func testMaskWithPathSourceThrows() {

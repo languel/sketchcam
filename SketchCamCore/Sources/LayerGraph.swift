@@ -57,17 +57,41 @@ public struct MaskBinding: Codable, Sendable, Equatable {
     public var mode: Mode
     public var level: Float     // threshold level (ignored for .luma)
     public var invert: Bool     // flip the final matte
+    public var personKeyInvert: Bool      // person-matte source: key out the person
+    public var personKeySilhouette: Bool  // person-matte source: flat-fill the keyed region
+    public var personKeyColor: RGBAColor  // person-matte source: silhouette fill
 
-    public init(source: PortBinding, mode: Mode = .luma, level: Float = 0.5, invert: Bool = false) {
+    public init(source: PortBinding, mode: Mode = .luma, level: Float = 0.5, invert: Bool = false,
+                personKeyInvert: Bool = false, personKeySilhouette: Bool = false,
+                personKeyColor: RGBAColor = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)) {
         self.source = source
         self.mode = mode
         self.level = level
         self.invert = invert
+        self.personKeyInvert = personKeyInvert
+        self.personKeySilhouette = personKeySilhouette
+        self.personKeyColor = personKeyColor
     }
 
     /// The legacy person key (optionally inverted).
     public static func person(invert: Bool) -> MaskBinding {
-        MaskBinding(source: .source(.personMatte), mode: .luma, invert: invert)
+        MaskBinding(source: .source(.personMatte), mode: .luma, personKeyInvert: invert)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source, mode, level, invert, personKeyInvert, personKeySilhouette, personKeyColor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decode(PortBinding.self, forKey: .source)
+        mode = try c.decodeIfPresent(Mode.self, forKey: .mode) ?? .luma
+        level = try c.decodeIfPresent(Float.self, forKey: .level) ?? 0.5
+        invert = try c.decodeIfPresent(Bool.self, forKey: .invert) ?? false
+        personKeyInvert = try c.decodeIfPresent(Bool.self, forKey: .personKeyInvert) ?? false
+        personKeySilhouette = try c.decodeIfPresent(Bool.self, forKey: .personKeySilhouette) ?? false
+        personKeyColor = try c.decodeIfPresent(RGBAColor.self, forKey: .personKeyColor) ??
+            RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
     }
 }
 

@@ -282,10 +282,12 @@ final class MetalInkEngine {
         let sigChanged = renderSig != lastRenderSig
         let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
 
-        // Nothing to draw at all → blank.
+        // Nothing to draw at all → blank. Immediate strokes are not replayable
+        // paths, but they leave pigment in the Metal textures; once the sim goes
+        // idle, keep serving the last rendered image instead of declaring the
+        // layer empty.
         if !l.inkPaperEnabled, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
-            cachedImage = nil
-            return nil
+            return cachedImage
         }
         // Idle and already rendered → reuse the cached image (no GPU work, no
         // synchronous wait). This is the steady state once ink has dried.
