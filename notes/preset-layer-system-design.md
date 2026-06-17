@@ -218,10 +218,12 @@ picker. Stacking order is *only* the layer stack.
   (with Silhouette flat-fill + matte Quality in-panel). Layers are renamable (double-
   click). Add-layer menu offers Camera/Movie/Solid/Paper + Drawing/Ink/Web. Camera &
   Movie are now separate tabs (combined source toggle gone).
-  STILL TODO in G3: the **mask dropdown** (NONE / any *named* stream as a matte +
-  threshold mode) and **routing source dropdowns** (ink ← paper, drawing ← landmarks) —
-  i.e. binding a layer's input to another layer by name. `MaskBinding`/`PortBinding`
-  models already support this; only the UI + compositor read remain.
+  **Mask dropdown DONE:** each expanded layer has a Mask control (None / Person matte /
+  any named stream) + mode (Luma/Threshold/Inv) + level + invert; compositor applies it.
+  STILL TODO in G3: **routing source dropdowns** for *producer* inputs (ink.texture ← a
+  stream, drawing ← landmark source). Harder than masks — producers (ink/drawing) are
+  computed in the VM, so the compositor must resolve a `.node(id)` pixel input and feed
+  it to the producer, not just read another layer's image. Deferred.
 
 ═══ CHECKPOINT (2026-06-17) ═══
 v2 is the DEFAULT path: GPU layer compositor on by default, the layer stack is the
