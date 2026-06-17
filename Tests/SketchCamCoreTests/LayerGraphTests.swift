@@ -103,6 +103,31 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded, g)
     }
 
+    func testCodableRoundTripWithEffectsAndStreamMask() throws {
+        // A solid used as a threshold mask on a camera layer carrying an effect chain.
+        let cam = Node(name: "Camera", kind: .video)
+        let maskSrc = Node(name: "Solid", kind: .solid(SolidConfig()), managed: false)
+        let layer = Layer(node: cam.id,
+                          mask: MaskBinding(source: .node(maskSrc.id), mode: .threshold, level: 0.3, invert: true),
+                          effects: [EffectConfig(kind: .threshold, amount: 0.4),
+                                    EffectConfig(kind: .blur, amount: 3)])
+        let g = LayerGraph(nodes: [cam, maskSrc], layers: [layer])
+        XCTAssertNoThrow(try g.validate())
+        let decoded = try JSONDecoder().decode(LayerGraph.self, from: try JSONEncoder().encode(g))
+        XCTAssertEqual(decoded, g)
+        XCTAssertEqual(decoded.layers.first?.effects.count, 2)
+        XCTAssertEqual(decoded.layers.first?.mask?.mode, .threshold)
+    }
+
+    func testMaskWithPathSourceThrows() {
+        var cam = Node(name: "Camera", kind: .video)
+        cam.inputs = [.source(.camera)]
+        var layer = Layer(node: cam.id)
+        layer.mask = MaskBinding(source: .source(.mouse))   // path source as a matte ✗
+        let g = LayerGraph(nodes: [cam], layers: [layer])
+        XCTAssertThrowsError(try g.validate())
+    }
+
     // MARK: - Migration
 
     func testDefaultSettingsMigratesToSingleCameraLayer() throws {

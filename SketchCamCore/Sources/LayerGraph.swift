@@ -42,9 +42,33 @@ public enum BlendMode: String, Codable, Sendable, CaseIterable {
     case difference, subtract, hue, saturation, color, luminosity
 }
 
-/// Per-layer mask. Today: key the layer to the person (or its inverse).
-public enum LayerMask: Codable, Sendable, Equatable {
-    case person(invert: Bool)
+/// Per-layer mask (v2). The matte comes from another *stream* (or the built-in
+/// person-matte source); `mode` says how to turn that stream into a matte, and
+/// `invert` flips the result. `.source(.personMatte)` + `.luma` reproduces the
+/// legacy person key.
+public struct MaskBinding: Codable, Sendable, Equatable {
+    public enum Mode: String, Codable, Sendable, CaseIterable {
+        case luma           // matte = source luminance × alpha
+        case threshold      // matte = luma ≥ level ? 1 : 0
+        case invThreshold   // matte = luma <  level ? 1 : 0
+    }
+    /// The stream used as the matte: `.source(.personMatte)` or `.node(streamID)`.
+    public var source: PortBinding
+    public var mode: Mode
+    public var level: Float     // threshold level (ignored for .luma)
+    public var invert: Bool     // flip the final matte
+
+    public init(source: PortBinding, mode: Mode = .luma, level: Float = 0.5, invert: Bool = false) {
+        self.source = source
+        self.mode = mode
+        self.level = level
+        self.invert = invert
+    }
+
+    /// The legacy person key (optionally inverted).
+    public static func person(invert: Bool) -> MaskBinding {
+        MaskBinding(source: .source(.personMatte), mode: .luma, invert: invert)
+    }
 }
 
 /// The drawing algorithms — one per `drawing` node (max routing flexibility).
@@ -208,12 +232,12 @@ public struct Layer: Identifiable, Codable, Sendable, Equatable {
     public var visible: Bool
     public var opacity: Float
     public var blend: BlendMode
-    public var mask: LayerMask?
+    public var mask: MaskBinding?
     /// Ordered effects applied to this layer's content before mask + composite.
     public var effects: [EffectConfig]
 
     public init(id: UUID = UUID(), node: UUID, visible: Bool = true, opacity: Float = 1,
-                blend: BlendMode = .normal, mask: LayerMask? = nil, effects: [EffectConfig] = []) {
+                blend: BlendMode = .normal, mask: MaskBinding? = nil, effects: [EffectConfig] = []) {
         self.id = id
         self.node = node
         self.visible = visible
@@ -236,7 +260,10 @@ public struct Layer: Identifiable, Codable, Sendable, Equatable {
         visible = try c.decode(Bool.self, forKey: .visible)
         opacity = try c.decode(Float.self, forKey: .opacity)
         blend = try c.decode(BlendMode.self, forKey: .blend)
-        mask = try c.decodeIfPresent(LayerMask.self, forKey: .mask)
+        // Tolerant: the pre-v2 mask was a different shape; if it doesn't decode
+        // as a MaskBinding, drop it (reconcile re-derives the person key from
+        // settings each frame anyway).
+        mask = (try? c.decode(MaskBinding.self, forKey: .mask))
         effects = try c.decodeIfPresent([EffectConfig].self, forKey: .effects) ?? []
     }
 }
@@ -293,6 +320,26 @@ public extension LayerGraph {
                 }
             }
         }
+        // Masks must reference a pixel-producing stream (a node's output or a
+        // pixel source); path sources can't be a matte.
+        for layer in layers {
+            guard let mask = layer.mask else { continue }
+            switch mask.source {
+            case .none:
+                break
+            case .source(let s):
+                if s.signalType != .pixel {
+                    throw LayerGraphError.signalTypeMismatch(node: layer.node, port: "mask")
+                }
+            case .node(let upstream):
+                guard let up = byID[upstream] else {
+                    throw LayerGraphError.danglingBinding(node: layer.node, port: "mask")
+                }
+                if up.kind.output != .pixel {
+                    throw LayerGraphError.signalTypeMismatch(node: layer.node, port: "mask")
+                }
+            }
+        }
         _ = try topologicallySortedNodeIDs()
     }
 
@@ -337,9 +384,9 @@ public extension LayerGraph {
         let l = settings.landmarks
         // Person key currently masks only the video layer (the marks/drawing
         // overlay and ink/web are composited un-keyed in today's pipeline).
-        let personMask: LayerMask? = settings.segmentation.enabled ? .person(invert: false) : nil
+        let personMask: MaskBinding? = settings.segmentation.enabled ? .person(invert: false) : nil
 
-        func emit(_ node: Node, mask: LayerMask? = nil) {
+        func emit(_ node: Node, mask: MaskBinding? = nil) {
             nodes.append(node)
             layers.append(Layer(node: node.id, mask: mask))
         }
