@@ -954,6 +954,11 @@ struct ContentView: View {
         model.settings.landmarks.inkWashWidth = min(1.5, max(0, v))
     }
 
+    private func adjustInkBrushInk(by delta: Float) {
+        let v = (model.settings.landmarks.inkBrushInk ?? 0) + delta
+        model.settings.landmarks.inkBrushInk = min(1, max(0, v))
+    }
+
     private func undoInk() {
         guard let previous = inkUndoStack.popLast() else { return }
         model.cancelInkLiveStroke()
@@ -1560,6 +1565,16 @@ struct ContentView: View {
                    default: KeyBinding(key: "}", modifiers: .shift)) {
             guard tab == .ink else { return }
             adjustInkWashWidth(by: 0.05)
+        }
+        r.register(id: "ink.brushInk.decrease", title: "Ink: Decrease Brush Ink", category: "Ink",
+                   default: KeyBinding(key: "<", modifiers: .shift)) {
+            guard tab == .ink else { return }
+            adjustInkBrushInk(by: -0.05)
+        }
+        r.register(id: "ink.brushInk.increase", title: "Ink: Increase Brush Ink", category: "Ink",
+                   default: KeyBinding(key: ">", modifiers: .shift)) {
+            guard tab == .ink else { return }
+            adjustInkBrushInk(by: 0.05)
         }
     }
 
@@ -2752,6 +2767,8 @@ private struct InkCanvasDragValue {
     var location: CGPoint
     var startLocation: CGPoint
     var secondary: Bool
+    var combined: Bool
+    var dissolveWash: Bool
     var shift: Bool
     var charge: Float
 }
@@ -2825,7 +2842,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
             downTimestamp = event.timestamp
             dragCharge = 0
             chargeLocked = false
-            onChanged?(InkCanvasDragValue(location: point, startLocation: point, secondary: secondary, shift: event.modifierFlags.contains(.shift), charge: 0))
+            onChanged?(dragValue(event, location: point, startLocation: point, secondary: secondary, charge: 0))
         }
 
         private func update(_ event: NSEvent) {
@@ -2837,17 +2854,30 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
                 dragCharge = Float(min(1.2, max(0, event.timestamp - downTimestamp)) / 1.2)
                 chargeLocked = true
             }
-            onChanged?(InkCanvasDragValue(location: point, startLocation: start, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift), charge: dragCharge))
+            onChanged?(dragValue(event, location: point, startLocation: start, secondary: secondaryDrag, charge: dragCharge))
         }
 
         private func finish(_ event: NSEvent) {
             let point = convert(event.locationInWindow, from: nil)
-            onChanged?(InkCanvasDragValue(location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, shift: event.modifierFlags.contains(.shift), charge: dragCharge))
+            onChanged?(dragValue(event, location: point, startLocation: startLocation ?? point, secondary: secondaryDrag, charge: dragCharge))
             onEnded?(true)
             startLocation = nil
             secondaryDrag = false
             chargeLocked = false
             dragCharge = 0
+        }
+
+        private func dragValue(_ event: NSEvent, location: CGPoint, startLocation: CGPoint, secondary: Bool, charge: Float) -> InkCanvasDragValue {
+            let flags = event.modifierFlags
+            return InkCanvasDragValue(
+                location: location,
+                startLocation: startLocation,
+                secondary: secondary,
+                combined: flags.contains(.option),
+                dissolveWash: flags.contains(.command),
+                shift: flags.contains(.shift),
+                charge: charge
+            )
         }
     }
 }
@@ -2876,7 +2906,10 @@ private struct InkPreviewDrawingLayer: View {
     @Binding var selectedPointIndex: Int?
     @State private var current: [CGPoint] = []
     @State private var currentPathID: UUID?
+    @State private var combinedPathID: UUID?
     @State private var currentStrokeMode: InkBrushMode?
+    @State private var currentCombined = false
+    @State private var currentDissolveWash = false
     @State private var dragStartPaths: [InkEditorPath] = []
     @State private var dragStartPoint: CGPoint?
 
@@ -2947,7 +2980,7 @@ private struct InkPreviewDrawingLayer: View {
         case .draw:
             selectedPathID = nil
             selectedPointIndex = nil
-            updateLiveStroke(with: p, secondary: value.secondary, shift: value.shift, charge: value.charge)
+            updateLiveStroke(with: p, secondary: value.secondary, combined: value.combined, dissolveWash: value.dissolveWash, shift: value.shift, charge: value.charge)
         case .select:
             if dragStartPaths.isEmpty {
                 dragStartPaths = paths
@@ -2983,8 +3016,23 @@ private struct InkPreviewDrawingLayer: View {
                 id: currentPathID ?? UUID(),
                 points: current,
                 brushMode: currentStrokeMode ?? brushMode,
-                inkKind: inkKind,
+                inkKind: currentDissolveWash ? .white : inkKind,
                 width: (currentStrokeMode ?? brushMode) == .brush ? washWidth : width,
+                flow: flow,
+                bleed: bleed,
+                dry: dry,
+                colorSeparation: colorSeparation,
+                brushInk: currentDissolveWash ? 1 : brushInk,
+                color: inkRGBA
+            ))
+        }
+        if tool == .draw, committed, current.count > 1, currentCombined, !immediateWash {
+            paths.append(InkEditorPath(
+                id: combinedPathID ?? UUID(),
+                points: current,
+                brushMode: .brush,
+                inkKind: inkKind,
+                width: washWidth,
                 flow: flow,
                 bleed: bleed,
                 dry: dry,
@@ -2996,12 +3044,15 @@ private struct InkPreviewDrawingLayer: View {
         onLiveEnd()
         current = []
         currentPathID = nil
+        combinedPathID = nil
         currentStrokeMode = nil
+        currentCombined = false
+        currentDissolveWash = false
         dragStartPaths = []
         dragStartPoint = nil
     }
 
-    private func updateLiveStroke(with point: CGPoint, secondary: Bool, shift: Bool, charge: Float) {
+    private func updateLiveStroke(with point: CGPoint, secondary: Bool, combined: Bool, dissolveWash: Bool, shift: Bool, charge: Float) {
         // Per move we send the latest point + params to the engine; the channel
         // accumulates every point so the engine injects along all of them
         // (dense). `current` accumulates locally for the committed path + dashed
@@ -3009,27 +3060,36 @@ private struct InkPreviewDrawingLayer: View {
         if current.isEmpty {
             let id = UUID()
             currentPathID = id
-            currentStrokeMode = secondary ? .brush : brushMode
+            currentStrokeMode = dissolveWash ? .brush : (combined ? .pen : (secondary ? .brush : brushMode))
+            currentCombined = combined && !dissolveWash
+            currentDissolveWash = dissolveWash
+            combinedPathID = currentCombined ? UUID() : nil
             current = [point]
-            onLive(makeSample(id: id, point: point, shift: shift, charge: charge))
+            emitLiveSamples(point: point, shift: shift, charge: charge)
             return
         }
         if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0015 }) ?? true {
             current.append(point)
         }
-        onLive(makeSample(id: currentPathID ?? UUID(), point: point, shift: shift, charge: charge))
+        emitLiveSamples(point: point, shift: shift, charge: charge)
     }
 
-    private func makeSample(id: UUID, point: CGPoint, shift: Bool, charge: Float) -> InkLiveStrokeSample {
-        let strokeMode = currentStrokeMode ?? brushMode
+    private func emitLiveSamples(point: CGPoint, shift: Bool, charge: Float) {
+        onLive(makeSample(id: currentPathID ?? UUID(), point: point, mode: currentStrokeMode ?? brushMode, shift: shift, charge: charge))
+        if currentCombined {
+            onLive(makeSample(id: combinedPathID ?? UUID(), point: point, mode: .brush, shift: shift, charge: charge))
+        }
+    }
+
+    private func makeSample(id: UUID, point: CGPoint, mode strokeMode: InkBrushMode, shift: Bool, charge: Float) -> InkLiveStrokeSample {
         return InkLiveStrokeSample(
             id: id,
             point: point,
             brushMode: strokeMode,
-            inkKind: inkKind,
+            inkKind: currentDissolveWash ? .white : inkKind,
             width: strokeMode == .brush ? washWidth : width,
             flow: flow,
-            brushInk: brushInk,
+            brushInk: currentDissolveWash ? 1 : brushInk,
             color: inkRGBA,
             smoothBoost: shift,
             destructive: strokeMode == .brush && immediateWash,
