@@ -75,8 +75,9 @@ public enum NodeKind: Codable, Sendable, Equatable {
     case video                  // camera-derived pixels (optionally effected)
     case solid                  // color / transparent fill
     case effect                 // pixel → pixel (threshold / outline / …)
-    case marks                  // landmark dots / stick
-    case drawing(DrawingAlgorithm)
+    case overlay                // combined marks+drawing (today's single overlay image)
+    case marks                  // landmark dots / stick (Phase 3b: own image)
+    case drawing(DrawingAlgorithm)  // (Phase 3b: own image per algorithm)
     case ink
     case web
 
@@ -86,6 +87,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .video:   return [Port(name: "source", type: .pixel)]
         case .solid:   return []
         case .effect:  return [Port(name: "image", type: .pixel)]
+        case .overlay: return [Port(name: "analysis", type: .path)]
         case .marks:   return [Port(name: "analysis", type: .path)]
         case .drawing: return [Port(name: "analysis", type: .path)]
         case .ink:     return [Port(name: "strokes", type: .path),
@@ -104,6 +106,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .video:   return [.source(.camera)]
         case .solid:   return []
         case .effect:  return [.none]
+        case .overlay: return [.source(.landmarks)]
         case .marks:   return [.source(.landmarks)]
         case .drawing: return [.source(.landmarks)]
         case .ink:     return [.source(.mouse), .none]   // texture unrouted by default
@@ -263,11 +266,11 @@ public extension LayerGraph {
             emit(Node(name: "Ink", kind: .ink))
         }
 
-        // The marks/drawing "overlay" (one merged unit today; separate nodes here).
-        if l.enabled, l.showDots || l.showStick { emit(Node(name: "Marks", kind: .marks)) }
-        if l.enabled, l.yarnEnabled { emit(Node(name: "Yarn", kind: .drawing(.yarn))) }
-        if l.enabled, l.wrapEnabled { emit(Node(name: "Wrap", kind: .drawing(.wrap))) }
-        if l.enabled, l.lineWalkEnabled { emit(Node(name: "Line walk", kind: .drawing(.lineWalk))) }
+        // The marks/drawing "overlay" — one merged image today, so one layer.
+        // (Phase 3b splits this into per-algorithm layers.)
+        if l.enabled, l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled {
+            emit(Node(name: "Drawing", kind: .overlay))
+        }
 
         if l.enabled, l.inkEnabled, l.inkPlacement == .aboveDrawing {
             emit(Node(name: "Ink", kind: .ink))
@@ -277,5 +280,40 @@ public extension LayerGraph {
         }
 
         return LayerGraph(nodes: nodes, layers: layers)
+    }
+
+    /// Reconcile an existing (user-edited) graph against the current settings:
+    /// keep the user's order + visibility + opacity + blend for layers that still
+    /// exist (matched by node kind — instances are unique for now), drop layers
+    /// whose feature was turned off, and append newly-enabled layers in their
+    /// canonical position. Lets the legacy feature toggles and the Layers UI
+    /// coexist while the graph is the source of truth for arrangement.
+    func reconciled(with settings: ProcessingSettings) -> LayerGraph {
+        let desired = LayerGraph.defaultGraph(from: settings)
+        func kind(_ g: LayerGraph, _ l: Layer) -> NodeKind? { g.node(l.node)?.kind }
+
+        let desiredKinds = desired.layers.compactMap { kind(desired, $0) }
+        // Keep existing layers that are still desired, in the user's order.
+        var resultLayers: [Layer] = []
+        var resultNodes: [Node] = []
+        var keptKinds: [NodeKind] = []
+        for layer in layers {
+            guard let k = kind(self, layer), desiredKinds.contains(k), let node = self.node(layer.node) else { continue }
+            resultNodes.append(node)
+            resultLayers.append(layer)
+            keptKinds.append(k)
+        }
+        // Append newly-enabled kinds at their canonical (desired) position.
+        for dl in desired.layers {
+            guard let k = kind(desired, dl), !keptKinds.contains(k), let dn = desired.node(dl.node) else { continue }
+            let insertIdx = desired.layers.prefix(while: { kind(desired, $0) != k })
+                .reduce(0) { acc, prior in
+                    keptKinds.contains(kind(desired, prior)!) ? acc + 1 : acc
+                }
+            resultNodes.append(dn)
+            resultLayers.insert(dl, at: min(insertIdx, resultLayers.count))
+            keptKinds.insert(k, at: min(insertIdx, keptKinds.count))
+        }
+        return LayerGraph(nodes: resultNodes, layers: resultLayers)
     }
 }

@@ -223,8 +223,12 @@ public final class CoreImageFrameProcessor: FrameProcessor {
         // flag — the order from the migrated LayerGraph (identical by
         // construction, since the graph is migrated from these same flags).
         if settings.useLayerGraph {
+            // Use the user-edited graph if present, always reconciled against the
+            // current feature flags (so toggling a feature adds/removes its layer
+            // while preserving the user's order/visibility/opacity).
+            let graph = (settings.layerGraph ?? LayerGraph.defaultGraph(from: settings)).reconciled(with: settings)
             finalImage = Self.compositeMovableLayers(
-                base: finalImage, graph: LayerGraph.defaultGraph(from: settings),
+                base: finalImage, graph: graph,
                 overlay: overlay, inkLayer: inkLayer, webLayer: webLayer, outputRect: outputRect
             )
         } else {
@@ -282,15 +286,21 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 image = webLayer
             case .ink:
                 image = inkLayer
-            case .marks, .drawing:
-                image = overlayDone ? nil : overlay
+            case .overlay, .marks, .drawing:
+                image = overlayDone ? nil : overlay   // the one merged overlay, once
                 overlayDone = true
             case .video, .solid, .effect:
                 image = nil   // the base — already composited
             }
-            if let image {
-                result = image.composited(over: result).cropped(to: outputRect)
+            guard var img = image else { continue }
+            if layer.opacity < 0.999 {
+                // Multiply the layer's alpha by its opacity. (Skipped at 1 so the
+                // default path stays pixel-identical to legacy.)
+                img = img.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(max(0, layer.opacity)))
+                ])
             }
+            result = img.composited(over: result).cropped(to: outputRect)
         }
         return result
     }

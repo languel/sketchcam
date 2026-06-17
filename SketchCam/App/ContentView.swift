@@ -433,6 +433,10 @@ struct ContentView: View {
     // MARK: - Layers tab
 
     @ViewBuilder private var layersTab: some View {
+        SectionHeader("Layer stack")
+        LayerStackEditor(model: model)
+            .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
+
         Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
             .onChange(of: model.settings.inputLayerEnabled) { _, enabled in
                 // With the input layer off, a "Live" background would still
@@ -1598,6 +1602,92 @@ private struct RGBAColorPicker: View {
     static func toRGBA(_ color: Color) -> RGBAColor {
         let ns = NSColor(color).usingColorSpace(.sRGB) ?? .black
         return RGBAColor(red: Float(ns.redComponent), green: Float(ns.greenComponent), blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))
+    }
+}
+
+/// The Layers panel (Phase 3a): reorder / show-hide / opacity for the composited
+/// layers, driving `settings.layerGraph`. Reorder is via up/down buttons (drag
+/// reordering inside a non-List settings panel is unreliable on macOS).
+private struct LayerStackEditor: View {
+    @ObservedObject var model: SketchCamViewModel
+
+    /// Layers top→bottom for display (the graph stores them bottom→top).
+    private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if displayLayers.isEmpty {
+                Text("No layers — enable features (camera, ink, web, marks/drawing).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
+                HStack(spacing: 8) {
+                    Button { toggleVisible(layer.id) } label: {
+                        Image(systemName: layer.visible ? "eye" : "eye.slash")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(layer.visible ? "Hide layer" : "Show layer")
+                    Text(name(layer)).frame(width: 78, alignment: .leading)
+                    Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
+                        .help("Layer opacity")
+                    Button { move(layer.id, towardTop: true) } label: { Image(systemName: "chevron.up") }
+                        .buttonStyle(.borderless).disabled(display == 0)
+                    Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
+                        .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
+                }
+            }
+        }
+        .onAppear(perform: normalize)
+    }
+
+    /// Adopt the graph as the source of truth and reconcile it with current flags.
+    private func normalize() {
+        let base = model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)
+        model.settings.layerGraph = base.reconciled(with: model.settings)
+        model.settings.useLayerGraph = true
+    }
+
+    private func name(_ layer: Layer) -> String {
+        switch model.settings.layerGraph?.node(layer.node)?.kind {
+        case .video: return "Camera"
+        case .solid: return "Background"
+        case .overlay, .marks, .drawing: return "Drawing"
+        case .ink: return "Ink"
+        case .web: return "Web"
+        case .effect: return "Effect"
+        case .none: return "Layer"
+        }
+    }
+
+    private func mutate(_ body: (inout LayerGraph) -> Void) {
+        guard var g = model.settings.layerGraph else { return }
+        body(&g)
+        model.settings.layerGraph = g
+    }
+
+    private func toggleVisible(_ id: UUID) {
+        mutate { g in
+            if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].visible.toggle() }
+        }
+    }
+
+    private func opacity(_ id: UUID) -> Binding<Double> {
+        Binding(
+            get: { Double(model.settings.layerGraph?.layers.first { $0.id == id }?.opacity ?? 1) },
+            set: { v in mutate { g in
+                if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].opacity = Float(v) }
+            } }
+        )
+    }
+
+    /// towardTop = toward the visual top = later in the bottom→top array.
+    private func move(_ id: UUID, towardTop: Bool) {
+        mutate { g in
+            guard let i = g.layers.firstIndex(where: { $0.id == id }) else { return }
+            let j = towardTop ? i + 1 : i - 1
+            guard g.layers.indices.contains(j) else { return }
+            g.layers.swapAt(i, j)
+        }
     }
 }
 

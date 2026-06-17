@@ -257,6 +257,10 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// web) in the order given by the migrated `LayerGraph` instead of the
     /// hardcoded placement flags. Off = legacy path (identical output).
     public var useLayerGraph: Bool
+    /// User-edited layer arrangement (order / visibility / opacity). nil = derive
+    /// the default graph from the feature flags. The compositor reconciles it
+    /// against the current flags each frame.
+    public var layerGraph: LayerGraph?
     /// Preview/display refresh cap in fps. 0 = full-tilt (every published
     /// frame). The preview pane doubles as the main display (presentation
     /// mode), so this is a real output rate, not a throttle-to-save-cost.
@@ -287,6 +291,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         segmentation: SegmentationSettings = SegmentationSettings(),
         previewEnabled: Bool = true,
         useLayerGraph: Bool = false,
+        layerGraph: LayerGraph? = nil,
         previewFPS: Double = 0,
         useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,
@@ -311,6 +316,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.segmentation = segmentation
         self.previewEnabled = previewEnabled
         self.useLayerGraph = useLayerGraph
+        self.layerGraph = layerGraph
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality

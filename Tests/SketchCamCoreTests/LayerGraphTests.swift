@@ -125,13 +125,52 @@ final class LayerGraphTests: XCTestCase {
 
         let kinds = g.layers.compactMap { g.node($0.node)?.kind }
         XCTAssertEqual(kinds.first, .solid, "solid background sits at the bottom")
-        XCTAssertTrue(kinds.contains(.marks))
-        XCTAssertTrue(kinds.contains(.drawing(.lineWalk)))
+        XCTAssertTrue(kinds.contains(.overlay), "marks+drawing collapse to one overlay layer")
         XCTAssertTrue(kinds.contains(.ink))
 
         // Camera + content layers are masked to the person when segmentation is on.
         let cameraLayer = g.layers.first { g.node($0.node)?.kind == .video }
         XCTAssertEqual(cameraLayer?.mask, .person(invert: false))
+    }
+
+    // MARK: - Reconciliation (user edits vs feature toggles)
+
+    func testReconcilePreservesUserOrderAndDropsDisabled() throws {
+        var s = ProcessingSettings()
+        s.landmarks.enabled = true
+        s.landmarks.showStick = true        // overlay
+        s.landmarks.inkEnabled = true       // ink
+        s.web.enabled = true                // web
+        var g = LayerGraph.defaultGraph(from: s)
+
+        // User reverses the movable layers' order and hides one.
+        g.layers.reverse()
+        let hiddenKind = g.node(g.layers[0].node)!.kind
+        g.layers[0].visible = false
+        let userOrder = g.layers.compactMap { g.node($0.node)?.kind }
+
+        // Turn web OFF → its layer must drop, the rest keep the user's order.
+        s.web.enabled = false
+        let r = g.reconciled(with: s)
+        XCTAssertNoThrow(try r.validate())
+        let kinds = r.layers.compactMap { r.node($0.node)?.kind }
+        XCTAssertFalse(kinds.contains(.web), "disabled feature's layer is dropped")
+        XCTAssertEqual(kinds, userOrder.filter { $0 != .web }, "user order preserved")
+        // Visibility carried over.
+        if hiddenKind != .web {
+            XCTAssertEqual(r.layers.first { r.node($0.node)?.kind == hiddenKind }?.visible, false)
+        }
+    }
+
+    func testReconcileAppendsNewlyEnabledFeature() throws {
+        var s = ProcessingSettings()
+        s.landmarks.enabled = true
+        s.landmarks.showStick = true
+        let g = LayerGraph.defaultGraph(from: s)   // video + overlay
+        s.landmarks.inkEnabled = true              // enable ink after the fact
+        let r = g.reconciled(with: s)
+        XCTAssertNoThrow(try r.validate())
+        XCTAssertTrue(r.layers.contains { r.node($0.node)?.kind == .ink }, "newly enabled ink appears")
     }
 
     func testInkPlacementOrdersRelativeToDrawing() throws {
@@ -143,7 +182,7 @@ final class LayerGraphTests: XCTestCase {
             s.landmarks.inkPlacement = placement
             let g = LayerGraph.defaultGraph(from: s)
             let inkIdx = g.layers.firstIndex { g.node($0.node)?.kind == .ink }!
-            let drawIdx = g.layers.firstIndex { g.node($0.node)?.kind == .drawing(.lineWalk) }!
+            let drawIdx = g.layers.firstIndex { g.node($0.node)?.kind == .overlay }!
             return (inkIdx, drawIdx)
         }
         let above = inkVsDrawingOrder(.aboveDrawing)
