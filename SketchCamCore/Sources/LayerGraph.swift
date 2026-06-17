@@ -262,7 +262,8 @@ public extension LayerGraph {
         if settings.web.enabled, settings.web.placement == .behindDrawing {
             emit(Node(name: "Web", kind: .web))
         }
-        if l.enabled, l.inkEnabled, l.inkPlacement == .behindDrawing {
+        // Ink is independent of the Marks/landmarks master toggle.
+        if l.inkEnabled, l.inkPlacement == .behindDrawing {
             emit(Node(name: "Ink", kind: .ink))
         }
 
@@ -272,7 +273,7 @@ public extension LayerGraph {
             emit(Node(name: "Drawing", kind: .overlay))
         }
 
-        if l.enabled, l.inkEnabled, l.inkPlacement == .aboveDrawing {
+        if l.inkEnabled, l.inkPlacement == .aboveDrawing {
             emit(Node(name: "Ink", kind: .ink))
         }
         if settings.web.enabled, settings.web.placement == .aboveDrawing {

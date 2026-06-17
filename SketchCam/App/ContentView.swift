@@ -1638,6 +1638,19 @@ private struct LayerStackEditor: View {
             }
         }
         .onAppear(perform: normalize)
+        // Re-sync the stack when any layer-affecting feature toggles (so enabling
+        // Ink/Web/Marks/Drawing or changing placement updates the list live).
+        .onChange(of: featureKey) { _, _ in normalize() }
+    }
+
+    /// A signature of the flags that determine which layers exist.
+    private var featureKey: String {
+        let l = model.settings.landmarks
+        return [l.enabled, l.inkEnabled, l.showDots, l.showStick,
+                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled,
+                model.settings.web.enabled, model.settings.backgroundMode != .live]
+            .map { $0 ? "1" : "0" }.joined()
+            + l.inkPlacement.rawValue + model.settings.web.placement.rawValue
     }
 
     /// Adopt the graph as the source of truth and reconcile it with current flags.

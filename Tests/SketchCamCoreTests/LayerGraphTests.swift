@@ -173,6 +173,18 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertTrue(r.layers.contains { r.node($0.node)?.kind == .ink }, "newly enabled ink appears")
     }
 
+    func testInkLayerIndependentOfMarksMaster() throws {
+        // Ink enabled but the landmarks/Marks master OFF must still yield an ink layer.
+        var s = ProcessingSettings()
+        s.landmarks.enabled = false
+        s.landmarks.inkEnabled = true
+        let g = LayerGraph.defaultGraph(from: s)
+        XCTAssertTrue(g.layers.contains { g.node($0.node)?.kind == .ink },
+                      "ink is independent of the Marks master toggle")
+        XCTAssertFalse(g.layers.contains { g.node($0.node)?.kind == .overlay },
+                       "no drawing/marks overlay when the master is off")
+    }
+
     func testInkPlacementOrdersRelativeToDrawing() throws {
         func inkVsDrawingOrder(_ placement: WebLayerPlacement) -> (ink: Int, draw: Int) {
             var s = ProcessingSettings()
