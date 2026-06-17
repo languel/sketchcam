@@ -218,21 +218,32 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             finalImage = Self.upscale(composed, from: processingRect, to: outputRect)
         }
 
-        // Layer order (above the video/effects): web-behind → ink/drawing → web-above.
-        if let webLayer, !webAboveDrawing {
-            finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
-        }
-        if let inkLayer, settings.landmarks.inkPlacement == .behindDrawing {
-            finalImage = inkLayer.composited(over: finalImage).cropped(to: outputRect)
-        }
-        if let overlay {
-            finalImage = overlay.composited(over: finalImage).cropped(to: outputRect)
-        }
-        if let inkLayer, settings.landmarks.inkPlacement == .aboveDrawing {
-            finalImage = inkLayer.composited(over: finalImage).cropped(to: outputRect)
-        }
-        if let webLayer, webAboveDrawing {
-            finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
+        // Movable layers (above the video/effects base): marks/drawing overlay,
+        // ink, web. Either the legacy hardcoded order, or — behind the Phase 2
+        // flag — the order from the migrated LayerGraph (identical by
+        // construction, since the graph is migrated from these same flags).
+        if settings.useLayerGraph {
+            finalImage = Self.compositeMovableLayers(
+                base: finalImage, graph: LayerGraph.defaultGraph(from: settings),
+                overlay: overlay, inkLayer: inkLayer, webLayer: webLayer, outputRect: outputRect
+            )
+        } else {
+            // Legacy: web-behind → ink-behind → overlay → ink-above → web-above.
+            if let webLayer, !webAboveDrawing {
+                finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
+            }
+            if let inkLayer, settings.landmarks.inkPlacement == .behindDrawing {
+                finalImage = inkLayer.composited(over: finalImage).cropped(to: outputRect)
+            }
+            if let overlay {
+                finalImage = overlay.composited(over: finalImage).cropped(to: outputRect)
+            }
+            if let inkLayer, settings.landmarks.inkPlacement == .aboveDrawing {
+                finalImage = inkLayer.composited(over: finalImage).cropped(to: outputRect)
+            }
+            if let webLayer, webAboveDrawing {
+                finalImage = webLayer.composited(over: finalImage).cropped(to: outputRect)
+            }
         }
 
         let output = try outputPool.makeBuffer(format: outputFormat)
@@ -253,6 +264,35 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             mirror: settings.mirror
         )
         return ProcessedFrame(pixelBuffer: output, sampleBuffer: sampleBuffer, state: state)
+    }
+
+    /// Composite the movable layers over the base in the graph's layer order.
+    /// The base (video/solid/effect) is already in `base`; marks+drawing map to
+    /// the single merged `overlay` (composited at the first such layer); ink/web
+    /// map to their pre-rendered images.
+    static func compositeMovableLayers(base: CIImage, graph: LayerGraph, overlay: CIImage?,
+                                       inkLayer: CIImage?, webLayer: CIImage?, outputRect: CGRect) -> CIImage {
+        var result = base
+        var overlayDone = false
+        for layer in graph.layers where layer.visible {
+            guard let kind = graph.node(layer.node)?.kind else { continue }
+            let image: CIImage?
+            switch kind {
+            case .web:
+                image = webLayer
+            case .ink:
+                image = inkLayer
+            case .marks, .drawing:
+                image = overlayDone ? nil : overlay
+                overlayDone = true
+            case .video, .solid, .effect:
+                image = nil   // the base — already composited
+            }
+            if let image {
+                result = image.composited(over: result).cropped(to: outputRect)
+            }
+        }
+        return result
     }
 
     static func thicken(_ edges: CIImage, radius: Float) -> CIImage {

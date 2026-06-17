@@ -241,61 +241,41 @@ public extension LayerGraph {
         var nodes: [Node] = []
         var layers: [Layer] = []
         let l = settings.landmarks
+        // Person key currently masks only the video layer (the marks/drawing
+        // overlay and ink/web are composited un-keyed in today's pipeline).
+        let personMask: LayerMask? = settings.segmentation.enabled ? .person(invert: false) : nil
 
-        // Person key → a mask applied to the content layers when segmentation is on.
-        let mask: LayerMask? = settings.segmentation.enabled
-            ? .person(invert: false) : nil
-
-        func add(_ node: Node, masked: Bool = false) {
+        func emit(_ node: Node, mask: LayerMask? = nil) {
             nodes.append(node)
-            layers.append(Layer(node: node.id, mask: masked ? mask : nil))
+            layers.append(Layer(node: node.id, mask: mask))
         }
 
-        // Bottom: a solid/transparent background when not using live video.
-        if settings.backgroundMode != .live {
-            add(Node(name: "Background", kind: .solid))
+        // Bottom→top, matching the legacy compositor exactly:
+        //   [background] → video → web-behind → ink-behind → marks+drawing
+        //   → ink-above → web-above
+        if settings.backgroundMode != .live { emit(Node(name: "Background", kind: .solid)) }
+        emit(Node(name: "Camera", kind: .video), mask: personMask)
+
+        if settings.web.enabled, settings.web.placement == .behindDrawing {
+            emit(Node(name: "Web", kind: .web))
+        }
+        if l.enabled, l.inkEnabled, l.inkPlacement == .behindDrawing {
+            emit(Node(name: "Ink", kind: .ink))
         }
 
-        // Camera (with effects folded in for now), keyed to the person if on.
-        add(Node(name: "Camera", kind: .video), masked: mask != nil)
+        // The marks/drawing "overlay" (one merged unit today; separate nodes here).
+        if l.enabled, l.showDots || l.showStick { emit(Node(name: "Marks", kind: .marks)) }
+        if l.enabled, l.yarnEnabled { emit(Node(name: "Yarn", kind: .drawing(.yarn))) }
+        if l.enabled, l.wrapEnabled { emit(Node(name: "Wrap", kind: .drawing(.wrap))) }
+        if l.enabled, l.lineWalkEnabled { emit(Node(name: "Line walk", kind: .drawing(.lineWalk))) }
 
-        // Marks (dots / stick).
-        if l.enabled && (l.showDots || l.showStick) {
-            add(Node(name: "Marks", kind: .marks), masked: mask != nil)
+        if l.enabled, l.inkEnabled, l.inkPlacement == .aboveDrawing {
+            emit(Node(name: "Ink", kind: .ink))
         }
-
-        // Drawing algorithms — one node each (max flexibility).
-        if l.enabled {
-            if l.yarnEnabled { add(Node(name: "Yarn", kind: .drawing(.yarn)), masked: mask != nil) }
-            if l.wrapEnabled { add(Node(name: "Wrap", kind: .drawing(.wrap)), masked: mask != nil) }
-            if l.lineWalkEnabled { add(Node(name: "Line walk", kind: .drawing(.lineWalk)), masked: mask != nil) }
+        if settings.web.enabled, settings.web.placement == .aboveDrawing {
+            emit(Node(name: "Web", kind: .web))
         }
-
-        // Ink + Web, ordered relative to the drawing by their placement flags.
-        // (behindDrawing → insert before the drawing layers; aboveDrawing → after.)
-        let inkNode = (l.enabled && l.inkEnabled) ? Node(name: "Ink", kind: .ink) : nil
-        let webNode = settings.web.enabled ? Node(name: "Web", kind: .web) : nil
-
-        func insertByPlacement(_ node: Node?, placement: WebLayerPlacement) {
-            guard let node else { return }
-            nodes.append(node)
-            let layer = Layer(node: node.id)
-            if placement == .behindDrawing,
-               let firstDrawingIdx = layers.firstIndex(where: { layerIsDrawing($0, nodes: nodes) }) {
-                layers.insert(layer, at: firstDrawingIdx)
-            } else {
-                layers.append(layer)
-            }
-        }
-        insertByPlacement(inkNode, placement: l.inkPlacement)
-        insertByPlacement(webNode, placement: settings.web.placement)
 
         return LayerGraph(nodes: nodes, layers: layers)
-    }
-
-    private static func layerIsDrawing(_ layer: Layer, nodes: [Node]) -> Bool {
-        guard let n = nodes.first(where: { $0.id == layer.node }) else { return false }
-        if case .drawing = n.kind { return true }
-        return false
     }
 }

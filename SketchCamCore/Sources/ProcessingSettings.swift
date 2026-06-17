@@ -253,6 +253,10 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     public var segmentation: SegmentationSettings
     /// When false, no preview readback happens at all; publishing continues.
     public var previewEnabled: Bool
+    /// Phase 2 flag: composite the movable layers (marks/drawing overlay, ink,
+    /// web) in the order given by the migrated `LayerGraph` instead of the
+    /// hardcoded placement flags. Off = legacy path (identical output).
+    public var useLayerGraph: Bool
     /// Preview/display refresh cap in fps. 0 = full-tilt (every published
     /// frame). The preview pane doubles as the main display (presentation
     /// mode), so this is a real output rate, not a throttle-to-save-cost.
@@ -282,6 +286,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         backgroundColor: RGBAColor = .chromaGreen,
         segmentation: SegmentationSettings = SegmentationSettings(),
         previewEnabled: Bool = true,
+        useLayerGraph: Bool = false,
         previewFPS: Double = 0,
         useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,
@@ -305,6 +310,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.backgroundColor = backgroundColor
         self.segmentation = segmentation
         self.previewEnabled = previewEnabled
+        self.useLayerGraph = useLayerGraph
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality
