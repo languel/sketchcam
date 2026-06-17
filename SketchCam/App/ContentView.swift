@@ -1708,12 +1708,21 @@ private struct LayerStackEditor: View {
             }
             Menu {
                 Button("Solid color") { addSolid() }
+                Divider()
+                Section("Streams") {
+                    Button("Drawing") { addStream(.drawing) }
+                        .disabled(streamPresent(.drawing))
+                    Button("Ink") { addStream(.ink) }
+                        .disabled(streamPresent(.ink))
+                    Button("Web") { addStream(.web) }
+                        .disabled(streamPresent(.web))
+                }
             } label: {
                 Label("Add layer", systemImage: "plus")
             }
             .menuStyle(.borderlessButton)
             .frame(width: 120)
-            .help("Create a new layer. (More content types as their renderers become per-layer.)")
+            .help("Add a layer. Solid is freeform (add as many as you like); a stream layer surfaces a shared source (single instance for now — multiplicity comes with the per-layer renderers).")
         }
         .onAppear(perform: normalize)
         // Re-sync the stack when any layer-affecting feature toggles (so enabling
@@ -1773,6 +1782,39 @@ private struct LayerStackEditor: View {
                 }
             }
         )
+    }
+
+    /// Shared content streams that can be surfaced as a layer (single instance
+    /// each, for now — driven by their feature flag; reconcile inserts the layer).
+    private enum Stream { case drawing, ink, web }
+
+    private func streamPresent(_ s: Stream) -> Bool {
+        let kinds = (model.settings.layerGraph?.layers ?? []).compactMap {
+            model.settings.layerGraph?.node($0.node)?.kind
+        }
+        switch s {
+        case .drawing: return kinds.contains { $0.family == "overlay" }
+        case .ink: return kinds.contains { $0.family == "ink" }
+        case .web: return kinds.contains { $0.family == "web" }
+        }
+    }
+
+    /// Enable the source behind a stream so it produces pixels, then reconcile
+    /// the graph so its (managed) layer appears in the stack.
+    private func addStream(_ s: Stream) {
+        switch s {
+        case .drawing:
+            model.settings.landmarks.enabled = true
+            let l = model.settings.landmarks
+            if !(l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled) {
+                model.settings.landmarks.showStick = true
+            }
+        case .ink:
+            model.settings.landmarks.inkEnabled = true
+        case .web:
+            model.settings.web.enabled = true
+        }
+        normalize()
     }
 
     private func addSolid() {
