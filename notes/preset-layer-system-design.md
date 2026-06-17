@@ -160,6 +160,61 @@ UserDefaults. One Codable model, two entry points.
    path-generator/brush-as-node, multiplicity, full blend modes.
 6. **Presets** (global + per-node, JSON).
 
+## v2 — the all-layers model (CHOSEN, supersedes the tracks above)
+
+The earlier phasing wired a Layers panel that still *mirrored* feature flags, and a
+graph compositor that only re-ordered the *movable* overlays over a hardcoded
+camera/effects/background base. That's why the Camera "layer" is cosmetic (its
+eye/opacity/order do nothing) — it's the base, not a layer. The agreed end-state
+removes ALL hardcoded layering:
+
+**Gone:** ink placement (behind/above), web placement (behind/above), `backgroundMode`
+(live/solid/alpha), the standalone person-key, and the global camera/movie source
+picker. Stacking order is *only* the layer stack.
+
+**Every layer = content (a *stream*) + a mask + an effect chain.**
+
+- **Streams (content kinds):** `camera`, `movie`, `solid` (with/without alpha),
+  `drawing`, `web`, `ink`, `paper`. (`paper` is its own stream so ink can be drawn
+  over the live camera — ink's substrate is a routed input, not a fixed background.)
+- **Person matte is a stream**, selectable as any layer's mask source — not a toggle.
+- **Routing via in-panel dropdowns.** A stream that needs another stream's output
+  picks its source there: drawing ← landmark source; ink ← paper/substrate stream;
+  later web → ink.texture. These are the `PortBinding.node` edges already in the model.
+- **Mask dropdown at the top of every stream panel:** `NONE` or any other stream,
+  with an optional **threshold / inverted-threshold** mode (luma-key the chosen
+  stream into a matte).
+- **Effects are an ordered chain *per layer*** (decision: chain, not a single slot),
+  applied to that layer's content before mask + composite.
+- **Video: separate `camera` and `movie` streams** (decision), both available at once
+  → two simultaneous capture sources (capture-layer change, phase G4).
+
+### Model deltas from v1
+- `Layer` gains `effects: [EffectConfig]` (ordered) and a generalized
+  `mask: MaskBinding?` = `{ source: StreamRef, mode: .luma | .threshold(level) | .invThreshold(level) }`;
+  `.person(invert:)` becomes `mask.source = .stream(personMatteNode)`.
+- `NodeKind` gains `camera`, `movie`, `paper`, `personMatte`; `solid` already carries
+  alpha. `effect` as a standalone node kind is retired in favour of per-layer chains.
+- Streams needing routed input expose typed input ports (already modelled);
+  the panel binds them via `PortBinding.node`.
+
+### Phasing (each shippable; parity-guarded; legacy stays behind `useLayerGraph` until parity)
+- **G1 — Core model.** Evolve `Layer` (effects chain + generalized mask), add the new
+  stream kinds, migration legacy→graph, routing source bindings. Renderers still read
+  legacy → no behaviour change. Tests + Codable round-trip.
+- **G2 — unified compositor.** Render EVERY layer from the graph (camera/movie/solid/
+  paper/drawing/web/ink), apply per-layer effect chain + mask, composite in stack
+  order. No hardcoded base. **Pixel-parity** vs legacy for the migrated default graph
+  (extend the parity test; add camera-hidden / camera-opacity / reorder cases). Fixes
+  the camera-isn't-a-real-layer bug.
+- **G3 — UI.** Per-layer panel: content picker, mask dropdown (+threshold), effect-chain
+  editor, routing source dropdowns. Retire the Background tab, ink/web placement, and
+  source picker (folded into streams).
+- **G4 — separate camera + movie capture** (two simultaneous sources).
+- **G5 — presets** (global + per-layer, JSON).
+
+---
+
 ## Freeform multiplicity track (the Photoshop goal) — chosen direction
 
 Phase 3a wired a Layers panel, but layers still *mirror the feature flags* (one of

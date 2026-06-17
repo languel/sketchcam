@@ -8,7 +8,8 @@ final class LayerGraphTests: XCTestCase {
     // MARK: - Kind invariants
 
     func testEveryKindHasMatchingDefaultBindings() {
-        let kinds: [NodeKind] = [.video, .solid(SolidConfig()), .effect, .marks,
+        let kinds: [NodeKind] = [.video, .movie, .solid(SolidConfig()), .paper, .personMatte,
+                                 .effect, .marks,
                                  .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk),
                                  .ink, .web]
         for kind in kinds {

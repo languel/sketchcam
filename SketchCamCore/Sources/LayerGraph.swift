@@ -60,6 +60,37 @@ public struct SolidConfig: Codable, Sendable, Equatable {
     }
 }
 
+/// One entry in a layer's ordered effect chain (v2 — per-layer effects).
+/// A single struct carries the params for every effect kind; only the fields
+/// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
+public enum EffectKind: String, Codable, Sendable, CaseIterable {
+    case threshold, outline, invert, blur
+}
+
+public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
+    public var id: UUID
+    public var kind: EffectKind
+    public var enabled: Bool
+    public var amount: Float        // threshold level / edge strength / blur radius
+    public var color: RGBAColor     // outline colour
+    public var thickness: Float     // outline thickness
+    public var invert: Bool         // threshold invert
+    public var inkOnly: Bool        // threshold: transparent paper
+
+    public init(id: UUID = UUID(), kind: EffectKind, enabled: Bool = true,
+                amount: Float = 0.5, color: RGBAColor = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
+                thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false) {
+        self.id = id
+        self.kind = kind
+        self.enabled = enabled
+        self.amount = amount
+        self.color = color
+        self.thickness = thickness
+        self.invert = invert
+        self.inkOnly = inkOnly
+    }
+}
+
 /// A typed input port a node exposes.
 public struct Port: Codable, Sendable, Equatable {
     public var name: String
@@ -80,9 +111,12 @@ public enum PortBinding: Codable, Sendable, Equatable {
 /// What a node is. Payloads slim in Phase 1 (identity + params needed to declare
 /// ports); full config re-homes here in Phase 2.
 public enum NodeKind: Codable, Sendable, Equatable {
-    case video                  // camera-derived pixels (optionally effected)
+    case video                  // camera stream (camera-derived pixels)
+    case movie                  // movie/file stream
     case solid(SolidConfig)     // color / transparent fill (per-node colour)
-    case effect                 // pixel → pixel (threshold / outline / …)
+    case paper                  // ink substrate stream (so ink can sit on any layer)
+    case personMatte            // segmentation matte as a stream (use as a mask source)
+    case effect                 // pixel → pixel (legacy standalone; v2 uses per-layer chains)
     case overlay                // combined marks+drawing (today's single overlay image)
     case marks                  // landmark dots / stick (Phase 3b: own image)
     case drawing(DrawingAlgorithm)  // (Phase 3b: own image per algorithm)
@@ -93,7 +127,10 @@ public enum NodeKind: Codable, Sendable, Equatable {
     public var ports: [Port] {
         switch self {
         case .video:   return [Port(name: "source", type: .pixel)]
+        case .movie:   return []
         case .solid:   return []
+        case .paper:   return []
+        case .personMatte: return []
         case .effect:  return [Port(name: "image", type: .pixel)]
         case .overlay: return [Port(name: "analysis", type: .path)]
         // (associated-value cases still match the bare pattern in a switch.)
@@ -113,7 +150,10 @@ public enum NodeKind: Codable, Sendable, Equatable {
     public var family: String {
         switch self {
         case .video: return "video"
+        case .movie: return "movie"
         case .solid: return "solid"
+        case .paper: return "paper"
+        case .personMatte: return "personMatte"
         case .effect: return "effect"
         case .overlay: return "overlay"
         case .marks: return "marks"
@@ -127,7 +167,10 @@ public enum NodeKind: Codable, Sendable, Equatable {
     public var defaultBindings: [PortBinding] {
         switch self {
         case .video:   return [.source(.camera)]
+        case .movie:   return []
         case .solid:   return []
+        case .paper:   return []
+        case .personMatte: return []
         case .effect:  return [.none]
         case .overlay: return [.source(.landmarks)]
         case .marks:   return [.source(.landmarks)]
@@ -157,7 +200,8 @@ public struct Node: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
-/// A composited layer: displays one pixel node, with stacking attributes.
+/// A composited layer: displays one pixel node (its content stream), with an
+/// ordered effect chain, a mask, and stacking attributes.
 public struct Layer: Identifiable, Codable, Sendable, Equatable {
     public var id: UUID
     public var node: UUID
@@ -165,15 +209,35 @@ public struct Layer: Identifiable, Codable, Sendable, Equatable {
     public var opacity: Float
     public var blend: BlendMode
     public var mask: LayerMask?
+    /// Ordered effects applied to this layer's content before mask + composite.
+    public var effects: [EffectConfig]
 
     public init(id: UUID = UUID(), node: UUID, visible: Bool = true, opacity: Float = 1,
-                blend: BlendMode = .normal, mask: LayerMask? = nil) {
+                blend: BlendMode = .normal, mask: LayerMask? = nil, effects: [EffectConfig] = []) {
         self.id = id
         self.node = node
         self.visible = visible
         self.opacity = opacity
         self.blend = blend
         self.mask = mask
+        self.effects = effects
+    }
+
+    // Backward-compatible decoding: graphs persisted before `effects` existed
+    // decode with an empty chain rather than failing the whole settings load.
+    private enum CodingKeys: String, CodingKey {
+        case id, node, visible, opacity, blend, mask, effects
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        node = try c.decode(UUID.self, forKey: .node)
+        visible = try c.decode(Bool.self, forKey: .visible)
+        opacity = try c.decode(Float.self, forKey: .opacity)
+        blend = try c.decode(BlendMode.self, forKey: .blend)
+        mask = try c.decodeIfPresent(LayerMask.self, forKey: .mask)
+        effects = try c.decodeIfPresent([EffectConfig].self, forKey: .effects) ?? []
     }
 }
 

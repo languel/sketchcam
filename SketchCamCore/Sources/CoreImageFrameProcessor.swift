@@ -296,8 +296,8 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                     red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                     blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha)
                 )).cropped(to: outputRect)
-            case .video, .effect:
-                image = nil   // the base — already composited
+            case .video, .effect, .movie, .paper, .personMatte:
+                image = nil   // the base / not yet graph-rendered (G2 unified compositor)
             }
             guard var img = image else { continue }
             if layer.opacity < 0.999 {

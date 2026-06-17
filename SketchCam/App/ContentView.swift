@@ -1751,7 +1751,10 @@ private struct LayerStackEditor: View {
         guard let node = model.settings.layerGraph?.node(layer.node) else { return "Layer" }
         switch node.kind {
         case .video: return "Camera"
+        case .movie: return "Movie"
         case .solid: return node.managed ? "Background" : "Solid"
+        case .paper: return "Paper"
+        case .personMatte: return "Person"
         case .overlay, .marks, .drawing: return "Drawing"
         case .ink: return "Ink"
         case .web: return "Web"
