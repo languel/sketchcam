@@ -31,6 +31,7 @@ struct ContentView: View {
         case input = "Settings"
         case sources = "Sources"
         case layers = "Layers"
+        case background = "Background"
         case effect = "Effect"
         case marks = "Marks"
         case yarn = "Yarn"
@@ -49,6 +50,7 @@ struct ContentView: View {
             case .input: "gearshape"
             case .sources: "camera"
             case .layers: "square.3.layers.3d"
+            case .background: "photo"
             case .effect: "wand.and.stars"
             case .marks: "point.3.connected.trianglepath.dotted"
             case .yarn: "scribble.variable"
@@ -74,6 +76,8 @@ struct ContentView: View {
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.input
+    /// Comma-separated ids of the tabs shown in the tab bar. Empty = all visible.
+    @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
@@ -232,21 +236,71 @@ struct ContentView: View {
 
     // MARK: - Controls
 
+    /// Tabs that can never be hidden — the manage menu lives here, and you always
+    /// need a way back to the core panels.
+    private static let pinnedTabs: Set<ControlTab> = [.input, .sources, .layers]
+
+    /// The tabs currently shown in the tab bar, in canonical order.
+    private var visibleTabs: [ControlTab] {
+        if visibleTabsRaw.isEmpty { return ControlTab.allCases }
+        let ids = Set(visibleTabsRaw.split(separator: ",").map(String.init))
+        let shown = ControlTab.allCases.filter { ids.contains($0.id) || Self.pinnedTabs.contains($0) }
+        return shown.isEmpty ? ControlTab.allCases : shown
+    }
+
+    private func isTabVisible(_ t: ControlTab) -> Bool {
+        Self.pinnedTabs.contains(t) || visibleTabs.contains(t)
+    }
+
+    private func toggleTabVisible(_ t: ControlTab) {
+        guard !Self.pinnedTabs.contains(t) else { return }
+        var ids = Set(visibleTabs.map { $0.id })
+        if ids.contains(t.id) { ids.remove(t.id) } else { ids.insert(t.id) }
+        visibleTabsRaw = ControlTab.allCases
+            .filter { ids.contains($0.id) }
+            .map { $0.id }
+            .joined(separator: ",")
+        if !isTabVisible(tab) { tab = visibleTabs.first ?? .input }
+    }
+
     private var controlsPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             actionBar
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
-            Picker("", selection: $tab) {
-                ForEach(ControlTab.allCases) { tab in
-                    Image(systemName: tab.icon)
-                        .help(tab.rawValue)
-                        .tag(tab)
+            HStack(spacing: 8) {
+                Picker("", selection: $tab) {
+                    ForEach(visibleTabs) { tab in
+                        Image(systemName: tab.icon)
+                            .help(tab.rawValue)
+                            .tag(tab)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Menu {
+                    Text("Show tabs")
+                    Divider()
+                    ForEach(ControlTab.allCases) { t in
+                        Button {
+                            toggleTabVisible(t)
+                        } label: {
+                            Label(
+                                t.rawValue,
+                                systemImage: isTabVisible(t) ? "checkmark" : ""
+                            )
+                        }
+                        .disabled(Self.pinnedTabs.contains(t))
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Choose which tabs to show")
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             ScrollView {
@@ -255,6 +309,7 @@ struct ContentView: View {
                     case .input: inputTab
                     case .sources: sourcesTab
                     case .layers: layersTab
+                    case .background: backgroundTab
                     case .effect: effectTab
                     case .marks: marksTab
                     case .yarn: yarnTab
@@ -453,7 +508,11 @@ struct ContentView: View {
         SectionHeader("Layer stack")
         LayerStackEditor(model: model)
             .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
+    }
 
+    // MARK: - Background tab
+
+    @ViewBuilder private var backgroundTab: some View {
         SectionHeader("Background")
         Picker("Background", selection: $model.settings.backgroundMode) {
             ForEach(BackgroundMode.allCases) { mode in
