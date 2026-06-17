@@ -160,6 +160,46 @@ UserDefaults. One Codable model, two entry points.
    path-generator/brush-as-node, multiplicity, full blend modes.
 6. **Presets** (global + per-node, JSON).
 
+## Freeform multiplicity track (the Photoshop goal) — chosen direction
+
+Phase 3a wired a Layers panel, but layers still *mirror the feature flags* (one of
+each kind), so it doesn't feel freeform. Target end-state:
+
+- **The graph is the sole source of truth.** Every layer is a node with its OWN
+  config; no feature flags driving which layers exist.
+- **The compositor builds the whole frame by iterating layers** bottom→top —
+  including camera / effects / background / person-key as layer *kinds*, with no
+  special-cased "base". Arbitrary order (e.g. a solid below the camera) just works.
+- **Renderers become per-layer instances**: one ink fluid-sim engine per ink
+  layer, one WKWebView per web layer, per-algorithm drawing, cheap video/solid/
+  image. Multiple of any kind allowed.
+- **Panel owns layers**: ＋Add (kind menu), delete, duplicate, reorder, and
+  select-a-layer-to-edit (the per-kind controls move under the selected layer).
+  Per layer: visible, opacity, blend (all modes), mask. Legacy feature tabs are
+  subsumed.
+
+### Phasing (each shippable; parity-guarded where it can regress)
+- **F1 — per-node config (Core).** Re-home each feature's config into the node
+  payloads (Video/Solid/Effect/Overlay(Drawing)/Ink/Web configs). Migration
+  populates them from the legacy flat settings. `Node.managed` distinguishes
+  feature-derived vs user-added layers (reconciliation preserves user-added).
+  Renderers still read legacy → no behavior change. Tested.
+- **F2 — unify the compositor.** Render EVERY layer from the graph (incl.
+  camera/effects/bg/key); drop the special base. Must be pixel-identical for the
+  default graph (extend the parity test). Unlocks arbitrary ordering.
+- **F3 — multiplicity for cheap kinds + panel add/remove.** Solid, image, and
+  per-algorithm drawing become freely add/duplicate/delete/reorder from the panel
+  (instances + per-node config + N-compositing). First visible freeform layers.
+- **F4 — multiplicity for heavy kinds.** N ink engines / N web views, with cost
+  warnings (you noted you won't run many at once).
+- **F5 — panel polish.** Blend-mode menu (all modes), mask UI, thumbnails,
+  select-to-edit; retire the legacy feature toggles.
+- Then the deferred tracks: **routing** (ink.texture ← web) and **presets**
+  (global + per-node, JSON).
+
+Biggest risk = F2 (the keying/silhouette/effects logic is delicate) → pixel
+snapshot parity before/after. Heavy-kind multiplicity (F4) is perf-bounded.
+
 ## Risks / open questions
 - Compositor refactor must be output-identical (regression surface) → pixel
   snapshot test on the default graph before/after.
