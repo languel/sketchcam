@@ -32,7 +32,6 @@ struct ContentView: View {
         case sources = "Sources"
         case layers = "Layers"
         case background = "Background"
-        case effect = "Effect"
         case marks = "Marks"
         case yarn = "Yarn"
         case wrap = "Wrap"
@@ -51,7 +50,6 @@ struct ContentView: View {
             case .sources: "camera"
             case .layers: "square.3.layers.3d"
             case .background: "photo"
-            case .effect: "wand.and.stars"
             case .marks: "point.3.connected.trianglepath.dotted"
             case .yarn: "scribble.variable"
             case .wrap: "figure.stand"
@@ -310,7 +308,6 @@ struct ContentView: View {
                     case .sources: sourcesTab
                     case .layers: layersTab
                     case .background: backgroundTab
-                    case .effect: effectTab
                     case .marks: marksTab
                     case .yarn: yarnTab
                     case .wrap: wrapTab
@@ -430,6 +427,11 @@ struct ContentView: View {
                 }
             }
             .help("Whether the camera/movie source feeds the Camera layer. Off = the source isn't drawn (use a Background or other layers).")
+
+        SectionHeader("Frame")
+        Toggle("Mirror", isOn: $model.settings.mirror)
+            .help("Mirror the source (selfie view). For a creative per-layer flip, add a Mirror effect to a layer instead.")
+        Toggle("Test pattern", isOn: $model.settings.testPatternMode)
     }
 
     @ViewBuilder private var inputTab: some View {
@@ -556,33 +558,9 @@ struct ContentView: View {
         .disabled(!model.settings.segmentation.enabled)
     }
 
-    // MARK: - Effect tab
-
-    @ViewBuilder private var effectTab: some View {
-        Toggle("Effects (master)", isOn: $model.settings.effectsEnabled)
-        Group {
-            SectionHeader("Threshold")
-            Toggle("Threshold layer", isOn: $model.settings.thresholdEnabled)
-            SliderRow(title: "Level", value: floatBinding(\.threshold))
-            Toggle("Ink only (transparent paper)", isOn: $model.settings.thresholdInkOnly)
-            Toggle("Invert", isOn: $model.settings.invert)
-
-            SectionHeader("Outline")
-            Toggle("Outline layer", isOn: $model.settings.outlineEnabled)
-            SliderRow(title: "Strength", value: floatBinding(\.edgeStrength))
-            StyleRow(
-                title: "Stroke",
-                color: rgbaBinding(\.outlineColor),
-                size: floatBinding(\.outlineThickness),
-                range: 0...24
-            )
-        }
-        .disabled(!model.settings.effectsEnabled)
-
-        SectionHeader("Frame")
-        Toggle("Mirror", isOn: $model.settings.mirror)
-        Toggle("Test pattern", isOn: $model.settings.testPatternMode)
-    }
+    // (The legacy Effect tab is gone — threshold/outline/blur/invert/mirror are
+    // now per-layer effects edited in the Layers panel's effect chain. The
+    // frame-level Mirror + Test pattern toggles moved to the Sources tab.)
 
     // MARK: - Marks tab
 
