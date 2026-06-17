@@ -212,11 +212,44 @@ picker. Stacking order is *only* the layer stack.
   composited over Camera. Effects move off CoreImage (CI stays as fallback). Remaining:
   blend modes (only normal now), GPU-native producers (overlay/ink/web still rasterized
   via CI each frame), perf tuning, and a pixel-parity test for the GPU path.
-- **G3 — UI.** Per-layer panel: content picker, mask dropdown (+threshold), effect-chain
-  editor, routing source dropdowns. Retire the Background tab, ink/web placement, and
-  source picker (folded into streams).
-- **G4 — separate camera + movie capture** (two simultaneous sources).
-- **G5 — presets** (global + per-layer, JSON).
+- **G3 — UI. DONE (mostly).** Per-layer effect-chain editor (Blender-modifier-style
+  collapsible panels: add/reorder/enable/delete; threshold/outline/blur/invert/mirror/
+  personKey). Legacy Effect + Background tabs removed. Person key is a per-layer effect
+  (with Silhouette flat-fill + matte Quality in-panel). Layers are renamable (double-
+  click). Add-layer menu offers Camera/Movie/Solid/Paper + Drawing/Ink/Web. Camera &
+  Movie are now separate tabs (combined source toggle gone).
+  STILL TODO in G3: the **mask dropdown** (NONE / any *named* stream as a matte +
+  threshold mode) and **routing source dropdowns** (ink ← paper, drawing ← landmarks) —
+  i.e. binding a layer's input to another layer by name. `MaskBinding`/`PortBinding`
+  models already support this; only the UI + compositor read remain.
+
+═══ CHECKPOINT (2026-06-17) ═══
+v2 is the DEFAULT path: GPU layer compositor on by default, the layer stack is the
+sole source of truth. Global `backgroundMode` / `inputLayerEnabled` deprecated (no
+injection; background = a Solid layer, camera always a layer). All on branch `presets`
+(commit 56b4eab), pushed to origin. NOT merged to main. 51 Core tests green; effects
+self-check PASS. Done: G1, G2, most of G3.
+
+### Remaining work (priority order)
+1. **Routing/source-binding UI (finish G3):** mask dropdown per panel (NONE / named
+   stream + threshold/inv-threshold) and per-stream source dropdowns (ink.texture ← a
+   stream, drawing ← landmark source). Wire the compositor to read `layer.mask` and
+   `node.inputs` bindings (mask kernel already exists; node→node pixel routing needs
+   the compositor to resolve `.node(id)` content).
+2. **Blend modes:** only `normal` (source-over) today. Add multiply/screen/etc. to the
+   GPU composite (per-layer `blend`), plus a blend menu in the layer row.
+3. **GPU-native producers:** overlay/ink/web are still CoreImage images rasterized into
+   buffers each frame before GPU compositing — make them Metal-native to cut the CI round
+   trips (perf + consistency).
+4. **G4 — dual capture:** Camera & Movie still share one capture (the tabs switch the
+   single source). Run two simultaneous sources so both stream kinds are live at once.
+5. **G5 — presets:** JSON save/load of the whole graph (global) and per-layer/per-node
+   snapshots. Application Support, versioned, exportable.
+6. **Cleanups:** GPU-path pixel-parity test; settings reset on schema change (new
+   non-optional fields reset persisted defaults once — consider tolerant `ProcessingSettings`
+   decoding); retire remaining legacy fields (backgroundMode/inputLayerEnabled) from Core
+   once the CoreImage fallback is dropped; per-algorithm drawing layers (split the merged
+   overlay); multiplicity for heavy kinds (N ink/web).
 
 ---
 
