@@ -494,24 +494,22 @@ public extension LayerGraph {
             if !node.managed {
                 // User-created layers are always preserved, in place.
                 resultNodes.append(node); resultLayers.append(layer)
-            } else if let f = family(self, layer), desiredFamilies.contains(f),
-                      let dLayer = desired.layers.first(where: { family(desired, $0) == f }),
-                      let dNode = desired.node(dLayer.node) {
-                // Managed layer kept: refresh the still-feature-derived fields
-                // (kind for bg colour; mask for the Person tab) from the desired
-                // graph, but PRESERVE the user-owned effect chain and the user's
-                // arrangement (order / visibility / opacity / blend) + identity.
-                // Effects are seeded once by defaultGraph and then edited per-layer.
-                var mergedNode = node; mergedNode.kind = dNode.kind
-                var mergedLayer = layer; mergedLayer.mask = dLayer.mask
-                resultNodes.append(mergedNode); resultLayers.append(mergedLayer); keptFamilies.append(f)
+            } else if let f = family(self, layer), desiredFamilies.contains(f) {
+                // Managed layer kept as-is: effects + mask are user-owned (seeded
+                // once by defaultGraph, then edited per-layer), so preserve them
+                // and the user's arrangement / identity unchanged.
+                resultNodes.append(node); resultLayers.append(layer); keptFamilies.append(f)
             }
             // else: a managed layer whose feature was disabled → dropped.
         }
-        // Insert newly-enabled managed families at their canonical position
-        // (relative to the other managed layers).
+        // Auto-insert only the FLAG-driven families (drawing/ink/web) when newly
+        // enabled. Source families (video/movie/solid/paper/personMatte) are
+        // user-curated: seeded once in the initial graph and never resurrected,
+        // so deleting the Camera (e.g. to use a Solid instead) sticks.
+        let autoFamilies: Set<String> = ["overlay", "ink", "web"]
         for dl in desired.layers {
-            guard let f = family(desired, dl), !keptFamilies.contains(f), let dn = desired.node(dl.node) else { continue }
+            guard let f = family(desired, dl), autoFamilies.contains(f),
+                  !keptFamilies.contains(f), let dn = desired.node(dl.node) else { continue }
             // How many desired-managed families precede f and were kept?
             let priorsKept = desired.layers.prefix(while: { family(desired, $0) != f })
                 .reduce(0) { acc, prior in keptFamilies.contains(family(desired, prior) ?? "") ? acc + 1 : acc }

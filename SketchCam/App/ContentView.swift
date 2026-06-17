@@ -1919,10 +1919,8 @@ private struct LayerStackEditor: View {
                             .buttonStyle(.borderless).disabled(display == 0)
                         Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
                             .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
-                        if isUserCreated(layer) {
-                            Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
-                                .buttonStyle(.borderless).help("Delete layer")
-                        }
+                        Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless).help("Delete layer")
                     }
                     if expanded.contains(layer.id) {
                         VStack(alignment: .leading, spacing: 4) {
