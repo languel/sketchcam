@@ -202,11 +202,16 @@ picker. Stacking order is *only* the layer stack.
 - **G1 — Core model.** Evolve `Layer` (effects chain + generalized mask), add the new
   stream kinds, migration legacy→graph, routing source bindings. Renderers still read
   legacy → no behaviour change. Tests + Codable round-trip.
-- **G2 — unified compositor.** Render EVERY layer from the graph (camera/movie/solid/
-  paper/drawing/web/ink), apply per-layer effect chain + mask, composite in stack
-  order. No hardcoded base. **Pixel-parity** vs legacy for the migrated default graph
-  (extend the parity test; add camera-hidden / camera-opacity / reorder cases). Fixes
-  the camera-isn't-a-real-layer bug.
+- **G2 — unified compositor. DONE (GPU, behind `useGPUCompositor`).** `MetalLayerCompositor`
+  renders EVERY visible layer from the graph on the GPU — per-layer Metal effect chain
+  (threshold/outline/blur) → GPU mask → source-over with opacity — no hardcoded base.
+  Keying = the camera layer's personMatte mask. defaultGraph re-homes legacy threshold/
+  outline onto the camera chain; reconcile refreshes managed layers' kind/effects/mask
+  from settings so the legacy tabs still drive it until G3. Verified live (CUA): raw
+  camera as a layer, threshold+outline chain on GPU, hide-camera → transparent, Drawing
+  composited over Camera. Effects move off CoreImage (CI stays as fallback). Remaining:
+  blend modes (only normal now), GPU-native producers (overlay/ink/web still rasterized
+  via CI each frame), perf tuning, and a pixel-parity test for the GPU path.
 - **G3 — UI.** Per-layer panel: content picker, mask dropdown (+threshold), effect-chain
   editor, routing source dropdowns. Retire the Background tab, ink/web placement, and
   source picker (folded into streams).
