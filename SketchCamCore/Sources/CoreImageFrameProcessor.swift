@@ -296,7 +296,7 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                     red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                     blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha)
                 )).cropped(to: outputRect)
-            case .video, .effect, .movie, .paper, .personMatte:
+            case .video, .effect, .movie, .paper(_), .personMatte:
                 image = nil   // the base / not yet graph-rendered (G2 unified compositor)
             }
             guard var img = image else { continue }

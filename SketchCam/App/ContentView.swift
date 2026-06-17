@@ -11,6 +11,60 @@ final class AppUIState: ObservableObject {
     }
 }
 
+enum ControlTab: String, CaseIterable, Identifiable {
+    case layers = "Layers"
+    case camera = "Camera"
+    case movie = "Movie"
+    case marks = "Marks"
+    case yarn = "Yarn"
+    case wrap = "Wrap"
+    case lineWalk = "Line walk"
+    case ink = "Ink"
+    case web = "Web"
+    case presets = "Presets"
+    case keys = "Keys"
+    case debug = "Debug"
+    case input = "Settings"
+
+    var id: String { rawValue }
+
+    static let defaultVisible: Set<ControlTab> = [.layers, .camera, .input]
+
+    static func visibleTabs(from rawValue: String) -> [ControlTab] {
+        guard !rawValue.isEmpty else {
+            return allCases.filter { defaultVisible.contains($0) }
+        }
+        let ids = Set(rawValue.split(separator: ",").map(String.init))
+        let shown = allCases.filter { ids.contains($0.id) }
+        return shown.isEmpty ? allCases.filter { defaultVisible.contains($0) } : shown
+    }
+
+    static func storageValue(for tabs: Set<ControlTab>) -> String {
+        allCases
+            .filter { tabs.contains($0) }
+            .map { $0.id }
+            .joined(separator: ",")
+    }
+
+    var icon: String {
+        switch self {
+        case .input: "gearshape"
+        case .camera: "camera"
+        case .movie: "film"
+        case .layers: "square.3.layers.3d"
+        case .marks: "point.3.connected.trianglepath.dotted"
+        case .yarn: "scribble.variable"
+        case .wrap: "figure.stand"
+        case .lineWalk: "lasso"
+        case .ink: "paintbrush.pointed"
+        case .web: "globe"
+        case .presets: "bookmark"
+        case .keys: "keyboard"
+        case .debug: "ladybug"
+        }
+    }
+}
+
 private enum InkTool: String, CaseIterable, Identifiable {
     case draw = "Draw"
     case select = "Select"
@@ -27,42 +81,6 @@ private enum InkTool: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    private enum ControlTab: String, CaseIterable, Identifiable {
-        case input = "Settings"
-        case camera = "Camera"
-        case movie = "Movie"
-        case layers = "Layers"
-        case marks = "Marks"
-        case yarn = "Yarn"
-        case wrap = "Wrap"
-        case lineWalk = "Line walk"
-        case ink = "Ink"
-        case web = "Web"
-        case presets = "Presets"
-        case keys = "Keys"
-        case debug = "Debug"
-
-        var id: String { rawValue }
-
-        var icon: String {
-            switch self {
-            case .input: "gearshape"
-            case .camera: "camera"
-            case .movie: "film"
-            case .layers: "square.3.layers.3d"
-            case .marks: "point.3.connected.trianglepath.dotted"
-            case .yarn: "scribble.variable"
-            case .wrap: "figure.stand"
-            case .lineWalk: "lasso"
-            case .ink: "paintbrush.pointed"
-            case .web: "globe"
-            case .presets: "bookmark"
-            case .keys: "keyboard"
-            case .debug: "ladybug"
-            }
-        }
-    }
-
     @StateObject private var model = SketchCamViewModel()
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
@@ -73,8 +91,8 @@ struct ContentView: View {
     @State private var webSnippetField = ""
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
-    @State private var tab = ControlTab.input
-    /// Comma-separated ids of the tabs shown in the tab bar. Empty = all visible.
+    @State private var tab = ControlTab.layers
+    /// Comma-separated ids of the tabs shown in the tab bar. Empty = default visible tabs.
     @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
@@ -234,31 +252,21 @@ struct ContentView: View {
 
     // MARK: - Controls
 
-    /// Tabs that can never be hidden — the manage menu lives here, and you always
-    /// need a way back to the core panels.
-    private static let pinnedTabs: Set<ControlTab> = [.input, .camera, .layers]
-
     /// The tabs currently shown in the tab bar, in canonical order.
     private var visibleTabs: [ControlTab] {
-        if visibleTabsRaw.isEmpty { return ControlTab.allCases }
-        let ids = Set(visibleTabsRaw.split(separator: ",").map(String.init))
-        let shown = ControlTab.allCases.filter { ids.contains($0.id) || Self.pinnedTabs.contains($0) }
-        return shown.isEmpty ? ControlTab.allCases : shown
+        ControlTab.visibleTabs(from: visibleTabsRaw)
     }
 
     private func isTabVisible(_ t: ControlTab) -> Bool {
-        Self.pinnedTabs.contains(t) || visibleTabs.contains(t)
+        visibleTabs.contains(t)
     }
 
     private func toggleTabVisible(_ t: ControlTab) {
-        guard !Self.pinnedTabs.contains(t) else { return }
         var ids = Set(visibleTabs.map { $0.id })
         if ids.contains(t.id) { ids.remove(t.id) } else { ids.insert(t.id) }
-        visibleTabsRaw = ControlTab.allCases
-            .filter { ids.contains($0.id) }
-            .map { $0.id }
-            .joined(separator: ",")
-        if !isTabVisible(tab) { tab = visibleTabs.first ?? .input }
+        guard !ids.isEmpty else { return }
+        visibleTabsRaw = ControlTab.storageValue(for: Set(ControlTab.allCases.filter { ids.contains($0.id) }))
+        if !isTabVisible(tab) { tab = visibleTabs.first ?? .layers }
     }
 
     private var controlsPane: some View {
@@ -290,7 +298,6 @@ struct ContentView: View {
                                 systemImage: isTabVisible(t) ? "checkmark" : ""
                             )
                         }
-                        .disabled(Self.pinnedTabs.contains(t))
                     }
                 } label: {
                     Image(systemName: "slider.horizontal.3")
@@ -722,15 +729,31 @@ struct ContentView: View {
             .font(.headline)
             .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
         Group {
-            SectionHeader("Layer")
-            Picker("Placement", selection: $model.settings.landmarks.inkPlacement) {
-                ForEach(WebLayerPlacement.allCases) { placement in
-                    Text(placement.title).tag(placement)
+            SectionHeader("Paper")
+            HStack(spacing: 6) {
+                Text("Input").font(.caption).foregroundStyle(.secondary)
+                Menu(inkPaperInputLabel) {
+                    Button("Internal paper") { inkTextureBinding.wrappedValue = .none }
+                    let sources = inkTextureSources()
+                    if !sources.isEmpty {
+                        Divider()
+                        ForEach(sources, id: \.id) { source in
+                            Button(source.name) { inkTextureBinding.wrappedValue = .node(source.id) }
+                        }
+                    }
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Substrate routed into the Ink node's texture input. This is the same input shown in the Layers panel.")
             }
-            .pickerStyle(.segmented)
-            SliderRow(title: "Opacity", value: floatBinding(\.landmarks.inkOpacity), defaultValue: 1,
-                      hint: "Opacity of the whole ink layer over the drawing/camera.")
+            Toggle("Internal paper", isOn: $model.settings.landmarks.inkPaperEnabled)
+                .disabled(inkTextureBinding.wrappedValue != .none)
+                .help("Fallback substrate used only when the Ink texture input is not routed to another stream.")
+            RGBAColorPicker("Tint", rgba: inkPaperColorRGBA, supportsOpacity: true)
+                .disabled(inkTextureBinding.wrappedValue != .none || !model.settings.landmarks.inkPaperEnabled)
+            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain), defaultValue: 0.45,
+                      hint: "Fallback internal paper texture / grain strength.")
+                .disabled(inkTextureBinding.wrappedValue != .none || !model.settings.landmarks.inkPaperEnabled)
 
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
@@ -857,13 +880,6 @@ struct ContentView: View {
             .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
             seedRow(\.landmarks.inkSeed)
 
-            SectionHeader("Paper")
-            Toggle("Paper layer", isOn: $model.settings.landmarks.inkPaperEnabled)
-            ColorPicker("Paper", selection: rgbaBinding(\.landmarks.inkPaperColor), supportsOpacity: true)
-                .disabled(!model.settings.landmarks.inkPaperEnabled)
-            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain), defaultValue: 0.45,
-                      hint: "Paper texture / grain strength.")
-                .disabled(!model.settings.landmarks.inkPaperEnabled)
         }
         .disabled(!model.settings.landmarks.inkEnabled)
     }
@@ -1035,6 +1051,49 @@ struct ContentView: View {
     private var inkWashColorRGBA: Binding<RGBAColor> {
         Binding(get: { model.settings.landmarks.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89) },
                 set: { model.settings.landmarks.inkWashColor = $0 })
+    }
+    private var inkPaperColorRGBA: Binding<RGBAColor> {
+        Binding(get: { model.settings.landmarks.inkPaperColor },
+                set: { model.settings.landmarks.inkPaperColor = $0 })
+    }
+    private var inkTextureBinding: Binding<PortBinding> {
+        Binding(
+            get: {
+                let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+                guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
+                      let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
+                      inkNode.inputs.indices.contains(textureIndex) else { return .none }
+                return inkNode.inputs[textureIndex]
+            },
+            set: { newValue in
+                var graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+                guard let nodeIndex = graph.nodes.firstIndex(where: { $0.kind.family == "ink" }),
+                      let textureIndex = graph.nodes[nodeIndex].kind.ports.firstIndex(where: { $0.name == "texture" }),
+                      graph.nodes[nodeIndex].inputs.indices.contains(textureIndex) else { return }
+                graph.nodes[nodeIndex].inputs[textureIndex] = newValue
+                guard (try? graph.validate()) != nil else { return }
+                model.settings.layerGraph = graph
+                model.settings.useLayerGraph = true
+            }
+        )
+    }
+    private var inkPaperInputLabel: String {
+        switch inkTextureBinding.wrappedValue {
+        case .none:
+            return "Internal paper"
+        case .source(let source):
+            return source == .personMatte ? "Person Key" : "Source"
+        case .node(let id):
+            return inkTextureSources().first { $0.id == id }?.name ?? "Layer"
+        }
+    }
+    private func inkTextureSources() -> [(id: UUID, name: String)] {
+        let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }) else { return [] }
+        return graph.layers.compactMap { layer in
+            guard layer.node != inkNode.id, let node = graph.node(layer.node), node.kind.output == .pixel else { return nil }
+            return (id: node.id, name: node.name)
+        }
     }
     // "Save stroke" = the inverse of immediate mode (off = immediate).
     private var savePenStrokeBinding: Binding<Bool> {
@@ -1949,6 +2008,39 @@ private struct EffectPanel: View {
     }
 }
 
+private struct PaperNodeEditor: View {
+    @Binding var config: PaperConfig
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Paper").font(.caption).foregroundStyle(.secondary)
+                Picker("Texture", selection: $config.texture) {
+                    ForEach(PaperTexture.allCases, id: \.self) { texture in
+                        Text(texture.title).tag(texture)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+            }
+            RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
+            HStack {
+                Text("Scale").font(.caption2).frame(width: 56, alignment: .leading)
+                Slider(value: $config.scale, in: 0.2...6).controlSize(.small)
+                Text(String(format: "%.1f", config.scale)).font(.caption2).frame(width: 32)
+            }
+            HStack {
+                Text("Grain").font(.caption2).frame(width: 56, alignment: .leading)
+                Slider(value: $config.grain, in: 0...1).controlSize(.small)
+                Text(String(format: "%.2f", config.grain)).font(.caption2).frame(width: 32)
+            }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+    }
+}
+
 private struct LayerStackEditor: View {
     @ObservedObject var model: SketchCamViewModel
     @State private var expanded: Set<UUID> = []
@@ -2059,6 +2151,9 @@ private struct LayerStackEditor: View {
                                     binding: { inputBinding(node.id, index: $0) },
                                     layerSources: { inputSources(excluding: node.id, type: $0) }
                                 )
+                                if case .paper = node.kind {
+                                    PaperNodeEditor(config: paperConfigBinding(node.id))
+                                }
                             }
                             MaskEditor(mask: maskBinding(layer.id),
                                        personMatteQuality: $model.settings.segmentation.quality,
@@ -2075,7 +2170,7 @@ private struct LayerStackEditor: View {
                     Button("Camera") { addNode(.video, name: "Camera") }
                     Button("Movie") { addNode(.movie, name: "Movie") }
                     Button("Solid color") { addSolid() }
-                    Button("Paper") { addNode(.paper, name: "Paper") }
+                    Button("Paper") { addPaper() }
                 }
                 Section("Streams") {
                     Button("Drawing") { addStream(.drawing) }
@@ -2148,6 +2243,23 @@ private struct LayerStackEditor: View {
             guard layer.node != nodeID, let node = g.node(layer.node), node.kind.output == type else { return nil }
             return (id: node.id, name: node.name)
         }
+    }
+
+    private func paperConfigBinding(_ nodeID: UUID) -> Binding<PaperConfig> {
+        Binding(
+            get: {
+                guard case .paper(let config)? = model.settings.layerGraph?.node(nodeID)?.kind else {
+                    return PaperConfig()
+                }
+                return config
+            },
+            set: { newValue in
+                mutate { g in
+                    guard let i = g.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                    g.nodes[i].kind = .paper(newValue)
+                }
+            }
+        )
     }
 
     private func commitRename(_ id: UUID) {
@@ -2234,6 +2346,14 @@ private struct LayerStackEditor: View {
         mutate { g in
             g.nodes.append(node)
             g.layers.append(Layer(node: node.id))   // top of the stack
+        }
+    }
+
+    private func addPaper() {
+        let node = Node(name: "Paper", kind: .paper(PaperConfig()), managed: false)
+        mutate { g in
+            g.nodes.append(node)
+            g.layers.append(Layer(node: node.id))
         }
     }
 

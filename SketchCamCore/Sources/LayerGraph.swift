@@ -108,6 +108,33 @@ public struct SolidConfig: Codable, Sendable, Equatable {
     }
 }
 
+public enum PaperTexture: String, Codable, Sendable, CaseIterable {
+    case fiber, speckle, wash
+
+    public var title: String {
+        switch self {
+        case .fiber: return "Fiber"
+        case .speckle: return "Speckle"
+        case .wash: return "Wash"
+        }
+    }
+}
+
+public struct PaperConfig: Codable, Sendable, Equatable {
+    public var tint: RGBAColor
+    public var grain: Float
+    public var scale: Float
+    public var texture: PaperTexture
+
+    public init(tint: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 1),
+                grain: Float = 0.45, scale: Float = 1, texture: PaperTexture = .fiber) {
+        self.tint = tint
+        self.grain = grain
+        self.scale = scale
+        self.texture = texture
+    }
+}
+
 /// One entry in a layer's ordered effect chain (v2 — per-layer effects).
 /// A single struct carries the params for every effect kind; only the fields
 /// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
@@ -200,7 +227,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
     case video                  // camera stream (camera-derived pixels)
     case movie                  // movie/file stream
     case solid(SolidConfig)     // color / transparent fill (per-node colour)
-    case paper                  // ink substrate stream (so ink can sit on any layer)
+    case paper(PaperConfig)     // generated substrate stream (grain/tint/scale)
     case personMatte            // segmentation matte as a stream (use as a mask source)
     case effect                 // pixel → pixel (legacy standalone; v2 uses per-layer chains)
     case overlay                // combined marks+drawing (today's single overlay image)

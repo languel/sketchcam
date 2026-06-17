@@ -255,6 +255,13 @@ Latest since the first checkpoint:
   `ink.texture`: bind it to Camera/Movie/Solid/Paper/Person matte/Drawing/Web, and the
   VM resolves that stream before producing the Ink layer. Routed texture replaces the
   shader paper and the ink pigment composites over the selected substrate.
+- Ink tab cleanup: the old placement/opacity "Layer" section is gone because stacking
+  is owned by the layer row. The Paper section moved to the top and edits the Ink
+  node's real `texture` input; any available pixel stream/layer can be used as the
+  substrate, with internal paper only as the unrouted fallback.
+- Paper is now a configurable generated layer, parallel to Solid: paper nodes carry
+  tint, grain, scale, and texture mode, and the GPU compositor/routed ink substrate
+  resolve the generated paper stream from that node config.
 - GPU layer blends now support Normal, Multiply, Screen, Add, Overlay, Darken, Lighten,
   Difference, and Subtract, with a blend menu in each layer row.
 - Mask/effect ordering was corrected to `source -> layer mask -> effect chain -> blend`.
@@ -268,6 +275,9 @@ Latest since the first checkpoint:
   can leave pigment in the engine without replayable saved paths, so the paperless idle
   branch now keeps returning the cached rendered layer instead of declaring the layer
   empty until the next mouse/input event.
+- The duplicate macOS View menu was consolidated: app commands now extend the system
+  View menu with the same Show Tabs checklist used by the side panel. Tab order is
+  Layers first and Settings last; new/default visibility is Layers + Camera + Settings.
 
 ### Remaining work (priority order) — NEXT UP is #1 (live G4/routing smoke)
 1. **Live G4 smoke pass:** run the app with both Camera and Movie layers visible, load a
