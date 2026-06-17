@@ -319,6 +319,7 @@ struct ContentView: View {
     // MARK: - Input tab
 
     @ViewBuilder private var inputTab: some View {
+        SectionHeader("Sources")
         Picker("Source", selection: $model.frameSource) {
             ForEach(SketchCamViewModel.FrameSource.allCases) { source in
                 Text(source.title).tag(source)
@@ -1616,10 +1617,6 @@ private struct LayerStackEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if displayLayers.isEmpty {
-                Text("No layers — enable features (camera, ink, web, marks/drawing).")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
                 HStack(spacing: 8) {
                     Button { toggleVisible(layer.id) } label: {
@@ -1627,15 +1624,30 @@ private struct LayerStackEditor: View {
                     }
                     .buttonStyle(.borderless)
                     .help(layer.visible ? "Hide layer" : "Show layer")
-                    Text(name(layer)).frame(width: 78, alignment: .leading)
+                    if let color = solidColor(layer) {
+                        ColorPicker("", selection: color, supportsOpacity: false).labelsHidden()
+                    }
+                    Text(name(layer)).frame(width: 70, alignment: .leading)
                     Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
                         .help("Layer opacity")
                     Button { move(layer.id, towardTop: true) } label: { Image(systemName: "chevron.up") }
                         .buttonStyle(.borderless).disabled(display == 0)
                     Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
                         .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
+                    if isUserCreated(layer) {
+                        Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless).help("Delete layer")
+                    }
                 }
             }
+            Menu {
+                Button("Solid color") { addSolid() }
+            } label: {
+                Label("Add layer", systemImage: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 120)
+            .help("Create a new layer. (More content types as their renderers become per-layer.)")
         }
         .onAppear(perform: normalize)
         // Re-sync the stack when any layer-affecting feature toggles (so enabling
@@ -1661,14 +1673,55 @@ private struct LayerStackEditor: View {
     }
 
     private func name(_ layer: Layer) -> String {
-        switch model.settings.layerGraph?.node(layer.node)?.kind {
+        guard let node = model.settings.layerGraph?.node(layer.node) else { return "Layer" }
+        switch node.kind {
         case .video: return "Camera"
-        case .solid: return "Background"
+        case .solid: return node.managed ? "Background" : "Solid"
         case .overlay, .marks, .drawing: return "Drawing"
         case .ink: return "Ink"
         case .web: return "Web"
         case .effect: return "Effect"
-        case .none: return "Layer"
+        }
+    }
+
+    private func isUserCreated(_ layer: Layer) -> Bool {
+        model.settings.layerGraph?.node(layer.node)?.managed == false
+    }
+
+    /// A colour binding for a user-created solid layer (nil for other kinds).
+    private func solidColor(_ layer: Layer) -> Binding<Color>? {
+        guard let node = model.settings.layerGraph?.node(layer.node),
+              !node.managed, case .solid = node.kind else { return nil }
+        return Binding(
+            get: {
+                guard case .solid(let cfg) = model.settings.layerGraph?.node(layer.node)?.kind else { return .gray }
+                return Color(.sRGB, red: Double(cfg.color.red), green: Double(cfg.color.green), blue: Double(cfg.color.blue), opacity: 1)
+            },
+            set: { newValue in
+                guard let ns = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                mutate { g in
+                    guard let i = g.nodes.firstIndex(where: { $0.id == layer.node }) else { return }
+                    g.nodes[i].kind = .solid(SolidConfig(color: RGBAColor(
+                        red: Float(ns.redComponent), green: Float(ns.greenComponent),
+                        blue: Float(ns.blueComponent), alpha: 1)))
+                }
+            }
+        )
+    }
+
+    private func addSolid() {
+        let node = Node(name: "Solid", kind: .solid(SolidConfig(color: RGBAColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1))), managed: false)
+        mutate { g in
+            g.nodes.append(node)
+            g.layers.append(Layer(node: node.id))   // top of the stack
+        }
+    }
+
+    private func delete(_ id: UUID) {
+        mutate { g in
+            guard let layer = g.layers.first(where: { $0.id == id }) else { return }
+            g.layers.removeAll { $0.id == id }
+            g.nodes.removeAll { $0.id == layer.node }
         }
     }
 

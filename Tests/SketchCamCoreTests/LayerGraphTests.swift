@@ -8,7 +8,7 @@ final class LayerGraphTests: XCTestCase {
     // MARK: - Kind invariants
 
     func testEveryKindHasMatchingDefaultBindings() {
-        let kinds: [NodeKind] = [.video, .solid, .effect, .marks,
+        let kinds: [NodeKind] = [.video, .solid(SolidConfig()), .effect, .marks,
                                  .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk),
                                  .ink, .web]
         for kind in kinds {
@@ -124,7 +124,7 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertNoThrow(try g.validate())
 
         let kinds = g.layers.compactMap { g.node($0.node)?.kind }
-        XCTAssertEqual(kinds.first, .solid, "solid background sits at the bottom")
+        XCTAssertEqual(kinds.first?.family, "solid", "solid background sits at the bottom")
         XCTAssertTrue(kinds.contains(.overlay), "marks+drawing collapse to one overlay layer")
         XCTAssertTrue(kinds.contains(.ink))
 
@@ -160,6 +160,22 @@ final class LayerGraphTests: XCTestCase {
         if hiddenKind != .web {
             XCTAssertEqual(r.layers.first { r.node($0.node)?.kind == hiddenKind }?.visible, false)
         }
+    }
+
+    func testReconcilePreservesUserCreatedSolid() throws {
+        var s = ProcessingSettings()
+        s.landmarks.inkEnabled = true
+        var g = LayerGraph.defaultGraph(from: s)   // video + ink (both managed)
+        // User adds a freeform solid on top (unmanaged).
+        let solid = Node(name: "Solid", kind: .solid(SolidConfig(color: .white)), managed: false)
+        g.nodes.append(solid)
+        g.layers.append(Layer(node: solid.id))
+        // Toggle a managed feature; the user-created solid must survive.
+        s.web.enabled = true
+        let r = g.reconciled(with: s)
+        XCTAssertNoThrow(try r.validate())
+        XCTAssertTrue(r.layers.contains { $0.id == g.layers.last!.id }, "user solid preserved")
+        XCTAssertTrue(r.layers.contains { r.node($0.node)?.kind.family == "web" }, "new web added")
     }
 
     func testReconcileAppendsNewlyEnabledFeature() throws {

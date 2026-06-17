@@ -279,9 +279,9 @@ public final class CoreImageFrameProcessor: FrameProcessor {
         var result = base
         var overlayDone = false
         for layer in graph.layers where layer.visible {
-            guard let kind = graph.node(layer.node)?.kind else { continue }
+            guard let node = graph.node(layer.node) else { continue }
             let image: CIImage?
-            switch kind {
+            switch node.kind {
             case .web:
                 image = webLayer
             case .ink:
@@ -289,7 +289,14 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             case .overlay, .marks, .drawing:
                 image = overlayDone ? nil : overlay   // the one merged overlay, once
                 overlayDone = true
-            case .video, .solid, .effect:
+            case .solid(let cfg):
+                // User-created solid fills render here; the managed background
+                // solid is part of the base already.
+                image = node.managed ? nil : CIImage(color: CIColor(
+                    red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
+                    blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha)
+                )).cropped(to: outputRect)
+            case .video, .effect:
                 image = nil   // the base — already composited
             }
             guard var img = image else { continue }

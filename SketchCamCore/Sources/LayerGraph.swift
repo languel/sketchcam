@@ -52,6 +52,14 @@ public enum DrawingAlgorithm: String, Codable, Sendable, CaseIterable {
     case yarn, wrap, lineWalk
 }
 
+/// Per-node config payloads (the start of moving feature config into the graph).
+public struct SolidConfig: Codable, Sendable, Equatable {
+    public var color: RGBAColor
+    public init(color: RGBAColor = RGBAColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)) {
+        self.color = color
+    }
+}
+
 /// A typed input port a node exposes.
 public struct Port: Codable, Sendable, Equatable {
     public var name: String
@@ -73,7 +81,7 @@ public enum PortBinding: Codable, Sendable, Equatable {
 /// ports); full config re-homes here in Phase 2.
 public enum NodeKind: Codable, Sendable, Equatable {
     case video                  // camera-derived pixels (optionally effected)
-    case solid                  // color / transparent fill
+    case solid(SolidConfig)     // color / transparent fill (per-node colour)
     case effect                 // pixel → pixel (threshold / outline / …)
     case overlay                // combined marks+drawing (today's single overlay image)
     case marks                  // landmark dots / stick (Phase 3b: own image)
@@ -88,6 +96,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .solid:   return []
         case .effect:  return [Port(name: "image", type: .pixel)]
         case .overlay: return [Port(name: "analysis", type: .path)]
+        // (associated-value cases still match the bare pattern in a switch.)
         case .marks:   return [Port(name: "analysis", type: .path)]
         case .drawing: return [Port(name: "analysis", type: .path)]
         case .ink:     return [Port(name: "strokes", type: .path),
@@ -99,6 +108,20 @@ public enum NodeKind: Codable, Sendable, Equatable {
     /// The signal this kind outputs. (All pixel for now; path-generator nodes
     /// arrive in a later phase.)
     public var output: SignalType { .pixel }
+
+    /// Kind identity ignoring associated config — for matching during reconcile.
+    public var family: String {
+        switch self {
+        case .video: return "video"
+        case .solid: return "solid"
+        case .effect: return "effect"
+        case .overlay: return "overlay"
+        case .marks: return "marks"
+        case .drawing(let a): return "drawing.\(a.rawValue)"
+        case .ink: return "ink"
+        case .web: return "web"
+        }
+    }
 
     /// The default binding for each port when a node is created fresh.
     public var defaultBindings: [PortBinding] {
@@ -121,12 +144,16 @@ public struct Node: Identifiable, Codable, Sendable, Equatable {
     public var kind: NodeKind
     /// One binding per `kind.ports`, same order.
     public var inputs: [PortBinding]
+    /// true = derived from the legacy feature flags (reconciliation owns it);
+    /// false = user-created in the Layers panel (preserved across reconcile).
+    public var managed: Bool
 
-    public init(id: UUID = UUID(), name: String, kind: NodeKind, inputs: [PortBinding]? = nil) {
+    public init(id: UUID = UUID(), name: String, kind: NodeKind, inputs: [PortBinding]? = nil, managed: Bool = true) {
         self.id = id
         self.name = name
         self.kind = kind
         self.inputs = inputs ?? kind.defaultBindings
+        self.managed = managed
     }
 }
 
@@ -256,7 +283,9 @@ public extension LayerGraph {
         // Bottom→top, matching the legacy compositor exactly:
         //   [background] → video → web-behind → ink-behind → marks+drawing
         //   → ink-above → web-above
-        if settings.backgroundMode != .live { emit(Node(name: "Background", kind: .solid)) }
+        if settings.backgroundMode != .live {
+            emit(Node(name: "Background", kind: .solid(SolidConfig(color: settings.backgroundColor))))
+        }
         emit(Node(name: "Camera", kind: .video), mask: personMask)
 
         if settings.web.enabled, settings.web.placement == .behindDrawing {
@@ -291,29 +320,38 @@ public extension LayerGraph {
     /// coexist while the graph is the source of truth for arrangement.
     func reconciled(with settings: ProcessingSettings) -> LayerGraph {
         let desired = LayerGraph.defaultGraph(from: settings)
-        func kind(_ g: LayerGraph, _ l: Layer) -> NodeKind? { g.node(l.node)?.kind }
+        func family(_ g: LayerGraph, _ l: Layer) -> String? { g.node(l.node)?.kind.family }
+        let desiredFamilies = Set(desired.layers.compactMap { family(desired, $0) })
 
-        let desiredKinds = desired.layers.compactMap { kind(desired, $0) }
-        // Keep existing layers that are still desired, in the user's order.
         var resultLayers: [Layer] = []
         var resultNodes: [Node] = []
-        var keptKinds: [NodeKind] = []
+        var keptFamilies: [String] = []   // managed families kept, in result order
         for layer in layers {
-            guard let k = kind(self, layer), desiredKinds.contains(k), let node = self.node(layer.node) else { continue }
-            resultNodes.append(node)
-            resultLayers.append(layer)
-            keptKinds.append(k)
+            guard let node = self.node(layer.node) else { continue }
+            if !node.managed {
+                // User-created layers are always preserved, in place.
+                resultNodes.append(node); resultLayers.append(layer)
+            } else if let f = family(self, layer), desiredFamilies.contains(f) {
+                resultNodes.append(node); resultLayers.append(layer); keptFamilies.append(f)
+            }
+            // else: a managed layer whose feature was disabled → dropped.
         }
-        // Append newly-enabled kinds at their canonical (desired) position.
+        // Insert newly-enabled managed families at their canonical position
+        // (relative to the other managed layers).
         for dl in desired.layers {
-            guard let k = kind(desired, dl), !keptKinds.contains(k), let dn = desired.node(dl.node) else { continue }
-            let insertIdx = desired.layers.prefix(while: { kind(desired, $0) != k })
-                .reduce(0) { acc, prior in
-                    keptKinds.contains(kind(desired, prior)!) ? acc + 1 : acc
-                }
-            resultNodes.append(dn)
-            resultLayers.insert(dl, at: min(insertIdx, resultLayers.count))
-            keptKinds.insert(k, at: min(insertIdx, keptKinds.count))
+            guard let f = family(desired, dl), !keptFamilies.contains(f), let dn = desired.node(dl.node) else { continue }
+            // How many desired-managed families precede f and were kept?
+            let priorsKept = desired.layers.prefix(while: { family(desired, $0) != f })
+                .reduce(0) { acc, prior in keptFamilies.contains(family(desired, prior) ?? "") ? acc + 1 : acc }
+            // Walk result to just after that many kept-managed layers.
+            var idx = 0, seenManaged = 0
+            while idx < resultNodes.count, seenManaged < priorsKept {
+                if resultNodes[idx].managed { seenManaged += 1 }
+                idx += 1
+            }
+            resultNodes.insert(dn, at: min(idx, resultNodes.count))
+            resultLayers.insert(dl, at: min(idx, resultLayers.count))
+            keptFamilies.append(f)
         }
         return LayerGraph(nodes: resultNodes, layers: resultLayers)
     }
