@@ -484,8 +484,6 @@ struct ContentView: View {
         Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
             .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
-        personMatteSection
-
         SectionHeader("Camera Extension")
         HStack {
             Button("Activate") { model.activateExtension() }
@@ -510,17 +508,6 @@ struct ContentView: View {
     // are per-layer effects. The shared person-matte quality lives in Settings;
     // the frame-level Mirror + Test pattern toggles are in the Sources tab.)
 
-    @ViewBuilder private var personMatteSection: some View {
-        SectionHeader("Person Matte")
-        Picker("Quality", selection: $model.settings.segmentation.quality) {
-            ForEach(SegmentationQuality.allCases) { quality in
-                Text(quality.title).tag(quality)
-            }
-        }
-        .pickerStyle(.segmented)
-        Text("The shared Vision matte feeding any layer's Person Key effect.")
-            .font(.caption2).foregroundStyle(.secondary)
-    }
 
     // MARK: - Marks tab
 
@@ -1619,12 +1606,15 @@ private struct RGBAColorPicker: View {
 /// (Blender-modifier style) plus an Add menu.
 private struct EffectChainEditor: View {
     @Binding var effects: [EffectConfig]
+    /// The shared Vision-matte quality, shown inside any Person Key effect.
+    @Binding var personMatteQuality: SegmentationQuality
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(effects.enumerated()), id: \.element.id) { idx, effect in
                 EffectPanel(
                     effect: binding(effect.id),
+                    personMatteQuality: $personMatteQuality,
                     canMoveUp: idx > 0,
                     canMoveDown: idx < effects.count - 1,
                     onMoveUp: { if idx > 0 { effects.swapAt(idx, idx - 1) } },
@@ -1663,6 +1653,7 @@ private struct EffectChainEditor: View {
 
 private struct EffectPanel: View {
     @Binding var effect: EffectConfig
+    @Binding var personMatteQuality: SegmentationQuality
     @State private var open = true
     let canMoveUp: Bool
     let canMoveDown: Bool
@@ -1692,6 +1683,18 @@ private struct EffectPanel: View {
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
         .opacity(effect.enabled ? 1 : 0.5)
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        switch effect.kind {
+        case .threshold: return "Binarises luminance into ink/paper."
+        case .outline: return "Sobel edge outline on a transparent background."
+        case .blur: return "Box blur."
+        case .invert: return "Inverts this layer's colours."
+        case .mirror: return "Flips this layer horizontally."
+        case .personKey: return "Keeps only the person (Vision matte). Invert to drop the person and keep the background. Higher matte quality is sharper but costs more."
+        }
     }
 
     @ViewBuilder private var params: some View {
@@ -1711,12 +1714,10 @@ private struct EffectPanel: View {
         }
         if effect.kind == .personKey {
             Toggle("Key out person (invert)", isOn: $effect.invert).controlSize(.small)
-            Text("Keeps only the person (Vision matte). Invert to drop the person and keep the background. Matte quality is in Settings ▸ Person Matte.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-        if effect.kind == .mirror || effect.kind == .invert {
-            Text(effect.kind == .mirror ? "Flips this layer horizontally." : "Inverts this layer's colours.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Picker("Matte", selection: $personMatteQuality) {
+                ForEach(SegmentationQuality.allCases) { q in Text(q.title).tag(q) }
+            }
+            .pickerStyle(.segmented).controlSize(.small)
         }
     }
 
@@ -1823,7 +1824,8 @@ private struct LayerStackEditor: View {
                         }
                     }
                     if expanded.contains(layer.id) {
-                        EffectChainEditor(effects: effectsBinding(layer.id))
+                        EffectChainEditor(effects: effectsBinding(layer.id),
+                                          personMatteQuality: $model.settings.segmentation.quality)
                             .padding(.leading, 20)
                     }
                 }
