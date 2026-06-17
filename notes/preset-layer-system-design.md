@@ -225,26 +225,42 @@ picker. Stacking order is *only* the layer stack.
   computed in the VM, so the compositor must resolve a `.node(id)` pixel input and feed
   it to the producer, not just read another layer's image. Deferred.
 
-═══ CHECKPOINT (2026-06-17) ═══
-v2 is the DEFAULT path: GPU layer compositor on by default, the layer stack is the
-sole source of truth. Global `backgroundMode` / `inputLayerEnabled` deprecated (no
-injection; background = a Solid layer, camera always a layer). All on branch `presets`
-(commit 56b4eab), pushed to origin. NOT merged to main. 51 Core tests green; effects
-self-check PASS. Done: G1, G2, most of G3.
+═══ CHECKPOINT (2026-06-17, HEAD = `presets` @ 684c0b7, pushed; NOT merged to main) ═══
+v2 is the DEFAULT path: GPU layer compositor (`useGPUCompositor` = true) on by default,
+the layer stack is the sole source of truth. Global `backgroundMode` / `inputLayerEnabled`
+deprecated (no injection; background = a Solid layer, camera always a layer). 51 Core
+tests green; effects self-check PASS.
 
-### Remaining work (priority order)
-1. **Routing/source-binding UI (finish G3):** mask dropdown per panel (NONE / named
-   stream + threshold/inv-threshold) and per-stream source dropdowns (ink.texture ← a
-   stream, drawing ← landmark source). Wire the compositor to read `layer.mask` and
-   `node.inputs` bindings (mask kernel already exists; node→node pixel routing needs
-   the compositor to resolve `.node(id)` content).
-2. **Blend modes:** only `normal` (source-over) today. Add multiply/screen/etc. to the
+DONE: G1, G2, and G3 except producer source-routing. Latest since the first checkpoint:
+- Mask dropdown per layer (None / Person matte / any named stream + Luma/Threshold/Inv +
+  level + invert) — `MaskEditor` in ContentView; compositor applies `layer.mask`.
+- Person Key effect with Silhouette flat-fill + matte Quality in-panel.
+- Camera & Movie are separate tabs (combined source picker gone) — but still ONE capture
+  (see G4 below).
+- Any layer is deletable (incl. Camera → use a Solid instead); `reconciled()` only
+  auto-inserts flag families (overlay/ink/web), source families are user-curated and
+  never resurrected; reconcile no longer overwrites user masks/effects.
+
+### Remaining work (priority order) — NEXT UP is #1 (G4 dual capture)
+1. **G4 — dual camera+movie capture (the next task).** Today `applyFrameSource()` in
+   SketchCamViewModel STOPS the inactive source, so `.video` and `.movie` layers both map
+   to the one active buffer. To run both live: keep both sources started; store each one's
+   latest CVPixelBuffer in the VM behind a lock (handlers are `captureService.onSampleBuffer`
+   / `movieSource.onPixelBuffer`, on capture threads; `process()` runs on the processing
+   queue — needs thread-safe handoff); pick one source as the output clock; in
+   `compositeOnGPU` resolve `.video`→latest camera image, `.movie`→latest movie image
+   (currently both → `cameraImage`). Files: SketchCamViewModel.swift (applyFrameSource,
+   handleCameraSample/handleMovieFrame, compositeOnGPU).
+2. **Routing/source-binding UI (last of G3):** per-stream source dropdowns for PRODUCER
+   inputs (ink.texture ← a stream, drawing ← landmark source). Harder than masks: the
+   compositor must resolve a `.node(id)` PIXEL input and feed it INTO the producer (ink/
+   drawing are computed in the VM), not just read another layer's image. Mask routing is
+   already done; this is node→node producer routing.
+3. **Blend modes:** only `normal` (source-over) today. Add multiply/screen/etc. to the
    GPU composite (per-layer `blend`), plus a blend menu in the layer row.
-3. **GPU-native producers:** overlay/ink/web are still CoreImage images rasterized into
+4. **GPU-native producers:** overlay/ink/web are still CoreImage images rasterized into
    buffers each frame before GPU compositing — make them Metal-native to cut the CI round
    trips (perf + consistency).
-4. **G4 — dual capture:** Camera & Movie still share one capture (the tabs switch the
-   single source). Run two simultaneous sources so both stream kinds are live at once.
 5. **G5 — presets:** JSON save/load of the whole graph (global) and per-layer/per-node
    snapshots. Application Support, versioned, exportable.
 6. **Cleanups:** GPU-path pixel-parity test; settings reset on schema change (new
