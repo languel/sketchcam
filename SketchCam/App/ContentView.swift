@@ -29,6 +29,7 @@ private enum InkTool: String, CaseIterable, Identifiable {
 struct ContentView: View {
     private enum ControlTab: String, CaseIterable, Identifiable {
         case input = "Settings"
+        case sources = "Sources"
         case layers = "Layers"
         case effect = "Effect"
         case marks = "Marks"
@@ -46,6 +47,7 @@ struct ContentView: View {
         var icon: String {
             switch self {
             case .input: "gearshape"
+            case .sources: "camera"
             case .layers: "square.3.layers.3d"
             case .effect: "wand.and.stars"
             case .marks: "point.3.connected.trianglepath.dotted"
@@ -251,6 +253,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     switch tab {
                     case .input: inputTab
+                    case .sources: sourcesTab
                     case .layers: layersTab
                     case .effect: effectTab
                     case .marks: marksTab
@@ -318,8 +321,11 @@ struct ContentView: View {
 
     // MARK: - Input tab
 
-    @ViewBuilder private var inputTab: some View {
-        SectionHeader("Sources")
+    /// Sources tab: the input streams (camera / movie) + the live input layer.
+    /// These feed the Camera layer in the stack (and, ahead, can be assigned to
+    /// any layer's content).
+    @ViewBuilder private var sourcesTab: some View {
+        SectionHeader("Source")
         Picker("Source", selection: $model.frameSource) {
             ForEach(SketchCamViewModel.FrameSource.allCases) { source in
                 Text(source.title).tag(source)
@@ -362,6 +368,16 @@ struct ContentView: View {
             SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, hint: "0 pauses")
         }
 
+        Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
+            .onChange(of: model.settings.inputLayerEnabled) { _, enabled in
+                if !enabled, model.settings.backgroundMode == .live {
+                    model.settings.backgroundMode = .solid
+                }
+            }
+            .help("Whether the camera/movie source feeds the Camera layer. Off = the source isn't drawn (use a Background or other layers).")
+    }
+
+    @ViewBuilder private var inputTab: some View {
         SectionHeader("Output")
         Picker("Format", selection: $model.outputFormat) {
             ForEach(SketchCamFormats.all) { format in
@@ -437,15 +453,6 @@ struct ContentView: View {
         SectionHeader("Layer stack")
         LayerStackEditor(model: model)
             .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
-
-        Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
-            .onChange(of: model.settings.inputLayerEnabled) { _, enabled in
-                // With the input layer off, a "Live" background would still
-                // show the raw video — switch to a real canvas.
-                if !enabled, model.settings.backgroundMode == .live {
-                    model.settings.backgroundMode = .solid
-                }
-            }
 
         SectionHeader("Background")
         Picker("Background", selection: $model.settings.backgroundMode) {
