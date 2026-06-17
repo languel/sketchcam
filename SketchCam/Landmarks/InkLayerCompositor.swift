@@ -22,15 +22,25 @@ final class InkLayerCompositor {
         return lock.withLock {
             if engine == nil { engine = MetalInkEngine() }
             var renderSettings = settings
-            if textureInput != nil {
+            let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
+            let routedTexture = textureInput.flatMap { input -> CIImage? in
+                guard paperOpacity > 0.001 else { return nil }
+                if paperOpacity >= 0.999 { return input }
+                let alpha = CIVector(x: 0, y: 0, z: 0, w: CGFloat(paperOpacity))
+                return input.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": alpha
+                ])
+            }
+            renderSettings.landmarks.inkPaperEnabled = paperOpacity > 0.001
+            if routedTexture != nil {
                 renderSettings.landmarks.inkPaperEnabled = false
             }
             let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex)
-            guard let textureInput else { return ink }
+            guard let routedTexture else { return ink }
             let rect = CGRect(origin: .zero, size: outputSize)
-            guard let ink else { return textureInput.cropped(to: rect) }
-            return ink.composited(over: textureInput).cropped(to: rect)
+            guard let ink else { return routedTexture.cropped(to: rect) }
+            return ink.composited(over: routedTexture).cropped(to: rect)
         }
     }
 }

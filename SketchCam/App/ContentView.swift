@@ -746,14 +746,15 @@ struct ContentView: View {
                 .fixedSize()
                 .help("Substrate routed into the Ink node's texture input. This is the same input shown in the Layers panel.")
             }
-            Toggle("Internal paper", isOn: $model.settings.landmarks.inkPaperEnabled)
-                .disabled(inkTextureBinding.wrappedValue != .none)
-                .help("Fallback substrate used only when the Ink texture input is not routed to another stream.")
+            Toggle("Paper", isOn: inkPaperEnabledBinding)
+                .help("Show or hide the Ink layer's paper/substrate. Off makes ink render over transparent.")
+            SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
+                      hint: "Opacity of the routed or internal paper substrate. 0 = transparent ink-only output.")
             RGBAColorPicker("Tint", rgba: inkPaperColorRGBA, supportsOpacity: true)
-                .disabled(inkTextureBinding.wrappedValue != .none || !model.settings.landmarks.inkPaperEnabled)
+                .disabled(inkTextureBinding.wrappedValue != .none || inkPaperOpacityBinding.wrappedValue <= 0.001)
             SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain), defaultValue: 0.45,
                       hint: "Fallback internal paper texture / grain strength.")
-                .disabled(inkTextureBinding.wrappedValue != .none || !model.settings.landmarks.inkPaperEnabled)
+                .disabled(inkTextureBinding.wrappedValue != .none || inkPaperOpacityBinding.wrappedValue <= 0.001)
 
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
@@ -1055,6 +1056,27 @@ struct ContentView: View {
     private var inkPaperColorRGBA: Binding<RGBAColor> {
         Binding(get: { model.settings.landmarks.inkPaperColor },
                 set: { model.settings.landmarks.inkPaperColor = $0 })
+    }
+    private var inkPaperOpacityBinding: Binding<Double> {
+        Binding(
+            get: {
+                Double(model.settings.landmarks.inkPaperOpacity ?? (model.settings.landmarks.inkPaperEnabled ? 1 : 0))
+            },
+            set: {
+                let opacity = Float(max(0, min(1, $0)))
+                model.settings.landmarks.inkPaperOpacity = opacity
+                model.settings.landmarks.inkPaperEnabled = opacity > 0.001
+            }
+        )
+    }
+    private var inkPaperEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { inkPaperOpacityBinding.wrappedValue > 0.001 },
+            set: { isOn in
+                model.settings.landmarks.inkPaperOpacity = isOn ? max(Float(inkPaperOpacityBinding.wrappedValue), 1) : 0
+                model.settings.landmarks.inkPaperEnabled = isOn
+            }
+        )
     }
     private var inkTextureBinding: Binding<PortBinding> {
         Binding(

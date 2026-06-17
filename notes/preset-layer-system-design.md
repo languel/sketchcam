@@ -258,7 +258,9 @@ Latest since the first checkpoint:
 - Ink tab cleanup: the old placement/opacity "Layer" section is gone because stacking
   is owned by the layer row. The Paper section moved to the top and edits the Ink
   node's real `texture` input; any available pixel stream/layer can be used as the
-  substrate, with internal paper only as the unrouted fallback.
+  substrate, with internal paper only as the unrouted fallback. The Paper toggle and
+  Opacity slider apply to either routed or internal paper; opacity 0 produces
+  transparent ink-only output.
 - Paper is now a configurable generated layer, parallel to Solid: paper nodes carry
   tint, grain, scale, and texture mode, and the GPU compositor/routed ink substrate
   resolve the generated paper stream from that node config.

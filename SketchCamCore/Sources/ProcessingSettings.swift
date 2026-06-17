@@ -492,6 +492,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkDry: Float
     public var inkPaperEnabled: Bool
     public var inkPaperColor: RGBAColor
+    /// Opacity for the Ink tab's paper/substrate input. Nil means legacy
+    /// presets follow `inkPaperEnabled`.
+    public var inkPaperOpacity: Float?
     public var inkPaperGrain: Float
     public var inkWashStrength: Float
     public var inkCurveFit: CurveFit
@@ -636,6 +639,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkDry: Float = 0.25,
         inkPaperEnabled: Bool = true,
         inkPaperColor: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 0.42),
+        inkPaperOpacity: Float? = 1,
         inkPaperGrain: Float = 0.45,
         inkWashStrength: Float = 0.9,
         inkCurveFit: CurveFit = .hobby,
@@ -753,6 +757,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkDry = inkDry
         self.inkPaperEnabled = inkPaperEnabled
         self.inkPaperColor = inkPaperColor
+        self.inkPaperOpacity = inkPaperOpacity
         self.inkPaperGrain = inkPaperGrain
         self.inkWashStrength = inkWashStrength
         self.inkCurveFit = inkCurveFit

@@ -20,7 +20,7 @@ final class MetalInkEngine {
     /// Display-affecting settings; when unchanged (and the sim is idle) the
     /// engine reuses the cached image instead of re-rendering.
     private struct RenderSignature: Equatable {
-        var paperOn: Bool
+        var paperOpacity: Float
         var grain: Float
         var opacity: Float
         var colorSep: Float
@@ -272,8 +272,9 @@ final class MetalInkEngine {
         let fadeDuration = max(0.15, l.inkFadeDuration ?? 1.2)
         let clearFadeRev = l.inkClearFadeRevision ?? 0
         let clearFadeRequested = clearFadeRev != lastClearFadeRevision && !needRebuild
+        let paperOpacity = l.inkPaperEnabled ? clamp01(l.inkPaperOpacity ?? 1) : 0
         let renderSig = RenderSignature(
-            paperOn: l.inkPaperEnabled,
+            paperOpacity: paperOpacity,
             grain: clamp01(l.inkPaperGrain),
             opacity: clamp01(l.inkOpacity),
             colorSep: clamp01(l.inkColorSeparation ?? 0.5),
@@ -286,7 +287,7 @@ final class MetalInkEngine {
         // paths, but they leave pigment in the Metal textures; once the sim goes
         // idle, keep serving the last rendered image instead of declaring the
         // layer empty.
-        if !l.inkPaperEnabled, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
+        if paperOpacity <= 0.001, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
             return cachedImage
         }
         // Idle and already rendered → reuse the cached image (no GPU work, no
@@ -891,7 +892,7 @@ final class MetalInkEngine {
             grain: max(0, clamp01(l.inkPaperGrain)),
             whiteTint: clamp01(l.inkColorSeparation ?? 0.5) * 0.35,
             opacity: clamp01(l.inkOpacity),
-            paperOn: l.inkPaperEnabled ? 1 : 0,
+            paperOn: l.inkPaperEnabled ? clamp01(l.inkPaperOpacity ?? 1) : 0,
             // Clear fade scales the PIGMENT (and wet tint) to 0, leaving the paper
             // fully opaque — so a fade-out doesn't show through to the camera.
             inkFade: clearFadeActive ? clearFade : 1,
