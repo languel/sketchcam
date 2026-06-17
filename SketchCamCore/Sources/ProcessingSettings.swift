@@ -261,6 +261,10 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// the default graph from the feature flags. The compositor reconciles it
     /// against the current flags each frame.
     public var layerGraph: LayerGraph?
+    /// v2 GPU path: composite every layer (camera/movie/solid/paper/drawing/ink/
+    /// web) from the graph on the GPU — per-layer Metal effect chain + mask —
+    /// instead of the CoreImage base. Experimental; off = legacy CoreImage path.
+    public var useGPUCompositor: Bool
     /// Preview/display refresh cap in fps. 0 = full-tilt (every published
     /// frame). The preview pane doubles as the main display (presentation
     /// mode), so this is a real output rate, not a throttle-to-save-cost.
@@ -292,6 +296,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewEnabled: Bool = true,
         useLayerGraph: Bool = false,
         layerGraph: LayerGraph? = nil,
+        useGPUCompositor: Bool = false,
         previewFPS: Double = 0,
         useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,
@@ -317,6 +322,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewEnabled = previewEnabled
         self.useLayerGraph = useLayerGraph
         self.layerGraph = layerGraph
+        self.useGPUCompositor = useGPUCompositor
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality

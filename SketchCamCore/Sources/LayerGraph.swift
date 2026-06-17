@@ -386,9 +386,24 @@ public extension LayerGraph {
         // overlay and ink/web are composited un-keyed in today's pipeline).
         let personMask: MaskBinding? = settings.segmentation.enabled ? .person(invert: false) : nil
 
-        func emit(_ node: Node, mask: MaskBinding? = nil) {
+        func emit(_ node: Node, mask: MaskBinding? = nil, effects: [EffectConfig] = []) {
             nodes.append(node)
-            layers.append(Layer(node: node.id, mask: mask))
+            layers.append(Layer(node: node.id, mask: mask, effects: effects))
+        }
+
+        // Re-home the legacy global effect flags onto the camera layer's chain
+        // (the GPU compositor consumes per-layer effects; the legacy CoreImage
+        // path ignores them and applies its own).
+        var cameraEffects: [EffectConfig] = []
+        if settings.effectsEnabled {
+            if settings.thresholdEnabled {
+                cameraEffects.append(EffectConfig(kind: .threshold, amount: settings.threshold,
+                                                  invert: settings.invert, inkOnly: settings.thresholdInkOnly))
+            }
+            if settings.outlineEnabled {
+                cameraEffects.append(EffectConfig(kind: .outline, amount: settings.edgeStrength,
+                                                  color: settings.outlineColor, thickness: settings.outlineThickness))
+            }
         }
 
         // Bottom→top, matching the legacy compositor exactly:
@@ -397,7 +412,7 @@ public extension LayerGraph {
         if settings.backgroundMode != .live {
             emit(Node(name: "Background", kind: .solid(SolidConfig(color: settings.backgroundColor))))
         }
-        emit(Node(name: "Camera", kind: .video), mask: personMask)
+        emit(Node(name: "Camera", kind: .video), mask: personMask, effects: cameraEffects)
 
         if settings.web.enabled, settings.web.placement == .behindDrawing {
             emit(Node(name: "Web", kind: .web))
@@ -442,8 +457,16 @@ public extension LayerGraph {
             if !node.managed {
                 // User-created layers are always preserved, in place.
                 resultNodes.append(node); resultLayers.append(layer)
-            } else if let f = family(self, layer), desiredFamilies.contains(f) {
-                resultNodes.append(node); resultLayers.append(layer); keptFamilies.append(f)
+            } else if let f = family(self, layer), desiredFamilies.contains(f),
+                      let dLayer = desired.layers.first(where: { family(desired, $0) == f }),
+                      let dNode = desired.node(dLayer.node) {
+                // Managed layer kept: refresh the feature-derived fields (kind /
+                // effects / mask, which the legacy tabs still own until per-layer
+                // editing lands) from the desired graph, but keep the user's
+                // arrangement (order / visibility / opacity / blend) and identity.
+                var mergedNode = node; mergedNode.kind = dNode.kind
+                var mergedLayer = layer; mergedLayer.effects = dLayer.effects; mergedLayer.mask = dLayer.mask
+                resultNodes.append(mergedNode); resultLayers.append(mergedLayer); keptFamilies.append(f)
             }
             // else: a managed layer whose feature was disabled → dropped.
         }

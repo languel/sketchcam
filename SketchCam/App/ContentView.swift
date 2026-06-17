@@ -490,6 +490,8 @@ struct ContentView: View {
             .help("Render the drawing strokes on the GPU instead of the CPU. Marks (dots/stick/labels) stay CPU. Watch the Overlay ms in Debug.")
         Toggle("Bead stroke (legacy)", isOn: $model.settings.landmarks.beadStroke)
             .help("Off = smooth filled ribbons (clean under transparency). On = the older per-segment quads + round discs.")
+        Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
+            .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
         SectionHeader("Camera Extension")
         HStack {

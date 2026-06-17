@@ -28,6 +28,7 @@
 		57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */; };
 		57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177F3E230DF6259E3ECAE346 /* BodyHull.swift */; };
 		580729A8AFF47997B30CF672 /* InkLiveStroke.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */; };
+		5E9F659D21973EAC482649C1 /* MetalLayerCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */; };
 		619CC315756F80E46B825A18 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774FD946761DCD2975E64F1B /* main.swift */; };
 		66D99898FC53D50F55AFB2E3 /* LayerGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02169792350DA5793406338 /* LayerGraph.swift */; };
 		6764B0E595350EEBD3ADC9CD /* LatestFrameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12B04D5F452051874C2EB74 /* LatestFrameStore.swift */; };
@@ -182,6 +183,7 @@
 		8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkOverlayCompositor.swift; sourceTree = "<group>"; };
 		899FA7D13C6CB19A855B1642 /* SketchCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SketchCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineTimings.swift; sourceTree = "<group>"; };
+		91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLayerCompositor.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
 		9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */ = {isa = PBXFileReference; path = "chaplin-dance.mp4"; sourceTree = "<group>"; };
@@ -383,6 +385,7 @@
 				C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */,
 				D92A8604968462AFE800148A /* LineShaders.metal */,
 				4F2A2598E845123A35AB7F0C /* MetalEffects.swift */,
+				91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */,
 				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
 			);
 			path = Metal;
@@ -697,6 +700,7 @@
 				3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */,
 				8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */,
 				C08D417215B461026AF9BB6B /* MetalInkEngine.swift in Sources */,
+				5E9F659D21973EAC482649C1 /* MetalLayerCompositor.swift in Sources */,
 				AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */,
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,

@@ -89,6 +89,8 @@ final class SketchCamViewModel: ObservableObject {
     // contexts mean separate Metal queues/caches and extra GPU sync.
     private static let sharedCIContext = CIContext(options: [.cacheIntermediates: true])
     private let processor = CoreImageFrameProcessor(context: SketchCamViewModel.sharedCIContext)
+    /// v2 GPU layer compositor (experimental; behind settings.useGPUCompositor).
+    private let gpuCompositor = MetalLayerCompositor(ciContext: SketchCamViewModel.sharedCIContext)
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     /// Zero-readback display path (the preview pane / presentation output).
     let previewDisplay = SampleBufferDisplayController()
@@ -530,8 +532,15 @@ final class SketchCamViewModel: ObservableObject {
                 // (like detect/segment), not the ~0ms cache fetch.
                 self.timings.record(.overlay, seconds: self.overlayCompositor.lastRenderMillis / 1_000)
                 self.timings.record(.detect, seconds: self.landmarkService.lastDetectionMillis / 1_000)
-                let processed = try self.timings.measure(.process) {
-                    try self.processor.process(
+                let processed = try self.timings.measure(.process) { () throws -> ProcessedFrame in
+                    if settings.useGPUCompositor, let gpu = self.gpuCompositor,
+                       let frame = self.compositeOnGPU(
+                            gpu, pixelBuffer: pixelBuffer, settings: settings,
+                            outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
+                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer) {
+                        return frame
+                    }
+                    return try self.processor.process(
                         pixelBuffer: pixelBuffer,
                         settings: settings,
                         outputFormat: outputFormat,
@@ -550,6 +559,53 @@ final class SketchCamViewModel: ObservableObject {
                 self.publishError(error)
             }
         }
+    }
+
+    /// Build the per-stream images and composite the graph on the GPU. Returns
+    /// nil on any failure so the caller falls back to the CoreImage path.
+    private func compositeOnGPU(_ gpu: MetalLayerCompositor, pixelBuffer: CVPixelBuffer,
+                                settings: ProcessingSettings, outputFormat: FrameFormat,
+                                frameIndex: Int, timestamp: CMTime,
+                                overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?) -> ProcessedFrame? {
+        let outputRect = CGRect(origin: .zero, size: outputFormat.size)
+        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let srcW = CGFloat(CVPixelBufferGetWidth(pixelBuffer)), srcH = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let cameraImage = CoreImageFrameProcessor.aspectFill(source, in: outputRect, mirrored: settings.mirror)
+
+        // Person matte scaled into output space (matches the legacy keyer).
+        let personMatteImage: CIImage? = matte.map { m in
+            let inSrc = m.transformed(by: CGAffineTransform(
+                scaleX: srcW / max(1, m.extent.width), y: srcH / max(1, m.extent.height)))
+            return CoreImageFrameProcessor.aspectFill(inSrc, in: outputRect, mirrored: settings.mirror)
+        }
+
+        let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        let streams = MetalLayerCompositor.Streams(
+            image: { node in
+                switch node.kind {
+                case .video, .movie:
+                    return settings.inputLayerEnabled ? cameraImage : nil
+                case .solid(let cfg):
+                    return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
+                                                  blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)
+                case .paper:
+                    return CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1)).cropped(to: outputRect)
+                case .personMatte:
+                    return personMatteImage
+                case .overlay, .marks, .drawing:
+                    return overlay
+                case .ink:
+                    return inkLayer
+                case .web:
+                    return webLayer
+                case .effect:
+                    return nil
+                }
+            },
+            personMatte: personMatteImage
+        )
+        return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
+                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
     }
 
     private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
