@@ -2,6 +2,7 @@ import CoreVideo
 import Foundation
 import Metal
 import simd
+import SketchCamCore
 
 /// GPU effect kernels (threshold, Sobel outline, morphology, blur, composite) —
 /// the Metal replacement for the CoreImage effect chain. Operates on
@@ -12,6 +13,8 @@ final class MetalEffects {
     private struct OutlineParams { var inSize: SIMD2<Float>; var outSize: SIMD2<Float>; var color: SIMD4<Float>; var strength: Float }
     private struct MorphParams { var radius: Int32; var dilate: UInt32 }
     private struct BlurParams { var radius: Int32 }
+    private struct CompositeParams { var opacity: Float }
+    private struct MaskParams { var level: Float; var mode: UInt32; var invert: UInt32 }
 
     let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -21,6 +24,8 @@ final class MetalEffects {
     private let morphPSO: MTLComputePipelineState
     private let blurPSO: MTLComputePipelineState
     private let compositePSO: MTLComputePipelineState
+    private let compositeOpPSO: MTLComputePipelineState
+    private let maskPSO: MTLComputePipelineState
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -32,13 +37,15 @@ final class MetalEffects {
         }
         guard let t = pso("effect_threshold"), let o = pso("effect_outline"),
               let m = pso("effect_morphology"), let b = pso("effect_box_blur"),
-              let c = pso("effect_composite") else { return nil }
+              let c = pso("effect_composite"), let co = pso("effect_composite_op"),
+              let mk = pso("effect_mask") else { return nil }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         self.device = device
         self.queue = queue
         self.textureCache = cache
-        self.thresholdPSO = t; self.outlinePSO = o; self.morphPSO = m; self.blurPSO = b; self.compositePSO = c
+        self.thresholdPSO = t; self.outlinePSO = o; self.morphPSO = m; self.blurPSO = b
+        self.compositePSO = c; self.compositeOpPSO = co; self.maskPSO = mk
     }
 
     // MARK: - Public ops (each runs on its own command buffer, synchronous)
@@ -78,6 +85,59 @@ final class MetalEffects {
     func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
         guard let baseTex = texture(base), let overlayTex = texture(overlay), let outTex = texture(output) else { return false }
         return run(compositePSO, textures: [baseTex, overlayTex, outTex], bytes: nil, length: 0, grid: outTex)
+    }
+
+    /// Source-over with a per-layer opacity (0…1).
+    func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer, opacity: Float) -> Bool {
+        guard let baseTex = texture(base), let overlayTex = texture(overlay), let outTex = texture(output) else { return false }
+        var p = CompositeParams(opacity: max(0, min(1, opacity)))
+        return run(compositeOpPSO, textures: [baseTex, overlayTex, outTex], bytes: &p, length: MemoryLayout<CompositeParams>.stride, grid: outTex)
+    }
+
+    /// Mask `content` by a matte stream; `mode`/`level`/`invert` mirror MaskBinding.
+    func mask(content: CVPixelBuffer, matte: CVPixelBuffer, output: CVPixelBuffer, mode: MaskBinding.Mode, level: Float, invert: Bool) -> Bool {
+        guard let cTex = texture(content), let mTex = texture(matte), let outTex = texture(output) else { return false }
+        let modeCode: UInt32 = (mode == .threshold) ? 1 : (mode == .invThreshold) ? 2 : 0
+        var p = MaskParams(level: level, mode: modeCode, invert: invert ? 1 : 0)
+        return run(maskPSO, textures: [cTex, mTex, outTex], bytes: &p, length: MemoryLayout<MaskParams>.stride, grid: outTex)
+    }
+
+    /// Copy (same size) — blur with radius 0 reads each pixel back unchanged.
+    func copy(input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
+        blur(input: input, output: output, radius: 0)
+    }
+
+    /// Apply an ordered effect chain to `input`, leaving the result in `output`.
+    /// `scratch` is a same-size working buffer for ping-ponging. Unknown/disabled
+    /// effects are skipped; an empty chain copies input→output.
+    func applyChain(input: CVPixelBuffer, output: CVPixelBuffer, scratch: CVPixelBuffer, effects: [EffectConfig]) -> Bool {
+        let enabled = effects.filter { $0.enabled }
+        guard !enabled.isEmpty else { return copy(input: input, output: output) }
+        var src = input
+        for (i, e) in enabled.enumerated() {
+            let dst: CVPixelBuffer = (i % 2 == 0) ? scratch : output
+            guard apply(e, input: src, output: dst) else { return false }
+            src = dst
+        }
+        // If the last write landed in scratch, mirror it into output.
+        if src !== output { return copy(input: src, output: output) }
+        return true
+    }
+
+    private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
+        switch e.kind {
+        case .threshold:
+            return threshold(input: input, output: output, threshold: e.amount, invert: e.invert, inkOnly: e.inkOnly)
+        case .outline:
+            let c = SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha)
+            return outline(input: input, output: output, strength: e.amount, color: c)
+        case .blur:
+            return blur(input: input, output: output, radius: Int(e.amount.rounded()))
+        case .invert:
+            // No dedicated invert kernel yet — threshold(invert) covers the common
+            // case; pass through until a colour-invert kernel lands.
+            return copy(input: input, output: output)
+        }
     }
 
     // MARK: - Dispatch
@@ -141,8 +201,27 @@ extension MetalEffects {
         let neighbor = read(output, 7, 8)
         let dilOK = neighbor.r > 215
 
-        let verdict = (thrOK && edgeOK && dilOK) ? "PASS" : "FAIL"
-        return "effects-selftest: \(verdict) threshold(L.r=\(tLeft.r),R.r=\(tRight.r)) outline(edge.a=\(edge.a),flat.a=\(flat.a)) dilate(neighbor.r=\(neighbor.r))"
+        // Effect chain: threshold then blur (radius 1) over the vertical edge.
+        // The blur softens the hard threshold edge, so the column at the edge is
+        // an intermediate grey rather than pure 0/255.
+        guard let scratch = makeBuffer(n) else { return "effects-selftest: chain buffer FAILED" }
+        fill(input) { x, _ in x < n / 2 ? (0, 0, 0, 255) : (255, 255, 255, 255) }
+        guard applyChain(input: input, output: output, scratch: scratch,
+                         effects: [EffectConfig(kind: .threshold, amount: 0.5),
+                                   EffectConfig(kind: .blur, amount: 1)]) else { return "effects-selftest: chain run FAILED" }
+        let edgeMid = read(output, 8, 8)
+        let chainOK = edgeMid.r > 20 && edgeMid.r < 235      // softened, not pure B/W
+
+        // Mask: a half-white/half-black matte keeps only the matte's white half.
+        fill(input) { _, _ in (200, 100, 50, 255) }          // solid content
+        guard let matte = makeBuffer(n) else { return "effects-selftest: mask buffer FAILED" }
+        fill(matte) { x, _ in x < n / 2 ? (255, 255, 255, 255) : (0, 0, 0, 255) }
+        guard mask(content: input, matte: matte, output: output, mode: .luma, level: 0.5, invert: false) else { return "effects-selftest: mask run FAILED" }
+        let keptPix = read(output, 4, 8), droppedPix = read(output, 12, 8)
+        let maskOK = keptPix.a > 215 && droppedPix.a < 40
+
+        let verdict = (thrOK && edgeOK && dilOK && chainOK && maskOK) ? "PASS" : "FAIL"
+        return "effects-selftest: \(verdict) threshold(L.r=\(tLeft.r),R.r=\(tRight.r)) outline(edge.a=\(edge.a),flat.a=\(flat.a)) dilate(neighbor.r=\(neighbor.r)) chain(edgeMid.r=\(edgeMid.r)) mask(kept.a=\(keptPix.a),dropped.a=\(droppedPix.a))"
     }
 
     private func makeBuffer(_ size: Int) -> CVPixelBuffer? {

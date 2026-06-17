@@ -125,3 +125,37 @@ kernel void effect_composite(texture2d<float, access::read> baseTex [[texture(0)
     float4 o = overlayTex.read(gid);
     outTex.write(o + b * (1.0 - o.a), gid);
 }
+
+// Source-over with a layer opacity (premultiplied overlay scaled by opacity).
+struct CompositeParams { float opacity; };
+kernel void effect_composite_op(texture2d<float, access::read> baseTex [[texture(0)]],
+                                texture2d<float, access::read> overlayTex [[texture(1)]],
+                                texture2d<float, access::write> outTex [[texture(2)]],
+                                constant CompositeParams &p [[buffer(0)]],
+                                uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 b = baseTex.read(gid);
+    float4 o = overlayTex.read(gid) * p.opacity;   // premultiplied scale
+    outTex.write(o + b * (1.0 - o.a), gid);
+}
+
+// Apply a matte (from another stream) to a layer's content. mode: 0=luma,
+// 1=threshold, 2=invThreshold; invert flips the final matte. Premultiplied
+// content is scaled by the matte value, masking both colour and alpha.
+struct MaskParams { float level; uint mode; uint invert; };
+kernel void effect_mask(texture2d<float, access::read> contentTex [[texture(0)]],
+                        texture2d<float, access::read> matteTex [[texture(1)]],
+                        texture2d<float, access::write> outTex [[texture(2)]],
+                        constant MaskParams &p [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 c = contentTex.read(gid);
+    float4 msrc = matteTex.read(gid);
+    float luma = dot(msrc.rgb, kLuma);
+    float m;
+    if (p.mode == 1u) m = luma >= p.level ? 1.0 : 0.0;
+    else if (p.mode == 2u) m = luma <  p.level ? 1.0 : 0.0;
+    else m = luma * msrc.a;                 // luma mode also respects matte alpha
+    if (p.invert == 1u) m = 1.0 - m;
+    outTex.write(c * m, gid);               // premultiplied scale
+}
