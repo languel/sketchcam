@@ -54,8 +54,17 @@ final class MetalLayerCompositor {
             guard let node = graph.node(layer.node), let img = streams.image(node) else { continue }
             rasterize(img, into: content)
 
+            // A personKey (or other matte-using) effect needs the person matte
+            // rasterized into a buffer for the chain.
+            var chainMatte: CVPixelBuffer? = nil
+            if layer.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }), let pm = streams.personMatte {
+                rasterize(pm, into: matteBuf)
+                chainMatte = matteBuf
+            }
+
             // Per-layer effect chain (content → masked).
-            guard effects.applyChain(input: content, output: masked, scratch: fxScratch, effects: layer.effects) else { return nil }
+            guard effects.applyChain(input: content, output: masked, scratch: fxScratch,
+                                     effects: layer.effects, matte: chainMatte) else { return nil }
 
             // Mask (masked → content, reusing content as the masked output).
             var layerBuf = masked

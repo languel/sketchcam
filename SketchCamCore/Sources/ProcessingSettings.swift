@@ -296,7 +296,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewEnabled: Bool = true,
         useLayerGraph: Bool = false,
         layerGraph: LayerGraph? = nil,
-        useGPUCompositor: Bool = false,
+        useGPUCompositor: Bool = true,
         previewFPS: Double = 0,
         useMetalPreview: Bool = false,
         processingQuality: ProcessingQuality = .full,

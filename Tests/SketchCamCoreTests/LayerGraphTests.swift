@@ -150,13 +150,14 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertNoThrow(try g.validate())
 
         let kinds = g.layers.compactMap { g.node($0.node)?.kind }
-        XCTAssertEqual(kinds.first?.family, "solid", "solid background sits at the bottom")
+        XCTAssertEqual(kinds.first?.family, "video", "v2: the Camera is the bottom layer (no global background)")
         XCTAssertTrue(kinds.contains(.overlay), "marks+drawing collapse to one overlay layer")
         XCTAssertTrue(kinds.contains(.ink))
 
-        // Camera + content layers are masked to the person when segmentation is on.
+        // v2: person key is a per-layer effect on the camera, not a global mask.
         let cameraLayer = g.layers.first { g.node($0.node)?.kind == .video }
-        XCTAssertEqual(cameraLayer?.mask, .person(invert: false))
+        XCTAssertTrue(cameraLayer?.effects.contains { $0.kind == .personKey } ?? false,
+                      "segmentation seeds a Person Key effect on the camera layer")
     }
 
     // MARK: - Reconciliation (user edits vs feature toggles)

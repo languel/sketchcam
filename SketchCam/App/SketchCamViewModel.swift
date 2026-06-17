@@ -466,13 +466,15 @@ final class SketchCamViewModel: ObservableObject {
                 // Segmentation runs when keying OR the silhouette contour
                 // needs it; the processor only keys when keying is on.
                 let contourWanted = settings.landmarks.enabled && settings.landmarks.trackContour
+                // v2: a Person Key effect anywhere in the layer stack needs the matte.
+                let personKeyWanted = settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
                 var segSettings = settings.segmentation
-                segSettings.enabled = settings.segmentation.enabled || contourWanted
+                segSettings.enabled = settings.segmentation.enabled || contourWanted || personKeyWanted
                 let rawMatte = self.segmentationService.currentMatte(
                     pixelBuffer: originalPixelBuffer,
                     settings: segSettings
                 )
-                let matte = settings.segmentation.enabled ? rawMatte : nil
+                let matte = (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let landmarkDrawingWanted = settings.landmarks.enabled
                 let detectionWanted = landmarkDrawingWanted
@@ -561,6 +563,15 @@ final class SketchCamViewModel: ObservableObject {
         }
     }
 
+    /// True when the reconciled layer graph contains an enabled Person Key effect
+    /// (so segmentation must run to supply the matte).
+    private static func graphWantsPersonMatte(_ settings: ProcessingSettings) -> Bool {
+        let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        return graph.layers.contains { layer in
+            layer.visible && layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte }
+        }
+    }
+
     /// Build the per-stream images and composite the graph on the GPU. Returns
     /// nil on any failure so the caller falls back to the CoreImage path.
     private func compositeOnGPU(_ gpu: MetalLayerCompositor, pixelBuffer: CVPixelBuffer,
@@ -584,7 +595,7 @@ final class SketchCamViewModel: ObservableObject {
             image: { node in
                 switch node.kind {
                 case .video, .movie:
-                    return settings.inputLayerEnabled ? cameraImage : nil
+                    return cameraImage   // v2: camera is always a layer (hide it with the eye)
                 case .solid(let cfg):
                     return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                                                   blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)

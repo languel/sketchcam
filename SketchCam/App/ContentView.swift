@@ -31,7 +31,6 @@ struct ContentView: View {
         case input = "Settings"
         case sources = "Sources"
         case layers = "Layers"
-        case background = "Background"
         case marks = "Marks"
         case yarn = "Yarn"
         case wrap = "Wrap"
@@ -49,7 +48,6 @@ struct ContentView: View {
             case .input: "gearshape"
             case .sources: "camera"
             case .layers: "square.3.layers.3d"
-            case .background: "photo"
             case .marks: "point.3.connected.trianglepath.dotted"
             case .yarn: "scribble.variable"
             case .wrap: "figure.stand"
@@ -307,7 +305,6 @@ struct ContentView: View {
                     case .input: inputTab
                     case .sources: sourcesTab
                     case .layers: layersTab
-                    case .background: backgroundTab
                     case .marks: marksTab
                     case .yarn: yarnTab
                     case .wrap: wrapTab
@@ -420,14 +417,6 @@ struct ContentView: View {
             SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, hint: "0 pauses")
         }
 
-        Toggle("Live input layer", isOn: $model.settings.inputLayerEnabled)
-            .onChange(of: model.settings.inputLayerEnabled) { _, enabled in
-                if !enabled, model.settings.backgroundMode == .live {
-                    model.settings.backgroundMode = .solid
-                }
-            }
-            .help("Whether the camera/movie source feeds the Camera layer. Off = the source isn't drawn (use a Background or other layers).")
-
         SectionHeader("Frame")
         Toggle("Mirror", isOn: $model.settings.mirror)
             .help("Mirror the source (selfie view). For a creative per-layer flip, add a Mirror effect to a layer instead.")
@@ -495,6 +484,8 @@ struct ContentView: View {
         Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
             .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
+        personMatteSection
+
         SectionHeader("Camera Extension")
         HStack {
             Button("Activate") { model.activateExtension() }
@@ -514,53 +505,22 @@ struct ContentView: View {
             .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
     }
 
-    // MARK: - Background tab
+    // (The legacy Background and Effect tabs are gone. v2: background is just a
+    // Solid layer in the stack; threshold/outline/blur/invert/mirror/person-key
+    // are per-layer effects. The shared person-matte quality lives in Settings;
+    // the frame-level Mirror + Test pattern toggles are in the Sources tab.)
 
-    @ViewBuilder private var backgroundTab: some View {
-        SectionHeader("Background")
-        Picker("Background", selection: $model.settings.backgroundMode) {
-            ForEach(BackgroundMode.allCases) { mode in
-                Text(mode.title).tag(mode)
+    @ViewBuilder private var personMatteSection: some View {
+        SectionHeader("Person Matte")
+        Picker("Quality", selection: $model.settings.segmentation.quality) {
+            ForEach(SegmentationQuality.allCases) { quality in
+                Text(quality.title).tag(quality)
             }
         }
         .pickerStyle(.segmented)
-        .labelsHidden()
-        ColorPicker("Color", selection: rgbaBinding(\.backgroundColor), supportsOpacity: true)
-            .disabled(model.settings.backgroundMode != .solid)
-
-        SectionHeader("Person Key")
-        Toggle("Person key (Vision)", isOn: $model.settings.segmentation.enabled)
-            .onChange(of: model.settings.segmentation.enabled) { _, enabled in
-                // Keying against a live background is a visual no-op;
-                // default to replacing the background when enabled.
-                if enabled, model.settings.backgroundMode == .live {
-                    model.settings.backgroundMode = .solid
-                }
-            }
-        Group {
-            Picker("Quality", selection: $model.settings.segmentation.quality) {
-                ForEach(SegmentationQuality.allCases) { quality in
-                    Text(quality.title).tag(quality)
-                }
-            }
-            .pickerStyle(.segmented)
-            Picker("Mode", selection: $model.settings.segmentation.mode) {
-                ForEach(SegmentationMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            Toggle("Invert key", isOn: $model.settings.segmentation.inverted)
-            if model.settings.segmentation.mode == .silhouette {
-                ColorPicker("Silhouette", selection: rgbaBinding(\.segmentation.silhouetteColor), supportsOpacity: true)
-            }
-        }
-        .disabled(!model.settings.segmentation.enabled)
+        Text("The shared Vision matte feeding any layer's Person Key effect.")
+            .font(.caption2).foregroundStyle(.secondary)
     }
-
-    // (The legacy Effect tab is gone — threshold/outline/blur/invert/mirror are
-    // now per-layer effects edited in the Layers panel's effect chain. The
-    // frame-level Mirror + Test pattern toggles moved to the Sources tab.)
 
     // MARK: - Marks tab
 
@@ -1696,7 +1656,7 @@ private struct EffectChainEditor: View {
         case .threshold: return 0.5
         case .outline: return 0.3
         case .blur: return 3
-        case .invert, .mirror: return 0
+        case .invert, .mirror, .personKey: return 0
         }
     }
 }
@@ -1749,6 +1709,11 @@ private struct EffectPanel: View {
             Toggle("Ink only (transparent paper)", isOn: $effect.inkOnly).controlSize(.small)
             Toggle("Invert", isOn: $effect.invert).controlSize(.small)
         }
+        if effect.kind == .personKey {
+            Toggle("Key out person (invert)", isOn: $effect.invert).controlSize(.small)
+            Text("Keeps only the person (Vision matte). Invert to drop the person and keep the background. Matte quality is in Settings ▸ Person Matte.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
         if effect.kind == .mirror || effect.kind == .invert {
             Text(effect.kind == .mirror ? "Flips this layer horizontally." : "Inverts this layer's colours.")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -1788,6 +1753,9 @@ private struct EffectPanel: View {
 private struct LayerStackEditor: View {
     @ObservedObject var model: SketchCamViewModel
     @State private var expanded: Set<UUID> = []
+    @State private var editingLayer: UUID?
+    @State private var editText: String = ""
+    @FocusState private var nameFieldFocused: Bool
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
     private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
@@ -1821,7 +1789,20 @@ private struct LayerStackEditor: View {
                         if let color = solidColor(layer) {
                             ColorPicker("", selection: color, supportsOpacity: false).labelsHidden()
                         }
-                        Text(name(layer)).frame(width: 64, alignment: .leading)
+                        if editingLayer == layer.id {
+                            TextField("", text: $editText)
+                                .textFieldStyle(.roundedBorder).frame(width: 80)
+                                .focused($nameFieldFocused)
+                                .onSubmit { commitRename(layer.id) }
+                        } else {
+                            Text(displayName(layer)).frame(width: 64, alignment: .leading)
+                                .help("Double-click to rename. The name lets other streams reference this layer as a source.")
+                                .onTapGesture(count: 2) {
+                                    editText = displayName(layer)
+                                    editingLayer = layer.id
+                                    DispatchQueue.main.async { nameFieldFocused = true }
+                                }
+                        }
                         Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
                             .help("Layer opacity")
                         Button { toggleExpanded(layer.id) } label: {
@@ -1848,8 +1829,12 @@ private struct LayerStackEditor: View {
                 }
             }
             Menu {
-                Button("Solid color") { addSolid() }
-                Divider()
+                Section("Sources") {
+                    Button("Camera") { addNode(.video, name: "Camera") }
+                    Button("Movie") { addNode(.movie, name: "Movie") }
+                    Button("Solid color") { addSolid() }
+                    Button("Paper") { addNode(.paper, name: "Paper") }
+                }
                 Section("Streams") {
                     Button("Drawing") { addStream(.drawing) }
                         .disabled(streamPresent(.drawing))
@@ -1888,18 +1873,21 @@ private struct LayerStackEditor: View {
         model.settings.useLayerGraph = true
     }
 
-    private func name(_ layer: Layer) -> String {
-        guard let node = model.settings.layerGraph?.node(layer.node) else { return "Layer" }
-        switch node.kind {
-        case .video: return "Camera"
-        case .movie: return "Movie"
-        case .solid: return node.managed ? "Background" : "Solid"
-        case .paper: return "Paper"
-        case .personMatte: return "Person"
-        case .overlay, .marks, .drawing: return "Drawing"
-        case .ink: return "Ink"
-        case .web: return "Web"
-        case .effect: return "Effect"
+    /// The layer's user-facing name (the node's name; renamable, defaults to the
+    /// stream kind). Other streams can reference a layer by this name as a source.
+    private func displayName(_ layer: Layer) -> String {
+        model.settings.layerGraph?.node(layer.node)?.name ?? "Layer"
+    }
+
+    private func commitRename(_ id: UUID) {
+        let trimmed = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+        editingLayer = nil
+        guard !trimmed.isEmpty else { return }
+        mutate { g in
+            if let layer = g.layers.first(where: { $0.id == id }),
+               let i = g.nodes.firstIndex(where: { $0.id == layer.node }) {
+                g.nodes[i].name = trimmed
+            }
         }
     }
 
@@ -1959,6 +1947,15 @@ private struct LayerStackEditor: View {
             model.settings.web.enabled = true
         }
         normalize()
+    }
+
+    /// Add a user-created (unmanaged) stream layer on top of the stack.
+    private func addNode(_ kind: NodeKind, name: String) {
+        let node = Node(name: name, kind: kind, managed: false)
+        mutate { g in
+            g.nodes.append(node)
+            g.layers.append(Layer(node: node.id))
+        }
     }
 
     private func addSolid() {

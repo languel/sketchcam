@@ -124,13 +124,14 @@ final class MetalEffects {
     /// Apply an ordered effect chain to `input`, leaving the result in `output`.
     /// `scratch` is a same-size working buffer for ping-ponging. Unknown/disabled
     /// effects are skipped; an empty chain copies input→output.
-    func applyChain(input: CVPixelBuffer, output: CVPixelBuffer, scratch: CVPixelBuffer, effects: [EffectConfig]) -> Bool {
+    func applyChain(input: CVPixelBuffer, output: CVPixelBuffer, scratch: CVPixelBuffer,
+                    effects: [EffectConfig], matte: CVPixelBuffer? = nil) -> Bool {
         let enabled = effects.filter { $0.enabled }
         guard !enabled.isEmpty else { return copy(input: input, output: output) }
         var src = input
         for (i, e) in enabled.enumerated() {
             let dst: CVPixelBuffer = (i % 2 == 0) ? scratch : output
-            guard apply(e, input: src, output: dst) else { return false }
+            guard apply(e, input: src, output: dst, matte: matte) else { return false }
             src = dst
         }
         // If the last write landed in scratch, mirror it into output.
@@ -138,7 +139,7 @@ final class MetalEffects {
         return true
     }
 
-    private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
+    private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer, matte: CVPixelBuffer?) -> Bool {
         switch e.kind {
         case .threshold:
             return threshold(input: input, output: output, threshold: e.amount, invert: e.invert, inkOnly: e.inkOnly)
@@ -151,6 +152,11 @@ final class MetalEffects {
             return invert(input: input, output: output)
         case .mirror:
             return mirror(input: input, output: output)
+        case .personKey:
+            // Key to the person matte (invert = key the person OUT). Without a
+            // matte (segmentation idle), pass through rather than blanking.
+            guard let matte else { return copy(input: input, output: output) }
+            return mask(content: input, matte: matte, output: output, mode: .luma, level: 0.5, invert: e.invert)
         }
     }
 

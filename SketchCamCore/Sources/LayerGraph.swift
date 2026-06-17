@@ -88,7 +88,7 @@ public struct SolidConfig: Codable, Sendable, Equatable {
 /// A single struct carries the params for every effect kind; only the fields
 /// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
 public enum EffectKind: String, Codable, Sendable, CaseIterable {
-    case threshold, outline, blur, invert, mirror
+    case threshold, outline, blur, invert, mirror, personKey
 
     public var title: String {
         switch self {
@@ -97,6 +97,7 @@ public enum EffectKind: String, Codable, Sendable, CaseIterable {
         case .blur: return "Blur"
         case .invert: return "Invert"
         case .mirror: return "Mirror"
+        case .personKey: return "Person Key"
         }
     }
 
@@ -104,6 +105,9 @@ public enum EffectKind: String, Codable, Sendable, CaseIterable {
     public var usesAmount: Bool { self == .threshold || self == .outline || self == .blur }
     public var usesColor: Bool { self == .outline }
     public var usesThresholdOptions: Bool { self == .threshold }
+    public var usesInvert: Bool { self == .personKey }   // invert = key out the person
+    /// Effects that need the shared person matte plumbed into the chain.
+    public var needsPersonMatte: Bool { self == .personKey }
 }
 
 public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
@@ -397,18 +401,16 @@ public extension LayerGraph {
         var nodes: [Node] = []
         var layers: [Layer] = []
         let l = settings.landmarks
-        // Person key currently masks only the video layer (the marks/drawing
-        // overlay and ink/web are composited un-keyed in today's pipeline).
-        let personMask: MaskBinding? = settings.segmentation.enabled ? .person(invert: false) : nil
 
         func emit(_ node: Node, mask: MaskBinding? = nil, effects: [EffectConfig] = []) {
             nodes.append(node)
             layers.append(Layer(node: node.id, mask: mask, effects: effects))
         }
 
-        // Re-home the legacy global effect flags onto the camera layer's chain
-        // (the GPU compositor consumes per-layer effects; the legacy CoreImage
-        // path ignores them and applies its own).
+        // Re-home the legacy global flags onto the camera layer's effect chain
+        // (v2: threshold/outline and the person key are per-layer effects; the
+        // legacy CoreImage path ignores them and applies its own). Person key is
+        // an effect now, not a global toggle — seed it from segmentation.enabled.
         var cameraEffects: [EffectConfig] = []
         if settings.effectsEnabled {
             if settings.thresholdEnabled {
@@ -420,14 +422,15 @@ public extension LayerGraph {
                                                   color: settings.outlineColor, thickness: settings.outlineThickness))
             }
         }
-
-        // Bottom→top, matching the legacy compositor exactly:
-        //   [background] → video → web-behind → ink-behind → marks+drawing
-        //   → ink-above → web-above
-        if settings.backgroundMode != .live {
-            emit(Node(name: "Background", kind: .solid(SolidConfig(color: settings.backgroundColor))))
+        if settings.segmentation.enabled {
+            cameraEffects.append(EffectConfig(kind: .personKey, invert: settings.segmentation.inverted))
         }
-        emit(Node(name: "Camera", kind: .video), mask: personMask, effects: cameraEffects)
+
+        // v2: the layer stack is the only source of truth. No global background /
+        // live-input injection — the Camera is always a layer (hide it with the
+        // eye; add a Solid layer for a background). Bottom→top order matches the
+        // legacy movable-layer order for the overlay/ink/web families.
+        emit(Node(name: "Camera", kind: .video), effects: cameraEffects)
 
         if settings.web.enabled, settings.web.placement == .behindDrawing {
             emit(Node(name: "Web", kind: .web))
