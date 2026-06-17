@@ -88,7 +88,22 @@ public struct SolidConfig: Codable, Sendable, Equatable {
 /// A single struct carries the params for every effect kind; only the fields
 /// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
 public enum EffectKind: String, Codable, Sendable, CaseIterable {
-    case threshold, outline, invert, blur
+    case threshold, outline, blur, invert, mirror
+
+    public var title: String {
+        switch self {
+        case .threshold: return "Threshold"
+        case .outline: return "Outline"
+        case .blur: return "Blur"
+        case .invert: return "Invert"
+        case .mirror: return "Mirror"
+        }
+    }
+
+    /// Which parameter controls this kind shows in the editor.
+    public var usesAmount: Bool { self == .threshold || self == .outline || self == .blur }
+    public var usesColor: Bool { self == .outline }
+    public var usesThresholdOptions: Bool { self == .threshold }
 }
 
 public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
@@ -460,12 +475,13 @@ public extension LayerGraph {
             } else if let f = family(self, layer), desiredFamilies.contains(f),
                       let dLayer = desired.layers.first(where: { family(desired, $0) == f }),
                       let dNode = desired.node(dLayer.node) {
-                // Managed layer kept: refresh the feature-derived fields (kind /
-                // effects / mask, which the legacy tabs still own until per-layer
-                // editing lands) from the desired graph, but keep the user's
-                // arrangement (order / visibility / opacity / blend) and identity.
+                // Managed layer kept: refresh the still-feature-derived fields
+                // (kind for bg colour; mask for the Person tab) from the desired
+                // graph, but PRESERVE the user-owned effect chain and the user's
+                // arrangement (order / visibility / opacity / blend) + identity.
+                // Effects are seeded once by defaultGraph and then edited per-layer.
                 var mergedNode = node; mergedNode.kind = dNode.kind
-                var mergedLayer = layer; mergedLayer.effects = dLayer.effects; mergedLayer.mask = dLayer.mask
+                var mergedLayer = layer; mergedLayer.mask = dLayer.mask
                 resultNodes.append(mergedNode); resultLayers.append(mergedLayer); keptFamilies.append(f)
             }
             // else: a managed layer whose feature was disabled → dropped.

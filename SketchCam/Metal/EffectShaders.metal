@@ -139,6 +139,26 @@ kernel void effect_composite_op(texture2d<float, access::read> baseTex [[texture
     outTex.write(o + b * (1.0 - o.a), gid);
 }
 
+// Invert colour (premultiplied-aware): un-premultiply, 1−rgb, re-premultiply.
+kernel void effect_invert(texture2d<float, access::read> inTex [[texture(0)]],
+                          texture2d<float, access::write> outTex [[texture(1)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 c = inTex.read(gid);
+    float3 rgb = c.a > 0.0 ? c.rgb / c.a : c.rgb;
+    rgb = 1.0 - rgb;
+    outTex.write(float4(rgb * c.a, c.a), gid);
+}
+
+// Mirror horizontally (flip x).
+kernel void effect_mirror(texture2d<float, access::read> inTex [[texture(0)]],
+                          texture2d<float, access::write> outTex [[texture(1)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+    uint w = outTex.get_width();
+    if (gid.x >= w || gid.y >= outTex.get_height()) return;
+    outTex.write(inTex.read(uint2(w - 1 - gid.x, gid.y)), gid);
+}
+
 // Apply a matte (from another stream) to a layer's content. mode: 0=luma,
 // 1=threshold, 2=invThreshold; invert flips the final matte. Premultiplied
 // content is scaled by the matte value, masking both colour and alpha.

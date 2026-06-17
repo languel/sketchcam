@@ -26,6 +26,8 @@ final class MetalEffects {
     private let compositePSO: MTLComputePipelineState
     private let compositeOpPSO: MTLComputePipelineState
     private let maskPSO: MTLComputePipelineState
+    private let invertPSO: MTLComputePipelineState
+    private let mirrorPSO: MTLComputePipelineState
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -38,7 +40,8 @@ final class MetalEffects {
         guard let t = pso("effect_threshold"), let o = pso("effect_outline"),
               let m = pso("effect_morphology"), let b = pso("effect_box_blur"),
               let c = pso("effect_composite"), let co = pso("effect_composite_op"),
-              let mk = pso("effect_mask") else { return nil }
+              let mk = pso("effect_mask"), let iv = pso("effect_invert"),
+              let mir = pso("effect_mirror") else { return nil }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         self.device = device
@@ -46,6 +49,7 @@ final class MetalEffects {
         self.textureCache = cache
         self.thresholdPSO = t; self.outlinePSO = o; self.morphPSO = m; self.blurPSO = b
         self.compositePSO = c; self.compositeOpPSO = co; self.maskPSO = mk
+        self.invertPSO = iv; self.mirrorPSO = mir
     }
 
     // MARK: - Public ops (each runs on its own command buffer, synchronous)
@@ -80,6 +84,16 @@ final class MetalEffects {
         guard let inTex = texture(input), let outTex = texture(output) else { return false }
         var params = BlurParams(radius: Int32(radius))
         return run(blurPSO, textures: [inTex, outTex], bytes: &params, length: MemoryLayout<BlurParams>.stride, grid: outTex)
+    }
+
+    func invert(input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
+        guard let inTex = texture(input), let outTex = texture(output) else { return false }
+        return run(invertPSO, textures: [inTex, outTex], bytes: nil, length: 0, grid: outTex)
+    }
+
+    func mirror(input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
+        guard let inTex = texture(input), let outTex = texture(output) else { return false }
+        return run(mirrorPSO, textures: [inTex, outTex], bytes: nil, length: 0, grid: outTex)
     }
 
     func composite(base: CVPixelBuffer, overlay: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
@@ -134,9 +148,9 @@ final class MetalEffects {
         case .blur:
             return blur(input: input, output: output, radius: Int(e.amount.rounded()))
         case .invert:
-            // No dedicated invert kernel yet — threshold(invert) covers the common
-            // case; pass through until a colour-invert kernel lands.
-            return copy(input: input, output: output)
+            return invert(input: input, output: output)
+        case .mirror:
+            return mirror(input: input, output: output)
         }
     }
 

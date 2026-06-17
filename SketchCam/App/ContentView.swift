@@ -1677,34 +1677,195 @@ private struct RGBAColorPicker: View {
 /// The Layers panel (Phase 3a): reorder / show-hide / opacity for the composited
 /// layers, driving `settings.layerGraph`. Reorder is via up/down buttons (drag
 /// reordering inside a non-List settings panel is unreliable on macOS).
+/// A per-layer effect chain: an ordered list of collapsible effect panels
+/// (Blender-modifier style) plus an Add menu.
+private struct EffectChainEditor: View {
+    @Binding var effects: [EffectConfig]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(effects.enumerated()), id: \.element.id) { idx, effect in
+                EffectPanel(
+                    effect: binding(effect.id),
+                    canMoveUp: idx > 0,
+                    canMoveDown: idx < effects.count - 1,
+                    onMoveUp: { if idx > 0 { effects.swapAt(idx, idx - 1) } },
+                    onMoveDown: { if idx < effects.count - 1 { effects.swapAt(idx, idx + 1) } },
+                    onDelete: { effects.removeAll { $0.id == effect.id } }
+                )
+            }
+            Menu {
+                ForEach(EffectKind.allCases, id: \.self) { kind in
+                    Button(kind.title) { effects.append(EffectConfig(kind: kind, amount: defaultAmount(kind))) }
+                }
+            } label: {
+                Label("Add effect", systemImage: "plus.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+        }
+    }
+
+    private func binding(_ id: UUID) -> Binding<EffectConfig> {
+        Binding(
+            get: { effects.first { $0.id == id } ?? EffectConfig(kind: .invert) },
+            set: { v in if let i = effects.firstIndex(where: { $0.id == id }) { effects[i] = v } }
+        )
+    }
+
+    private func defaultAmount(_ k: EffectKind) -> Float {
+        switch k {
+        case .threshold: return 0.5
+        case .outline: return 0.3
+        case .blur: return 3
+        case .invert, .mirror: return 0
+        }
+    }
+}
+
+private struct EffectPanel: View {
+    @Binding var effect: EffectConfig
+    @State private var open = true
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Button { open.toggle() } label: {
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                Toggle("", isOn: $effect.enabled).labelsHidden().toggleStyle(.checkbox)
+                Text(effect.kind.title).font(.caption).bold()
+                Spacer()
+                Button { onMoveUp() } label: { Image(systemName: "chevron.up") }
+                    .buttonStyle(.borderless).disabled(!canMoveUp)
+                Button { onMoveDown() } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless).disabled(!canMoveDown)
+                Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+            }
+            if open { params }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+        .opacity(effect.enabled ? 1 : 0.5)
+    }
+
+    @ViewBuilder private var params: some View {
+        if effect.kind.usesAmount {
+            HStack {
+                Text(amountLabel).font(.caption2).frame(width: 56, alignment: .leading)
+                Slider(value: $effect.amount, in: amountRange).controlSize(.small)
+                Text(String(format: "%.2f", effect.amount)).font(.caption2).frame(width: 32)
+            }
+        }
+        if effect.kind.usesColor {
+            ColorPicker("Stroke", selection: colorBinding, supportsOpacity: true).controlSize(.small)
+        }
+        if effect.kind.usesThresholdOptions {
+            Toggle("Ink only (transparent paper)", isOn: $effect.inkOnly).controlSize(.small)
+            Toggle("Invert", isOn: $effect.invert).controlSize(.small)
+        }
+        if effect.kind == .mirror || effect.kind == .invert {
+            Text(effect.kind == .mirror ? "Flips this layer horizontally." : "Inverts this layer's colours.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private var amountLabel: String {
+        switch effect.kind {
+        case .threshold: return "Level"
+        case .outline: return "Strength"
+        case .blur: return "Radius"
+        default: return "Amount"
+        }
+    }
+    private var amountRange: ClosedRange<Float> {
+        switch effect.kind {
+        case .threshold: return 0...1
+        case .outline: return 0...2
+        case .blur: return 0...20
+        default: return 0...1
+        }
+    }
+    private var colorBinding: Binding<Color> {
+        Binding(
+            get: { Color(.sRGB, red: Double(effect.color.red), green: Double(effect.color.green),
+                         blue: Double(effect.color.blue), opacity: Double(effect.color.alpha)) },
+            set: { newValue in
+                if let ns = NSColor(newValue).usingColorSpace(.sRGB) {
+                    effect.color = RGBAColor(red: Float(ns.redComponent), green: Float(ns.greenComponent),
+                                             blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))
+                }
+            }
+        )
+    }
+}
+
 private struct LayerStackEditor: View {
     @ObservedObject var model: SketchCamViewModel
+    @State private var expanded: Set<UUID> = []
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
     private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
 
+    private func toggleExpanded(_ id: UUID) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
+
+    /// A binding to a layer's effect chain by layer id.
+    private func effectsBinding(_ id: UUID) -> Binding<[EffectConfig]> {
+        Binding(
+            get: { model.settings.layerGraph?.layers.first { $0.id == id }?.effects ?? [] },
+            set: { newValue in
+                mutate { g in
+                    if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].effects = newValue }
+                }
+            }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
-                HStack(spacing: 8) {
-                    Button { toggleVisible(layer.id) } label: {
-                        Image(systemName: layer.visible ? "eye" : "eye.slash")
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Button { toggleVisible(layer.id) } label: {
+                            Image(systemName: layer.visible ? "eye" : "eye.slash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(layer.visible ? "Hide layer" : "Show layer")
+                        if let color = solidColor(layer) {
+                            ColorPicker("", selection: color, supportsOpacity: false).labelsHidden()
+                        }
+                        Text(name(layer)).frame(width: 64, alignment: .leading)
+                        Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
+                            .help("Layer opacity")
+                        Button { toggleExpanded(layer.id) } label: {
+                            Image(systemName: expanded.contains(layer.id) ? "chevron.down.circle.fill" : "chevron.down.circle")
+                            if layer.effects.isEmpty == false {
+                                Text("\(layer.effects.count)").font(.caption2)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Effect chain for this layer")
+                        Button { move(layer.id, towardTop: true) } label: { Image(systemName: "chevron.up") }
+                            .buttonStyle(.borderless).disabled(display == 0)
+                        Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
+                            .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
+                        if isUserCreated(layer) {
+                            Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless).help("Delete layer")
+                        }
                     }
-                    .buttonStyle(.borderless)
-                    .help(layer.visible ? "Hide layer" : "Show layer")
-                    if let color = solidColor(layer) {
-                        ColorPicker("", selection: color, supportsOpacity: false).labelsHidden()
-                    }
-                    Text(name(layer)).frame(width: 70, alignment: .leading)
-                    Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
-                        .help("Layer opacity")
-                    Button { move(layer.id, towardTop: true) } label: { Image(systemName: "chevron.up") }
-                        .buttonStyle(.borderless).disabled(display == 0)
-                    Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
-                        .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
-                    if isUserCreated(layer) {
-                        Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
-                            .buttonStyle(.borderless).help("Delete layer")
+                    if expanded.contains(layer.id) {
+                        EffectChainEditor(effects: effectsBinding(layer.id))
+                            .padding(.leading, 20)
                     }
                 }
             }
