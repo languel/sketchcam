@@ -1609,6 +1609,75 @@ private struct RGBAColorPicker: View {
 /// The Layers panel (Phase 3a): reorder / show-hide / opacity for the composited
 /// layers, driving `settings.layerGraph`. Reorder is via up/down buttons (drag
 /// reordering inside a non-List settings panel is unreliable on macOS).
+/// The mask control at the top of a layer panel: pick a matte source (None /
+/// Person / another named stream) and, when set, the keying mode + invert.
+private struct MaskEditor: View {
+    @Binding var mask: MaskBinding?
+    /// Other layers that can serve as a matte (node id + display name).
+    let sources: [(id: UUID, name: String)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Mask").font(.caption).foregroundStyle(.secondary)
+                Menu(currentLabel) {
+                    Button("None") { mask = nil }
+                    Button("Person matte") { setSource(.source(.personMatte)) }
+                    if !sources.isEmpty {
+                        Divider()
+                        ForEach(sources, id: \.id) { src in
+                            Button(src.name) { setSource(.node(src.id)) }
+                        }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            if mask != nil {
+                Picker("Mode", selection: modeBinding) {
+                    Text("Luma").tag(MaskBinding.Mode.luma)
+                    Text("Threshold").tag(MaskBinding.Mode.threshold)
+                    Text("Inv").tag(MaskBinding.Mode.invThreshold)
+                }
+                .pickerStyle(.segmented).controlSize(.small)
+                if mask?.mode != .luma {
+                    HStack {
+                        Text("Level").font(.caption2).frame(width: 56, alignment: .leading)
+                        Slider(value: levelBinding, in: 0...1).controlSize(.small)
+                    }
+                }
+                Toggle("Invert matte", isOn: invertBinding).controlSize(.small)
+            }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+    }
+
+    private var currentLabel: String {
+        guard let mask else { return "None" }
+        switch mask.source {
+        case .none: return "None"
+        case .source(let s): return s == .personMatte ? "Person matte" : "Source"
+        case .node(let id): return sources.first { $0.id == id }?.name ?? "Layer"
+        }
+    }
+
+    private func setSource(_ source: PortBinding) {
+        if var m = mask { m.source = source; mask = m }
+        else { mask = MaskBinding(source: source) }
+    }
+
+    private var modeBinding: Binding<MaskBinding.Mode> {
+        Binding(get: { mask?.mode ?? .luma }, set: { v in if var m = mask { m.mode = v; mask = m } })
+    }
+    private var levelBinding: Binding<Float> {
+        Binding(get: { mask?.level ?? 0.5 }, set: { v in if var m = mask { m.level = v; mask = m } })
+    }
+    private var invertBinding: Binding<Bool> {
+        Binding(get: { mask?.invert ?? false }, set: { v in if var m = mask { m.invert = v; mask = m } })
+    }
+}
+
 /// A per-layer effect chain: an ordered list of collapsible effect panels
 /// (Blender-modifier style) plus an Add menu.
 private struct EffectChainEditor: View {
@@ -1776,6 +1845,27 @@ private struct LayerStackEditor: View {
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
     }
 
+    /// A binding to a layer's mask by layer id.
+    private func maskBinding(_ id: UUID) -> Binding<MaskBinding?> {
+        Binding(
+            get: { model.settings.layerGraph?.layers.first { $0.id == id }?.mask },
+            set: { newValue in
+                mutate { g in
+                    if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].mask = newValue }
+                }
+            }
+        )
+    }
+
+    /// Other layers usable as a matte source for the given layer (node id + name).
+    private func maskSources(excluding id: UUID) -> [(id: UUID, name: String)] {
+        guard let g = model.settings.layerGraph else { return [] }
+        return g.layers.compactMap { layer in
+            guard layer.id != id, let node = g.node(layer.node) else { return nil }
+            return (id: node.id, name: node.name)
+        }
+    }
+
     /// A binding to a layer's effect chain by layer id.
     private func effectsBinding(_ id: UUID) -> Binding<[EffectConfig]> {
         Binding(
@@ -1835,9 +1925,12 @@ private struct LayerStackEditor: View {
                         }
                     }
                     if expanded.contains(layer.id) {
-                        EffectChainEditor(effects: effectsBinding(layer.id),
-                                          personMatteQuality: $model.settings.segmentation.quality)
-                            .padding(.leading, 20)
+                        VStack(alignment: .leading, spacing: 4) {
+                            MaskEditor(mask: maskBinding(layer.id), sources: maskSources(excluding: layer.id))
+                            EffectChainEditor(effects: effectsBinding(layer.id),
+                                              personMatteQuality: $model.settings.segmentation.quality)
+                        }
+                        .padding(.leading, 20)
                     }
                 }
             }
