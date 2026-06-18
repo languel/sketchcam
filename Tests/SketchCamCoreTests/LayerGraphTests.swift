@@ -115,6 +115,7 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(paper.grainStrength, 0.45, accuracy: 0.0001)
         XCTAssertEqual(paper.grainScaleX, 0.12, accuracy: 0.0001)
         XCTAssertEqual(paper.vignetteStrength, 0.16, accuracy: 0.0001)
+        XCTAssertEqual(paper.saturation, 1, accuracy: 0.0001)
     }
 
     func testLegacyPaperConfigDecodesWithResolvedDefaults() throws {
@@ -123,6 +124,7 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(paper.resolved.grainStrength, 0.6, accuracy: 0.0001)
         XCTAssertEqual(paper.resolved.fiberScaleX, 0.0275, accuracy: 0.0001)
         XCTAssertEqual(paper.resolved.seed, 0)
+        XCTAssertEqual(paper.resolved.saturation, 1, accuracy: 0.0001)
     }
 
     func testCodableRoundTripWithEffectsAndStreamMask() throws {

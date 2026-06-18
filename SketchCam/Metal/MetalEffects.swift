@@ -129,6 +129,7 @@ final class MetalEffects {
         case .lighten: return 6
         case .difference: return 7
         case .subtract: return 8
+        case .softLight: return 9
         case .hue, .saturation, .color, .luminosity:
             return 0
         }

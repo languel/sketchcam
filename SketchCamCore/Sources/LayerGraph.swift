@@ -39,7 +39,17 @@ public enum SourceID: String, Codable, Sendable, CaseIterable {
 /// them incrementally (normal/multiply/screen first).
 public enum BlendMode: String, Codable, Sendable, CaseIterable {
     case normal, multiply, screen, add, overlay, darken, lighten
-    case difference, subtract, hue, saturation, color, luminosity
+    case difference, subtract, softLight, hue, saturation, color, luminosity
+}
+
+public enum InkPaperCompositeMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    case none, normal, multiply, screen, add, overlay, darken, lighten, difference, subtract, softLight
+
+    public var id: String { rawValue }
+
+    public var blendMode: BlendMode? {
+        self == .none ? nil : BlendMode(rawValue: rawValue)
+    }
 }
 
 /// Per-layer mask (v2). The matte comes from another *stream* (or the built-in
@@ -126,6 +136,7 @@ public struct PaperConfig: Codable, Sendable, Equatable {
     public var scale: Float
     public var texture: PaperTexture
     public var contrast: Float?
+    public var saturation: Float?
     public var fiberStrength: Float?
     public var fiberScaleX: Float?
     public var fiberScaleY: Float?
@@ -144,6 +155,7 @@ public struct PaperConfig: Codable, Sendable, Equatable {
         scale: Float = 1,
         texture: PaperTexture = .fiber,
         contrast: Float? = 1,
+        saturation: Float? = 1,
         fiberStrength: Float? = 0.05,
         fiberScaleX: Float? = 0.055,
         fiberScaleY: Float? = 0.055,
@@ -161,6 +173,7 @@ public struct PaperConfig: Codable, Sendable, Equatable {
         self.scale = scale
         self.texture = texture
         self.contrast = contrast
+        self.saturation = saturation
         self.fiberStrength = fiberStrength
         self.fiberScaleX = fiberScaleX
         self.fiberScaleY = fiberScaleY
@@ -183,6 +196,7 @@ public struct PaperConfig: Codable, Sendable, Equatable {
         return ResolvedPaperConfig(
             tintRed: tint.red, tintGreen: tint.green, tintBlue: tint.blue, tintAlpha: tint.alpha,
             contrast: contrast ?? 1,
+            saturation: saturation ?? 1,
             fiberStrength: fiberStrength ?? legacyFiber,
             fiberScaleX: fiberScaleX ?? (0.055 / legacyScale),
             fiberScaleY: fiberScaleY ?? (0.055 / legacyScale),
@@ -205,6 +219,7 @@ public struct ResolvedPaperConfig: Hashable, Sendable {
     public var tintBlue: Float
     public var tintAlpha: Float
     public var contrast: Float
+    public var saturation: Float
     public var fiberStrength: Float
     public var fiberScaleX: Float
     public var fiberScaleY: Float

@@ -502,6 +502,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Independent cached Metal substrate recipe. Nil preserves legacy Ink
     /// paper settings when decoding older presets.
     public var inkPaperConfig: PaperConfig?
+    /// How cached procedural paper combines with a routed Ink substrate.
+    public var inkPaperCompositeMode: InkPaperCompositeMode?
     public var inkWashStrength: Float
     public var inkCurveFit: CurveFit
     public var inkBrushMode: InkBrushMode?
@@ -649,6 +651,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperOpacity: Float? = 1,
         inkPaperGrain: Float = 0.45,
         inkPaperConfig: PaperConfig? = .metalDefault,
+        inkPaperCompositeMode: InkPaperCompositeMode? = .multiply,
         inkWashStrength: Float = 0.9,
         inkCurveFit: CurveFit = .hobby,
         inkBrushMode: InkBrushMode? = .pen,
@@ -769,6 +772,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperOpacity = inkPaperOpacity
         self.inkPaperGrain = inkPaperGrain
         self.inkPaperConfig = inkPaperConfig
+        self.inkPaperCompositeMode = inkPaperCompositeMode
         self.inkWashStrength = inkWashStrength
         self.inkCurveFit = inkCurveFit
         self.inkBrushMode = inkBrushMode

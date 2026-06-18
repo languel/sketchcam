@@ -129,6 +129,11 @@ kernel void effect_composite(texture2d<float, access::read> baseTex [[texture(0)
 // Source-over with a layer opacity (premultiplied overlay scaled by opacity)
 // and common straight-colour blend modes.
 struct CompositeParams { float opacity; uint blendMode; };
+static float soft_light_channel(float b, float o) {
+    if (o <= 0.5) return b - (1.0 - 2.0 * o) * b * (1.0 - b);
+    float d = b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : sqrt(b);
+    return b + (2.0 * o - 1.0) * (d - b);
+}
 static float3 blend_color(float3 b, float3 o, uint mode) {
     switch (mode) {
         case 1: return b * o;                                      // multiply
@@ -139,6 +144,7 @@ static float3 blend_color(float3 b, float3 o, uint mode) {
         case 6: return max(b, o);                                  // lighten
         case 7: return abs(b - o);                                 // difference
         case 8: return max(b - o, 0.0);                            // subtract
+        case 9: return float3(soft_light_channel(b.r, o.r), soft_light_channel(b.g, o.g), soft_light_channel(b.b, o.b));
         default: return o;                                         // normal / unsupported HSL modes
     }
 }
