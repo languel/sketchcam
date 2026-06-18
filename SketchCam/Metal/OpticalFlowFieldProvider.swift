@@ -157,11 +157,11 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
         current: CVPixelBuffer,
         quality: ControlFieldUpdateQuality
     ) -> SIMD2<Float>? {
-        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: current, options: [:])
+        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: previous, options: [:])
         request.computationAccuracy = quality == .high ? .medium : .low
         request.outputPixelFormat = kCVPixelFormatType_TwoComponent16Half
         request.keepNetworkOutput = false
-        let handler = VNImageRequestHandler(cvPixelBuffer: previous, options: [:])
+        let handler = VNImageRequestHandler(cvPixelBuffer: current, options: [:])
         guard (try? handler.perform([request])) != nil,
               let flow = request.results?.first?.pixelBuffer else { return nil }
         CVPixelBufferLockBaseAddress(flow, .readOnly)
@@ -225,11 +225,11 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
         let accuracy: VNGenerateOpticalFlowRequest.ComputationAccuracy = quality == .high ? .medium : .low
         visionQueue.async { [weak self] in
             guard let self else { return }
-            let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: work.current, options: [:])
+            let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: work.previous, options: [:])
             request.computationAccuracy = accuracy
             request.outputPixelFormat = kCVPixelFormatType_TwoComponent16Half
             request.keepNetworkOutput = false
-            let handler = VNImageRequestHandler(cvPixelBuffer: work.previous, options: [:])
+            let handler = VNImageRequestHandler(cvPixelBuffer: work.current, options: [:])
             let result: CVPixelBuffer? = (try? handler.perform([request])).flatMap { request.results?.first?.pixelBuffer }
             self.lock.withLock {
                 self.requestInFlight = false

@@ -87,7 +87,6 @@ final class ControlFieldCoordinator {
         #if DEBUG
         runDisabledPathSelfCheck()
         TrackedMotionFieldProvider.runDeterministicSelfCheck(device: device, store: store)
-        OpticalFlowFieldProvider.runSyntheticTranslationSelfCheck(device: device)
         #endif
     }
 
