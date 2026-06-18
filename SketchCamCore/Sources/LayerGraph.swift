@@ -148,6 +148,15 @@ public struct PaperConfig: Codable, Sendable, Equatable {
     public var grainScaleY: Float?
     public var seed: Int?
     public var vignetteStrength: Float?
+    /// Physical response controls are optional so papers saved before the
+    /// simulation fields existed retain the original material behavior.
+    public var response: Float?
+    public var variation: Float?
+    public var absorbency: Float?
+    public var drag: Float?
+    public var resist: Float?
+    public var resistThreshold: Float?
+    public var resistSoftness: Float?
 
     public init(
         tint: RGBAColor = RGBAColor(red: 0.962, green: 0.954, blue: 0.930, alpha: 1),
@@ -166,7 +175,14 @@ public struct PaperConfig: Codable, Sendable, Equatable {
         grainScaleX: Float? = 0.12,
         grainScaleY: Float? = 0.12,
         seed: Int? = 0,
-        vignetteStrength: Float? = 0.16
+        vignetteStrength: Float? = 0.16,
+        response: Float? = 1,
+        variation: Float? = 1,
+        absorbency: Float? = 1,
+        drag: Float? = 1,
+        resist: Float? = 1,
+        resistThreshold: Float? = 0.5,
+        resistSoftness: Float? = 0.1
     ) {
         self.tint = tint
         self.grain = grain
@@ -185,6 +201,13 @@ public struct PaperConfig: Codable, Sendable, Equatable {
         self.grainScaleY = grainScaleY
         self.seed = seed
         self.vignetteStrength = vignetteStrength
+        self.response = response
+        self.variation = variation
+        self.absorbency = absorbency
+        self.drag = drag
+        self.resist = resist
+        self.resistThreshold = resistThreshold
+        self.resistSoftness = resistSoftness
     }
 
     public static let metalDefault = PaperConfig()
@@ -208,7 +231,14 @@ public struct PaperConfig: Codable, Sendable, Equatable {
             grainScaleX: grainScaleX ?? (0.12 / legacyScale),
             grainScaleY: grainScaleY ?? (0.12 / legacyScale),
             seed: seed ?? 0,
-            vignetteStrength: vignetteStrength ?? 0.16
+            vignetteStrength: vignetteStrength ?? 0.16,
+            response: response ?? 1,
+            variation: variation ?? 1,
+            absorbency: absorbency ?? 1,
+            drag: drag ?? 1,
+            resist: resist ?? 1,
+            resistThreshold: resistThreshold ?? 0.5,
+            resistSoftness: resistSoftness ?? 0.1
         )
     }
 }
@@ -232,6 +262,13 @@ public struct ResolvedPaperConfig: Hashable, Sendable {
     public var grainScaleY: Float
     public var seed: Int
     public var vignetteStrength: Float
+    public var response: Float
+    public var variation: Float
+    public var absorbency: Float
+    public var drag: Float
+    public var resist: Float
+    public var resistThreshold: Float
+    public var resistSoftness: Float
 }
 
 /// One entry in a layer's ordered effect chain (v2 — per-layer effects).

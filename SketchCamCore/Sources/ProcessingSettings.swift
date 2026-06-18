@@ -513,6 +513,12 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkPaperConfig: PaperConfig?
     /// How cached procedural paper combines with a routed Ink substrate.
     public var inkPaperCompositeMode: InkPaperCompositeMode?
+    public var inkPaperInfluence: Float?
+    public var inkLiveSurfaceInfluence: Float?
+    public var inkMotionForce: Float?
+    public var inkLiveAbsorbency: Float?
+    public var inkLiveDrag: Float?
+    public var inkLiveResist: Float?
     public var inkWashStrength: Float
     public var inkCurveFit: CurveFit
     public var inkBrushMode: InkBrushMode?
@@ -661,6 +667,12 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperGrain: Float = 0.45,
         inkPaperConfig: PaperConfig? = .metalDefault,
         inkPaperCompositeMode: InkPaperCompositeMode? = .multiply,
+        inkPaperInfluence: Float? = 0,
+        inkLiveSurfaceInfluence: Float? = 0,
+        inkMotionForce: Float? = 0,
+        inkLiveAbsorbency: Float? = 0,
+        inkLiveDrag: Float? = 0.5,
+        inkLiveResist: Float? = 1,
         inkWashStrength: Float = 0.9,
         inkCurveFit: CurveFit = .hobby,
         inkBrushMode: InkBrushMode? = .pen,
@@ -782,6 +794,12 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperGrain = inkPaperGrain
         self.inkPaperConfig = inkPaperConfig
         self.inkPaperCompositeMode = inkPaperCompositeMode
+        self.inkPaperInfluence = inkPaperInfluence
+        self.inkLiveSurfaceInfluence = inkLiveSurfaceInfluence
+        self.inkMotionForce = inkMotionForce
+        self.inkLiveAbsorbency = inkLiveAbsorbency
+        self.inkLiveDrag = inkLiveDrag
+        self.inkLiveResist = inkLiveResist
         self.inkWashStrength = inkWashStrength
         self.inkCurveFit = inkCurveFit
         self.inkBrushMode = inkBrushMode
@@ -822,6 +840,13 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.contourStyle = contourStyle
         self.bodyHullStyle = bodyHullStyle
     }
+
+    public var resolvedInkPaperInfluence: Float { inkPaperInfluence ?? 0 }
+    public var resolvedInkLiveSurfaceInfluence: Float { inkLiveSurfaceInfluence ?? 0 }
+    public var resolvedInkMotionForce: Float { inkMotionForce ?? 0 }
+    public var resolvedInkLiveAbsorbency: Float { inkLiveAbsorbency ?? 0 }
+    public var resolvedInkLiveDrag: Float { inkLiveDrag ?? 0.5 }
+    public var resolvedInkLiveResist: Float { inkLiveResist ?? 1 }
 }
 
 /// Plain-value color (no AppKit dependency in Core).

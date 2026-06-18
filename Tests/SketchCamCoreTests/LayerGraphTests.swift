@@ -125,6 +125,29 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(paper.resolved.fiberScaleX, 0.0275, accuracy: 0.0001)
         XCTAssertEqual(paper.resolved.seed, 0)
         XCTAssertEqual(paper.resolved.saturation, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.response, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.variation, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.absorbency, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.drag, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.resist, 1, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.resistThreshold, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.resistSoftness, 0.1, accuracy: 0.0001)
+    }
+
+    func testPaperPhysicalResponseRoundTrips() throws {
+        let paper = PaperConfig(
+            response: 0.75,
+            variation: 1.6,
+            absorbency: 0.4,
+            drag: 0.8,
+            resist: 0.3,
+            resistThreshold: 0.62,
+            resistSoftness: 0.08
+        )
+        let decoded = try JSONDecoder().decode(PaperConfig.self, from: JSONEncoder().encode(paper))
+        XCTAssertEqual(decoded, paper)
+        XCTAssertEqual(decoded.resolved.response, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(decoded.resolved.variation, 1.6, accuracy: 0.0001)
     }
 
     func testCodableRoundTripWithEffectsAndStreamMask() throws {

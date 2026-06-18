@@ -107,4 +107,42 @@ final class ControlFieldGraphTests: XCTestCase {
         )
         XCTAssertEqual(legacy.resolvedControlFields, .empty)
     }
+
+    func testMotionAndInkInfluenceDefaultsAreDisabled() {
+        let motion = MotionControlConfig()
+        XCTAssertFalse(motion.enabled)
+        XCTAssertEqual(motion.mode, .combined)
+        XCTAssertEqual(motion.input, .camera)
+
+        let ink = LandmarkSettings()
+        XCTAssertEqual(ink.resolvedInkPaperInfluence, 0)
+        XCTAssertEqual(ink.resolvedInkLiveSurfaceInfluence, 0)
+        XCTAssertEqual(ink.resolvedInkMotionForce, 0)
+        XCTAssertEqual(ink.resolvedInkLiveAbsorbency, 0)
+        XCTAssertEqual(ink.resolvedInkLiveDrag, 0.5)
+        XCTAssertEqual(ink.resolvedInkLiveResist, 1)
+    }
+
+    func testProviderPaperAndMotionSettingsRoundTrip() throws {
+        let nodeID = UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!
+        let motion = MotionControlConfig(
+            enabled: true,
+            mode: .opticalFlow,
+            input: .movie,
+            sensitivity: 1.4,
+            threshold: 0.08,
+            smoothing: 0.5,
+            decay: 0.9,
+            spatialScale: 0.75,
+            maximumForce: 1.8
+        )
+        let providers = [
+            ControlFieldProvider(id: paperID, name: "Paper", kind: .paper, paperNodeID: nodeID),
+            ControlFieldProvider(id: flowID, name: "Motion", kind: .opticalFlow, motionConfig: motion)
+        ]
+        let data = try JSONEncoder().encode(providers)
+        XCTAssertEqual(try JSONDecoder().decode([ControlFieldProvider].self, from: data), providers)
+        XCTAssertEqual(providers[0].paperNodeID, nodeID)
+        XCTAssertEqual(providers[1].resolvedMotionConfig, motion)
+    }
 }

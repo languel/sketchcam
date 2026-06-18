@@ -56,6 +56,52 @@ public enum ControlFieldUpdateQuality: String, Codable, Sendable, CaseIterable {
     case high
 }
 
+public enum MotionExtractionMode: String, Codable, Sendable, CaseIterable {
+    case trackedHuman
+    case opticalFlow
+    case combined
+}
+
+public enum MotionInputSource: String, Codable, Sendable, CaseIterable {
+    case camera
+    case movie
+    case inkTexture
+}
+
+public struct MotionControlConfig: Codable, Sendable, Equatable {
+    public var enabled: Bool
+    public var mode: MotionExtractionMode
+    public var input: MotionInputSource
+    public var sensitivity: Float
+    public var threshold: Float
+    public var smoothing: Float
+    public var decay: Float
+    public var spatialScale: Float
+    public var maximumForce: Float
+
+    public init(
+        enabled: Bool = false,
+        mode: MotionExtractionMode = .combined,
+        input: MotionInputSource = .camera,
+        sensitivity: Float = 1,
+        threshold: Float = 0.03,
+        smoothing: Float = 0.7,
+        decay: Float = 0.85,
+        spatialScale: Float = 1,
+        maximumForce: Float = 1
+    ) {
+        self.enabled = enabled
+        self.mode = mode
+        self.input = input
+        self.sensitivity = sensitivity
+        self.threshold = threshold
+        self.smoothing = smoothing
+        self.decay = decay
+        self.spatialScale = spatialScale
+        self.maximumForce = maximumForce
+    }
+}
+
 public enum ControlFieldConsumerID: Codable, Sendable, Hashable {
     case ink
     case acrylic(UUID)
@@ -79,6 +125,8 @@ public struct ControlFieldProvider: Identifiable, Codable, Sendable, Equatable {
     public var quality: ControlFieldUpdateQuality
     /// Upstream fields used by derived providers such as Combined Motion.
     public var inputs: [ControlFieldReference]
+    public var motionConfig: MotionControlConfig?
+    public var paperNodeID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -86,7 +134,9 @@ public struct ControlFieldProvider: Identifiable, Codable, Sendable, Equatable {
         kind: ControlFieldProviderKind,
         enabled: Bool = true,
         quality: ControlFieldUpdateQuality = .low,
-        inputs: [ControlFieldReference] = []
+        inputs: [ControlFieldReference] = [],
+        motionConfig: MotionControlConfig? = nil,
+        paperNodeID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -94,7 +144,12 @@ public struct ControlFieldProvider: Identifiable, Codable, Sendable, Equatable {
         self.enabled = enabled
         self.quality = quality
         self.inputs = inputs
+        self.motionConfig = motionConfig
+        self.paperNodeID = paperNodeID
     }
+
+
+    public var resolvedMotionConfig: MotionControlConfig { motionConfig ?? MotionControlConfig() }
 }
 
 public struct ControlFieldRoute: Identifiable, Codable, Sendable, Equatable {
