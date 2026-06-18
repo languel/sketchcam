@@ -128,6 +128,10 @@ final class GPUControlFieldStore {
     }
 
     #if DEBUG
+    func debugPublishedField(provider: UUID, output: ControlFieldOutputID) -> GPUControlField? {
+        published[PublishedKey(provider: provider, output: output)]
+    }
+
     func runSelfCheck() {
         let missingScalar = ControlFieldReference(provider: UUID(), output: .paperDrag)
         let a = resolve(missingScalar, width: 7, height: 5)

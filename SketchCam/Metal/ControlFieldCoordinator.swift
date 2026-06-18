@@ -76,11 +76,13 @@ final class ControlFieldCoordinator {
         self.providerFactory = providerFactory ?? { settings in
             switch settings.kind {
             case .paper: return PaperControlFieldProvider(settings: settings)
-            case .trackedMotion, .opticalFlow, .combinedMotion: return nil
+            case .trackedMotion: return TrackedMotionFieldProvider(settings: settings, device: device)
+            case .opticalFlow, .combinedMotion: return nil
             }
         }
         #if DEBUG
         runDisabledPathSelfCheck()
+        TrackedMotionFieldProvider.runDeterministicSelfCheck(device: device, store: store)
         #endif
     }
 
@@ -95,7 +97,14 @@ final class ControlFieldCoordinator {
         }
 
         let settingsByID = Dictionary(uniqueKeysWithValues: graph.providers.map { ($0.id, $0) })
-        let enabledIDs = Set(graph.providers.lazy.filter(\.enabled).map(\.id))
+        let enabledIDs = Set(graph.providers.lazy.filter { provider in
+            guard provider.enabled else { return false }
+            switch provider.kind {
+            case .paper: return true
+            case .trackedMotion, .opticalFlow, .combinedMotion:
+                return provider.resolvedMotionConfig.enabled
+            }
+        }.map(\.id))
         let routedIDs = Set(graph.routes.lazy.map { $0.source.provider }.filter { enabledIDs.contains($0) })
         let activeIDs = providerClosure(from: routedIDs, settingsByID: settingsByID, enabledIDs: enabledIDs)
         reconcile(activeIDs: activeIDs, settingsByID: settingsByID)
@@ -227,6 +236,22 @@ final class ControlFieldCoordinator {
         assert(result.field(for: .ink, input: .drag) == nil)
         assert(providerUpdateCount == updatesBefore)
         assert(store.zeroAllocationCount == zeroAllocationsBefore)
+
+        let disabledMotion = ControlFieldProvider(
+            name: "Disabled motion",
+            kind: .trackedMotion,
+            motionConfig: MotionControlConfig()
+        )
+        let disabledGraph = ControlFieldGraph(
+            providers: [disabledMotion],
+            routes: [ControlFieldRoute(
+                consumer: .ink,
+                input: .motionVector,
+                source: ControlFieldReference(provider: disabledMotion.id, output: .motionVector)
+            )]
+        )
+        _ = update(graph: disabledGraph, context: context)
+        assert(providerUpdateCount == updatesBefore)
     }
     #endif
 }

@@ -50,6 +50,7 @@
 		8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F2A2598E845123A35AB7F0C /* MetalEffects.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
 		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
+		9929C7F801705C184CEFB01F /* TrackedMotionFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */; };
 		9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */; };
 		A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */; };
 		A4C3D426DE4B0CC4E50D8AA4 /* TestPatternGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */; };
@@ -66,6 +67,7 @@
 		C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */; };
 		C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */; };
 		C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
+		C87529AB29628FA1EB349EAE /* TrackedMotionFieldProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */; };
 		C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */; };
 		CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */; };
 		CE858162DA9C6E9058CC1CF0 /* ProcessorThroughputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */; };
@@ -182,6 +184,7 @@
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
 		5219B099618056834D2AEF4C /* LayerGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerGraphTests.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
+		5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProviderSelfCheck.swift; sourceTree = "<group>"; };
 		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
 		629909CE9ECE96027DD07A35 /* PaperControlFieldProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperControlFieldProvider.swift; sourceTree = "<group>"; };
@@ -211,6 +214,7 @@
 		B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowModeController.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
 		B53093F3EB6121C4B7899971 /* SegmentationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentationService.swift; sourceTree = "<group>"; };
+		B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProvider.swift; sourceTree = "<group>"; };
 		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
 		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
 		C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = InkWashShaders.metal; sourceTree = "<group>"; };
@@ -407,6 +411,8 @@
 				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
 				902AC1A0A95F6A8EAD65D3A7 /* MetalPaperRenderer.swift */,
 				629909CE9ECE96027DD07A35 /* PaperControlFieldProvider.swift */,
+				B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */,
+				5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */,
 			);
 			path = Metal;
 			sourceTree = "<group>";
@@ -739,6 +745,8 @@
 				8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */,
 				7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */,
 				C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */,
+				C87529AB29628FA1EB349EAE /* TrackedMotionFieldProvider.swift in Sources */,
+				9929C7F801705C184CEFB01F /* TrackedMotionFieldProviderSelfCheck.swift in Sources */,
 				705BACC9795654B6E0B73CCC /* VirtualCameraFramePublisher.swift in Sources */,
 				6D5EB585B0A94DE13E2B64AA /* VisionLandmarkTracker.swift in Sources */,
 				AAB6836FF21015A78F7AA0BD /* WebLayerController.swift in Sources */,
