@@ -10,6 +10,7 @@ struct InkSplatParams {
     float radiusSq;
     uint blendMode; // 0 = add, 1 = max
     float4 color;
+    float4 control; // paper influence, live influence, live resist, apply resist
 };
 
 struct InkCapsuleParams {
@@ -24,6 +25,7 @@ struct InkCapsuleParams {
     uint blendMode;   // 0 = add, 1 = max
     float pad0;
     float4 color;
+    float4 control;
 };
 
 struct InkCopyParams {
@@ -34,6 +36,14 @@ struct InkAdvectVelocityParams {
     float2 texel;
     float dt;
     float dissipation;
+    float4 control; // paper influence, live influence, live drag, unused
+};
+
+struct InkControlForceParams {
+    float dt;
+    float force;
+    float maximumForce;
+    float pad0;
 };
 
 struct InkVorticityParams {
@@ -49,6 +59,7 @@ struct InkAdvectWetParams {
     float decay;
     float spread;
     float pad0;
+    float4 control; // paper influence, live influence, live absorbency, unused
 };
 
 struct InkAdvectInkParams {
@@ -62,6 +73,7 @@ struct InkAdvectInkParams {
     float pad1;
     float3 brush; // x, y, radius
     float pad2;
+    float4 control; // paper influence, live influence, live drag, unused
 };
 
 struct InkExchangeParams {
@@ -211,6 +223,8 @@ kernel void ink_copy(texture2d<float, access::sample> inTex [[texture(0)]],
 }
 
 kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]],
+                      texture2d<float, access::sample> resistField [[texture(1)]],
+                      texture2d<float, access::sample> liveField [[texture(2)]],
                       constant InkSplatParams &p [[buffer(0)]],
                       uint2 gid [[thread_position_in_grid]]) {
     uint2 px = p.origin + gid;
@@ -218,7 +232,11 @@ kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]]
     float2 uv = (float2(px) + 0.5) / p.targetSize;
     float2 d = uv - p.point;
     d.x *= p.aspect;
-    float4 mark = p.color * exp(-dot(d, d) / max(p.radiusSq, 1e-7));
+    constexpr sampler cs(coord::normalized, address::clamp_to_edge, filter::linear);
+    float resist = clamp(resistField.sample(cs, uv).x, 0.0, 1.0) * p.control.x;
+    resist += clamp(liveField.sample(cs, uv).x, 0.0, 1.0) * p.control.y * p.control.z;
+    float deposition = p.control.w > 0.5 ? 1.0 - clamp(resist, 0.0, 1.0) : 1.0;
+    float4 mark = p.color * exp(-dot(d, d) / max(p.radiusSq, 1e-7)) * deposition;
     float4 old = target.read(px);
     target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
 }
@@ -228,6 +246,8 @@ kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]]
 // of capsules (a ribbon, like perfect-freehand's filled outline), instead of a
 // row of additive discs that bead up ("salami") when the radius wobbles.
 kernel void ink_splat_capsule(texture2d<float, access::read_write> target [[texture(0)]],
+                              texture2d<float, access::sample> resistField [[texture(1)]],
+                              texture2d<float, access::sample> liveField [[texture(2)]],
                               constant InkCapsuleParams &p [[buffer(0)]],
                               uint2 gid [[thread_position_in_grid]]) {
     uint2 px = p.origin + gid;
@@ -243,13 +263,19 @@ kernel void ink_splat_capsule(texture2d<float, access::read_write> target [[text
     float r = mix(p.ra, p.rb, t);
     float mask = 1.0 - smoothstep(r - p.edge, r + p.edge, dist);
     if (mask <= 0.0) return;
-    float4 mark = p.color * mask;
+    constexpr sampler cs(coord::normalized, address::clamp_to_edge, filter::linear);
+    float resist = clamp(resistField.sample(cs, uv).x, 0.0, 1.0) * p.control.x;
+    resist += clamp(liveField.sample(cs, uv).x, 0.0, 1.0) * p.control.y * p.control.z;
+    float deposition = p.control.w > 0.5 ? 1.0 - clamp(resist, 0.0, 1.0) : 1.0;
+    float4 mark = p.color * mask * deposition;
     float4 old = target.read(px);
     target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
 }
 
 kernel void ink_advect_velocity(texture2d<float, access::sample> velocityIn [[texture(0)]],
                                 texture2d<float, access::sample> wetIn [[texture(1)]],
+                                texture2d<float, access::sample> dragField [[texture(3)]],
+                                texture2d<float, access::sample> liveField [[texture(4)]],
                                 texture2d<float, access::write> velocityOut [[texture(2)]],
                                 constant InkAdvectVelocityParams &p [[buffer(0)]],
                                 uint2 gid [[thread_position_in_grid]]) {
@@ -257,10 +283,28 @@ kernel void ink_advect_velocity(texture2d<float, access::sample> velocityIn [[te
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = uv_for(gid, velocityOut.get_width(), velocityOut.get_height());
     float2 coord = uv - p.dt * velocityIn.sample(s, uv).xy * p.texel;
-    float2 vel = velocityIn.sample(s, coord).xy * p.dissipation;
+    float drag = clamp(dragField.sample(s, uv).x, 0.0, 1.0) * p.control.x;
+    drag += clamp(liveField.sample(s, uv).x, 0.0, 1.0) * p.control.y * p.control.z;
+    float2 vel = velocityIn.sample(s, coord).xy * p.dissipation * exp(-max(0.0, drag) * p.dt);
     float w = wetIn.sample(s, uv).x;
     float mask = smoothstep(0.005, 0.2, w);
     velocityOut.write(float4(vel * mask, 0.0, 1.0), gid);
+}
+
+kernel void ink_add_control_force(texture2d<float, access::sample> velocityIn [[texture(0)]],
+                                  texture2d<float, access::sample> motionField [[texture(1)]],
+                                  texture2d<float, access::write> velocityOut [[texture(2)]],
+                                  constant InkControlForceParams &p [[buffer(0)]],
+                                  uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= velocityOut.get_width() || gid.y >= velocityOut.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 uv = uv_for(gid, velocityOut.get_width(), velocityOut.get_height());
+    float2 force = motionField.sample(s, uv).xy * p.force;
+    float magnitude = length(force);
+    if (magnitude > p.maximumForce) force *= p.maximumForce / max(magnitude, 1e-6);
+    float2 velocity = velocityIn.sample(s, uv).xy + force * p.dt;
+    if (!all(isfinite(velocity))) velocity = float2(0.0);
+    velocityOut.write(float4(velocity, 0.0, 1.0), gid);
 }
 
 kernel void ink_curl(texture2d<float, access::sample> velocity [[texture(0)]],
@@ -345,6 +389,8 @@ kernel void ink_gradient_subtract(texture2d<float, access::sample> pressure [[te
 
 kernel void ink_advect_wet(texture2d<float, access::sample> velocity [[texture(0)]],
                            texture2d<float, access::sample> wetIn [[texture(1)]],
+                           texture2d<float, access::sample> absorbencyField [[texture(3)]],
+                           texture2d<float, access::sample> liveField [[texture(4)]],
                            texture2d<float, access::write> wetOut [[texture(2)]],
                            constant InkAdvectWetParams &p [[buffer(0)]],
                            uint2 gid [[thread_position_in_grid]]) {
@@ -358,14 +404,18 @@ kernel void ink_advect_wet(texture2d<float, access::sample> velocity [[texture(0
                wetIn.sample(s, coord - float2(b.x, 0.0)).x +
                wetIn.sample(s, coord + float2(0.0, b.y)).x +
                wetIn.sample(s, coord - float2(0.0, b.y)).x) * 0.25;
-    w = mix(w, n, p.spread);
-    wetOut.write(float4(w * p.decay, 0.0, 0.0, 1.0), gid);
+    float absorb = clamp(clamp(absorbencyField.sample(s, uv).x, 0.0, 1.0) * p.control.x +
+                         clamp(liveField.sample(s, uv).x, 0.0, 1.0) * p.control.y * p.control.z, 0.0, 1.0);
+    w = mix(w, n, clamp(p.spread * (1.0 + absorb), 0.0, 1.0));
+    wetOut.write(float4(w * pow(p.decay, 1.0 + absorb * 2.0), 0.0, 0.0, 1.0), gid);
 }
 
 kernel void ink_advect_ink(texture2d<float, access::sample> velocity [[texture(0)]],
                            texture2d<float, access::sample> inkIn [[texture(1)]],
                            texture2d<float, access::sample> wet [[texture(2)]],
                            texture2d<float, access::write> inkOut [[texture(3)]],
+                           texture2d<float, access::sample> dragField [[texture(4)]],
+                           texture2d<float, access::sample> liveField [[texture(5)]],
                            constant InkAdvectInkParams &p [[buffer(0)]],
                            uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= inkOut.get_width() || gid.y >= inkOut.get_height()) return;
@@ -378,7 +428,9 @@ kernel void ink_advect_ink(texture2d<float, access::sample> velocity [[texture(0
         inkOut.write(cur, gid);
         return;
     }
-    float2 vel = velocity.sample(s, uv).xy;
+    float drag = clamp(dragField.sample(s, uv).x, 0.0, 1.0) * p.control.x;
+    drag += clamp(liveField.sample(s, uv).x, 0.0, 1.0) * p.control.y * p.control.z;
+    float2 vel = velocity.sample(s, uv).xy * exp(-max(0.0, drag) * p.dt);
     float2 coord = uv - p.dt * vel * p.velTexel * mob;
     float4 adv = inkIn.sample(s, coord);
     float brush = 0.0;

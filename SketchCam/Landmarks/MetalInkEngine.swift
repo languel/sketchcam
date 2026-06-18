@@ -44,6 +44,7 @@ final class MetalInkEngine {
         var radiusSq: Float
         var blendMode: UInt32
         var color: SIMD4<Float>
+        var control: SIMD4<Float>
     }
 
     private struct CapsuleParams {
@@ -58,10 +59,12 @@ final class MetalInkEngine {
         var blendMode: UInt32
         var pad0: Float = 0
         var color: SIMD4<Float>
+        var control: SIMD4<Float>
     }
 
     private struct CopyParams { var value: Float }
-    private struct AdvectVelocityParams { var texel: SIMD2<Float>; var dt: Float; var dissipation: Float }
+    private struct AdvectVelocityParams { var texel: SIMD2<Float>; var dt: Float; var dissipation: Float; var control: SIMD4<Float> }
+    private struct ControlForceParams { var dt: Float; var force: Float; var maximumForce: Float; var pad0: Float = 0 }
     private struct VorticityParams { var texel: SIMD2<Float>; var curlAmount: Float; var dt: Float }
     private struct AdvectWetParams {
         var velTexel: SIMD2<Float>
@@ -70,6 +73,7 @@ final class MetalInkEngine {
         var decay: Float
         var spread: Float
         var pad0: Float = 0
+        var control: SIMD4<Float>
     }
     private struct AdvectInkParams {
         var velTexel: SIMD2<Float>
@@ -80,6 +84,7 @@ final class MetalInkEngine {
         var pad0: Float = 0
         var chroma: SIMD4<Float>
         var brush: SIMD4<Float>
+        var control: SIMD4<Float>
     }
     private struct ExchangeParams {
         var settle: Float
@@ -125,6 +130,7 @@ final class MetalInkEngine {
     private let capsulePSO: MTLComputePipelineState
     private let accumulatePSO: MTLComputePipelineState
     private let advectVelocityPSO: MTLComputePipelineState
+    private let controlForcePSO: MTLComputePipelineState
     private let curlPSO: MTLComputePipelineState
     private let vorticityPSO: MTLComputePipelineState
     private let divergencePSO: MTLComputePipelineState
@@ -175,6 +181,22 @@ final class MetalInkEngine {
     private var bakedLiveIDs: Set<UUID> = []
     private var lastRenderSig: RenderSignature?
     private var cachedImage: CIImage?
+    private var controlFields: ResolvedControlFields = .empty
+    private var currentSettings = ProcessingSettings()
+    private var zeroScalar: MTLTexture!
+    private var zeroVector: MTLTexture!
+
+    private static func makeZeroTexture(device: MTLDevice, format: MTLPixelFormat) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: 1, height: 1, mipmapped: false)
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+        return device.makeTexture(descriptor: descriptor)
+    }
+
+    private func control(_ input: ControlFieldInputID, fallback: MTLTexture) -> (MTLTexture, Float) {
+        guard let resolved = controlFields.field(for: .ink, input: input) else { return (fallback, 1) }
+        return (resolved.field.texture, max(0, resolved.strength))
+    }
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -191,6 +213,7 @@ final class MetalInkEngine {
               let capsule = pso("ink_splat_capsule"),
               let accumulate = pso("ink_accumulate"),
               let advectVelocity = pso("ink_advect_velocity"),
+              let controlForce = pso("ink_add_control_force"),
               let curl = pso("ink_curl"),
               let vorticity = pso("ink_vorticity"),
               let divergence = pso("ink_divergence"),
@@ -213,6 +236,7 @@ final class MetalInkEngine {
         self.capsulePSO = capsule
         self.accumulatePSO = accumulate
         self.advectVelocityPSO = advectVelocity
+        self.controlForcePSO = controlForce
         self.curlPSO = curl
         self.vorticityPSO = vorticity
         self.divergencePSO = divergence
@@ -224,6 +248,8 @@ final class MetalInkEngine {
         self.displayPSO = display
         guard let paperRenderer = MetalPaperRenderer.shared else { return nil }
         self.paperRenderer = paperRenderer
+        self.zeroScalar = Self.makeZeroTexture(device: device, format: .r16Float)
+        self.zeroVector = Self.makeZeroTexture(device: device, format: .rg16Float)
     }
 
     func reset() {
@@ -259,7 +285,9 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
+        self.controlFields = controlFields
+        self.currentSettings = settings
         let l = settings.landmarks
         let width = max(1, Int(requested.width.rounded()))
         let height = max(1, Int(requested.height.rounded()))
@@ -781,9 +809,12 @@ final class MetalInkEngine {
             point: point,
             radiusSq: r * r,
             blendMode: blend.rawValue,
-            color: color
+            color: color,
+            control: depositionControl(for: texture)
         )
-        encode(splatPSO, textures: [texture], bytes: &params, length: MemoryLayout<SplatParams>.stride,
+        let resist = control(.resist, fallback: zeroScalar)
+        let live = control(.surfaceModulation, fallback: zeroScalar)
+        encode(splatPSO, textures: [texture, resist.0, live.0], bytes: &params, length: MemoryLayout<SplatParams>.stride,
                width: maxX - ox + 1, height: maxY - oy + 1, commandBuffer: commandBuffer)
     }
 
@@ -807,10 +838,24 @@ final class MetalInkEngine {
             edge: 1.4 / Float(h),
             a: a, b: b, ra: rA, rb: rB,
             blendMode: blend.rawValue,
-            color: color
+            color: color,
+            control: depositionControl(for: texture)
         )
-        encode(capsulePSO, textures: [texture], bytes: &params, length: MemoryLayout<CapsuleParams>.stride,
+        let resist = control(.resist, fallback: zeroScalar)
+        let live = control(.surfaceModulation, fallback: zeroScalar)
+        encode(capsulePSO, textures: [texture, resist.0, live.0], bytes: &params, length: MemoryLayout<CapsuleParams>.stride,
                width: mx - ox + 1, height: my - oy + 1, commandBuffer: commandBuffer)
+    }
+
+    private func depositionControl(for texture: MTLTexture) -> SIMD4<Float> {
+        let l = currentSettings.landmarks
+        let resistStrength = control(.resist, fallback: zeroScalar).1
+        let liveStrength = control(.surfaceModulation, fallback: zeroScalar).1
+        let depositsMatter = texture.pixelFormat != .rg16Float
+        return SIMD4(l.resolvedInkPaperInfluence * resistStrength,
+                     l.resolvedInkLiveSurfaceInfluence * liveStrength,
+                     l.resolvedInkLiveResist,
+                     depositsMatter ? 1 : 0)
     }
 
     private func step(settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) {
@@ -830,9 +875,20 @@ final class MetalInkEngine {
         var advVel = AdvectVelocityParams(
             texel: simTexel,
             dt: dt,
-            dissipation: exp(-dt * (3.0 - flow * 2.4 + dry * 5.0)) * (fixing ? exp(-dt * 7 * fadeScale) : 1)
+            dissipation: exp(-dt * (3.0 - flow * 2.4 + dry * 5.0)) * (fixing ? exp(-dt * 7 * fadeScale) : 1),
+            control: SIMD4(l.resolvedInkPaperInfluence * control(.drag, fallback: zeroScalar).1,
+                           l.resolvedInkLiveSurfaceInfluence * control(.surfaceModulation, fallback: zeroScalar).1,
+                           l.resolvedInkLiveDrag, 0)
         )
-        encode(advectVelocityPSO, textures: [velocity.read, wet.read, velocity.write], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
+        if l.resolvedInkMotionForce > 0 {
+            let motion = control(.motionVector, fallback: zeroVector)
+            var force = ControlForceParams(dt: dt, force: l.resolvedInkMotionForce * motion.1, maximumForce: 1)
+            encode(controlForcePSO, textures: [velocity.read, motion.0, velocity.write], bytes: &force, length: MemoryLayout<ControlForceParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
+            velocity.swap()
+        }
+        let drag = control(.drag, fallback: zeroScalar)
+        let live = control(.surfaceModulation, fallback: zeroScalar)
+        encode(advectVelocityPSO, textures: [velocity.read, wet.read, velocity.write, drag.0, live.0], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: velocity.write, commandBuffer: commandBuffer)
         velocity.swap()
 
         encode(curlPSO, textures: [velocity.read, curl], bytes: &advVel, length: MemoryLayout<AdvectVelocityParams>.stride, grid: curl, commandBuffer: commandBuffer)
@@ -863,8 +919,12 @@ final class MetalInkEngine {
         let dryTau: Float = fixing ? 0.22 / fadeScale : 0.12 + pow(1 - dry, 2.2) * 26
         let wetnessDecay = max(0, l.inkWetnessDecay ?? 1)
         let spread: Float = 0.18 * (1 - dry * 0.78)
-        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau * wetnessDecay), spread: spread)
-        encode(advectWetPSO, textures: [velocity.read, wet.read, wet.write], bytes: &advWet, length: MemoryLayout<AdvectWetParams>.stride, grid: wet.write, commandBuffer: commandBuffer)
+        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau * wetnessDecay), spread: spread,
+                                    control: SIMD4(l.resolvedInkPaperInfluence * control(.absorbency, fallback: zeroScalar).1,
+                                                   l.resolvedInkLiveSurfaceInfluence * live.1,
+                                                   l.resolvedInkLiveAbsorbency, 0))
+        let absorbency = control(.absorbency, fallback: zeroScalar)
+        encode(advectWetPSO, textures: [velocity.read, wet.read, wet.write, absorbency.0, live.0], bytes: &advWet, length: MemoryLayout<AdvectWetParams>.stride, grid: wet.write, commandBuffer: commandBuffer)
         wet.swap()
 
         let colorAmount = clamp01(l.inkColorSeparation ?? 0.5)
@@ -876,9 +936,10 @@ final class MetalInkEngine {
             bleed: bleed * washStrength,
             aspect: aspect,
             chroma: SIMD4(chroma.x, chroma.y, chroma.z, 0),
-            brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, 0)
+            brush: SIMD4(brushNow.x, brushNow.y, brushNow.z, 0),
+            control: advVel.control
         )
-        encode(advectInkPSO, textures: [velocity.read, ink.read, wet.read, ink.write], bytes: &advInk, length: MemoryLayout<AdvectInkParams>.stride, grid: ink.write, commandBuffer: commandBuffer)
+        encode(advectInkPSO, textures: [velocity.read, ink.read, wet.read, ink.write, drag.0, live.0], bytes: &advInk, length: MemoryLayout<AdvectInkParams>.stride, grid: ink.write, commandBuffer: commandBuffer)
         ink.swap()
 
         let settle: Float = fixing ? 1 - exp(-dt * 5 * fadeScale) : 0

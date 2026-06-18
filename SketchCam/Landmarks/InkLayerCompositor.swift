@@ -14,7 +14,6 @@ final class InkLayerCompositor {
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
                controlFields: ResolvedControlFields = .empty) -> CIImage? {
-        _ = controlFields // Consumed by the paper/motion simulation pass in the next implementation plan.
         let l = settings.landmarks
         guard l.inkEnabled else {
             return lock.withLock {
@@ -32,7 +31,8 @@ final class InkLayerCompositor {
                 renderSettings.landmarks.inkPaperEnabled = false
             }
             let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
-                                    endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex)
+                                    endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
+                                    controlFields: controlFields)
             let rect = CGRect(origin: .zero, size: outputSize)
             guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
             let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
