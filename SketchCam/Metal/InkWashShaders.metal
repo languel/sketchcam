@@ -85,6 +85,16 @@ struct InkDisplayParams {
     float4 washTint; // wet field's transmission colour (rgb)
 };
 
+struct InkPaperParams {
+    float2 resolution;
+    float2 padding;
+    float4 tint;
+    float4 fiber; // strength, scale x, scale y, orientation radians
+    float4 tooth; // strength, scale x, scale y, unused
+    float4 grain; // strength, scale x, scale y, seed
+    float4 finish; // contrast, vignette, unused, unused
+};
+
 static float2 uv_for(uint2 gid, uint w, uint h) {
     return (float2(gid) + 0.5) / float2(w, h);
 }
@@ -115,6 +125,29 @@ static float fbm(float2 p) {
         a *= 0.5;
     }
     return v;
+}
+
+kernel void ink_generate_paper(texture2d<float, access::write> outTex [[texture(0)]],
+                               constant InkPaperParams &p [[buffer(0)]],
+                               uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
+    float2 px = uv * p.resolution;
+    float angle = p.fiber.w;
+    float cs = cos(angle), sn = sin(angle);
+    float2 rotated = float2(cs * px.x - sn * px.y, sn * px.x + cs * px.y);
+    float seed = p.grain.w;
+    float fiberNoise = fbm(rotated * p.fiber.yz + float2(seed * 11.13, seed * 3.71));
+    float toothNoise = vnoise(px * p.tooth.yz + float2(seed * 5.17, seed * 13.91));
+    float grainNoise = fbm(px * p.grain.yz + 31.7 + float2(seed * 17.41, seed * 7.23));
+    float3 paper = p.tint.rgb;
+    paper -= (fiberNoise - 0.5) * p.fiber.x;
+    paper -= (toothNoise - 0.5) * p.tooth.x;
+    paper -= (grainNoise - 0.5) * p.grain.x * 0.018;
+    paper = (paper - 0.5) * p.finish.x + 0.5;
+    float2 q = uv - 0.5;
+    paper *= 1.0 - dot(q, q) * p.finish.y;
+    outTex.write(float4(clamp(paper, 0.0, 1.0) * p.tint.a, p.tint.a), gid);
 }
 
 kernel void ink_clear(texture2d<float, access::write> outTex [[texture(0)]],
