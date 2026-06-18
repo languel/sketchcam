@@ -9,7 +9,7 @@ import SketchCamCore
 final class InkLayerCompositor {
     private let lock = NSLock()
     private var engine: MetalInkEngine? = MetalInkEngine()
-    private let paperRenderer = MetalPaperRenderer()
+    private let paperRenderer = MetalPaperRenderer.shared
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,

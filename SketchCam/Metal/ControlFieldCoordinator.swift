@@ -13,6 +13,7 @@ struct ControlFieldFrameContext {
     let cameraPixelBuffer: CVPixelBuffer?
     let moviePixelBuffer: CVPixelBuffer?
     let detection: LandmarkDetection?
+    let settings: ProcessingSettings
 
     var width: Int { max(1, Int(outputSize.width.rounded(.up))) }
     var height: Int { max(1, Int(outputSize.height.rounded(.up))) }
@@ -69,10 +70,15 @@ final class ControlFieldCoordinator {
     private(set) var providerUpdateCount = 0
     #endif
 
-    init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(), providerFactory: @escaping ProviderFactory = { _ in nil }) {
+    init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(), providerFactory: ProviderFactory? = nil) {
         guard let device, let store = GPUControlFieldStore(device: device) else { return nil }
         self.store = store
-        self.providerFactory = providerFactory
+        self.providerFactory = providerFactory ?? { settings in
+            switch settings.kind {
+            case .paper: return PaperControlFieldProvider(settings: settings)
+            case .trackedMotion, .opticalFlow, .combinedMotion: return nil
+            }
+        }
         #if DEBUG
         runDisabledPathSelfCheck()
         #endif
@@ -212,7 +218,8 @@ final class ControlFieldCoordinator {
             outputSize: CGSize(width: 11, height: 7),
             cameraPixelBuffer: nil,
             moviePixelBuffer: nil,
-            detection: nil
+            detection: nil,
+            settings: ProcessingSettings()
         )
         let updatesBefore = providerUpdateCount
         let zeroAllocationsBefore = store.zeroAllocationCount

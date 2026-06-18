@@ -94,6 +94,8 @@ struct InkPaperParams {
     float4 tooth; // strength, scale x, scale y, unused
     float4 grain; // strength, scale x, scale y, seed
     float4 finish; // contrast, vignette, saturation, unused
+    float4 physicalA; // response, variation, absorbency, drag
+    float4 physicalB; // resist, threshold, softness, unused
 };
 
 static float2 uv_for(uint2 gid, uint w, uint h) {
@@ -151,6 +153,45 @@ kernel void ink_generate_paper(texture2d<float, access::write> outTex [[texture(
     float2 q = uv - 0.5;
     paper *= 1.0 - dot(q, q) * p.finish.y;
     outTex.write(float4(clamp(paper, 0.0, 1.0) * p.tint.a, p.tint.a), gid);
+}
+
+static float paper_vary(float n, float amount) {
+    return clamp(0.5 + (n - 0.5) * amount, 0.0, 1.0);
+}
+
+kernel void ink_generate_paper_material(
+    texture2d<float, access::write> absorbencyOut [[texture(0)]],
+    texture2d<float, access::write> dragOut [[texture(1)]],
+    texture2d<float, access::write> resistOut [[texture(2)]],
+    constant InkPaperParams &p [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= absorbencyOut.get_width() || gid.y >= absorbencyOut.get_height()) return;
+    float2 uv = uv_for(gid, absorbencyOut.get_width(), absorbencyOut.get_height());
+    float2 px = uv * p.resolution;
+    float angle = p.fiber.w;
+    float cs = cos(angle), sn = sin(angle);
+    float2 rotated = float2(cs * px.x - sn * px.y, sn * px.x + cs * px.y);
+    float seed = p.grain.w;
+    float fiberNoise = fbm(rotated * p.fiber.yz + float2(seed * 11.13, seed * 3.71));
+    float toothNoise = vnoise(px * p.tooth.yz + float2(seed * 5.17, seed * 13.91));
+    float grainNoise = fbm(px * p.grain.yz + 31.7 + float2(seed * 17.41, seed * 7.23));
+    float materialNoise = clamp((fiberNoise + toothNoise + grainNoise) / 3.0, 0.0, 1.0);
+
+    float response = max(0.0, p.physicalA.x);
+    float variation = max(0.0, p.physicalA.y);
+    float absorbency = response * max(0.0, p.physicalA.z) * paper_vary(1.0 - materialNoise, variation);
+    float drag = response * max(0.0, p.physicalA.w) * paper_vary(materialNoise, variation);
+    float softness = max(0.0001, p.physicalB.z);
+    float resistMask = smoothstep(
+        p.physicalB.y - softness,
+        p.physicalB.y + softness,
+        paper_vary(materialNoise, variation)
+    );
+    float resist = response * max(0.0, p.physicalB.x) * resistMask;
+    absorbencyOut.write(float4(absorbency), gid);
+    dragOut.write(float4(drag), gid);
+    resistOut.write(float4(resist), gid);
 }
 
 kernel void ink_clear(texture2d<float, access::write> outTex [[texture(0)]],

@@ -98,7 +98,7 @@ final class SketchCamViewModel: ObservableObject {
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
     private let controlFieldCoordinator = ControlFieldCoordinator()
-    private let paperRenderer = MetalPaperRenderer()
+    private let paperRenderer = MetalPaperRenderer.shared
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
@@ -562,7 +562,8 @@ final class SketchCamViewModel: ObservableObject {
                             outputSize: outputFormat.size,
                             cameraPixelBuffer: controlSources.camera,
                             moviePixelBuffer: controlSources.movie,
-                            detection: drawingDetection
+                            detection: drawingDetection,
+                            settings: settings
                         )
                     ) ?? .empty
                 }

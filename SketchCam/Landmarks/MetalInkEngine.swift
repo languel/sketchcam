@@ -222,7 +222,7 @@ final class MetalInkEngine {
         self.advectInkPSO = advectInk
         self.exchangePSO = exchange
         self.displayPSO = display
-        guard let paperRenderer = MetalPaperRenderer(device: device) else { return nil }
+        guard let paperRenderer = MetalPaperRenderer.shared else { return nil }
         self.paperRenderer = paperRenderer
     }
 
@@ -257,7 +257,6 @@ final class MetalInkEngine {
         bakedLiveIDs = []
         lastRenderSig = nil
         cachedImage = nil
-        paperRenderer.reset()
     }
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
