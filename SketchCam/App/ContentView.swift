@@ -764,6 +764,15 @@ struct ContentView: View {
             }
             .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
 
+            DisclosureGroup("Physical response") {
+                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1)
+                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1)
+                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2)
+                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1)
+                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2)
+                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1)
+            }
+
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
                 ForEach(InkTool.allCases) { tool in
@@ -2110,9 +2119,12 @@ private struct PaperNodeEditor: View {
 
 private struct PaperControls: View {
     @Binding var config: PaperConfig
+    @State private var physicalExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            paperSlider("Response", value: optional(\.response, 1), range: 0...1)
+            paperSlider("Variation", value: optional(\.variation, 1), range: 0...2)
             RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
             paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4)
             paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2)
@@ -2140,6 +2152,14 @@ private struct PaperControls: View {
                 Button("Shuffle") { config.seed = Int.random(in: 0..<100_000) }
                     .buttonStyle(.borderless)
                     .font(.caption2)
+            }
+
+            DisclosureGroup("Physical response", isExpanded: $physicalExpanded) {
+                paperSlider("Absorbency", value: optional(\.absorbency, 1), range: 0...1)
+                paperSlider("Drag", value: optional(\.drag, 1), range: 0...1)
+                paperSlider("Resist", value: optional(\.resist, 1), range: 0...1)
+                paperSlider("Threshold", value: optional(\.resistThreshold, 0.5), range: 0...1)
+                paperSlider("Softness", value: optional(\.resistSoftness, 0.1), range: 0...1)
             }
         }
     }
