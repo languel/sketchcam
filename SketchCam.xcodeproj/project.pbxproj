@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		07572DEEEF8BD4389C1ED3C0 /* MetalPaperRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902AC1A0A95F6A8EAD65D3A7 /* MetalPaperRenderer.swift */; };
 		0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43E7F894EB7AA845EAB7EE4B /* PreviewRenderer.swift */; };
 		117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */; };
 		1280A5C4C280516FC2EC2EF9 /* LayerGraphCompositorParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B257710C9008790891F0103 /* LayerGraphCompositorParityTests.swift */; };
@@ -183,6 +184,7 @@
 		8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkOverlayCompositor.swift; sourceTree = "<group>"; };
 		899FA7D13C6CB19A855B1642 /* SketchCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SketchCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A05DD5DDF0F118186EA035F /* PipelineTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineTimings.swift; sourceTree = "<group>"; };
+		902AC1A0A95F6A8EAD65D3A7 /* MetalPaperRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalPaperRenderer.swift; sourceTree = "<group>"; };
 		91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLayerCompositor.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
@@ -387,6 +389,7 @@
 				4F2A2598E845123A35AB7F0C /* MetalEffects.swift */,
 				91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */,
 				6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */,
+				902AC1A0A95F6A8EAD65D3A7 /* MetalPaperRenderer.swift */,
 			);
 			path = Metal;
 			sourceTree = "<group>";
@@ -702,6 +705,7 @@
 				C08D417215B461026AF9BB6B /* MetalInkEngine.swift in Sources */,
 				5E9F659D21973EAC482649C1 /* MetalLayerCompositor.swift in Sources */,
 				AA542E4410B83FAF306DA734 /* MetalLineRenderer.swift in Sources */,
+				07572DEEEF8BD4389C1ED3C0 /* MetalPaperRenderer.swift in Sources */,
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
