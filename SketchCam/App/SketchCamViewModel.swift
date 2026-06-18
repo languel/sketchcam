@@ -552,26 +552,6 @@ final class SketchCamViewModel: ObservableObject {
                     )
                 }()
                 let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
-                let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
-                let controlFields = self.timings.measure(.controlFields) {
-                    self.controlFieldCoordinator?.update(
-                        graph: settings.resolvedControlFields,
-                        context: ControlFieldFrameContext(
-                            frameIndex: frameIndex,
-                            timestamp: timestamp,
-                            outputSize: outputFormat.size,
-                            cameraPixelBuffer: controlSources.camera,
-                            moviePixelBuffer: controlSources.movie,
-                            detection: drawingDetection,
-                            settings: settings
-                        )
-                    ) ?? .empty
-                }
-                // The inkwash engine runs synchronously (Metal commit +
-                // waitUntilCompleted + CPU readback) inline on this queue, so
-                // measure it as its own stage; otherwise its cost only showed
-                // up buried in "Frame total".
-                let liveInk = self.inkLiveStroke.consume()
                 let inkTexture = self.routedInkTexture(
                     graph: graph,
                     settings: settings,
@@ -582,6 +562,34 @@ final class SketchCamViewModel: ObservableObject {
                     overlay: overlay,
                     webLayer: webLayer
                 )
+                let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
+                let inkTextureBuffer = Self.controlGraphNeedsInkTexture(settings.resolvedControlFields)
+                    ? self.pixelBuffer(from: inkTexture, outputFormat: outputFormat)
+                    : nil
+                let controlFields = self.timings.measure(.controlFields) {
+                    self.controlFieldCoordinator?.update(
+                        graph: settings.resolvedControlFields,
+                        context: ControlFieldFrameContext(
+                            frameIndex: frameIndex,
+                            timestamp: timestamp,
+                            outputSize: outputFormat.size,
+                            cameraPixelBuffer: controlSources.camera,
+                            moviePixelBuffer: controlSources.movie,
+                            inkTexturePixelBuffer: inkTextureBuffer,
+                            detection: drawingDetection,
+                            settings: settings
+                        )
+                    ) ?? .empty
+                }
+                if let coordinator = self.controlFieldCoordinator {
+                    self.timings.record(.motion, seconds: coordinator.lastMotionSeconds)
+                    self.timings.record(.paperFields, seconds: coordinator.lastPaperSeconds)
+                }
+                // The inkwash engine runs synchronously (Metal commit +
+                // waitUntilCompleted + CPU readback) inline on this queue, so
+                // measure it as its own stage; otherwise its cost only showed
+                // up buried in "Frame total".
+                let liveInk = self.inkLiveStroke.consume()
                 let inkLayer = self.timings.measure(.ink) {
                     self.inkCompositor.layer(
                         settings: settings,
@@ -637,6 +645,20 @@ final class SketchCamViewModel: ObservableObject {
             (layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte } ||
              layer.mask?.source == .source(.personMatte))
         }
+    }
+
+    private static func controlGraphNeedsInkTexture(_ graph: ControlFieldGraph) -> Bool {
+        graph.providers.contains {
+            $0.enabled && $0.resolvedMotionConfig.enabled && $0.resolvedMotionConfig.input == .inkTexture
+        }
+    }
+
+    private func pixelBuffer(from image: CIImage?, outputFormat: FrameFormat) -> CVPixelBuffer? {
+        guard let image,
+              let buffer = try? PixelBufferUtils.makePixelBuffer(format: outputFormat) else { return nil }
+        let bounds = CGRect(origin: .zero, size: outputFormat.size)
+        Self.sharedCIContext.render(image, to: buffer, bounds: bounds, colorSpace: nil)
+        return buffer
     }
 
     private func routedInkTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,

@@ -12,6 +12,7 @@ struct ControlFieldFrameContext {
     let outputSize: CGSize
     let cameraPixelBuffer: CVPixelBuffer?
     let moviePixelBuffer: CVPixelBuffer?
+    let inkTexturePixelBuffer: CVPixelBuffer?
     let detection: LandmarkDetection?
     let settings: ProcessingSettings
 
@@ -65,6 +66,8 @@ final class ControlFieldCoordinator {
     private var providers: [UUID: GPUControlFieldProvider] = [:]
     private var providerSettings: [UUID: ControlFieldProvider] = [:]
     private var lastValidationError: String?
+    private(set) var lastMotionSeconds: Double = 0
+    private(set) var lastPaperSeconds: Double = 0
 
     #if DEBUG
     private(set) var providerUpdateCount = 0
@@ -77,12 +80,14 @@ final class ControlFieldCoordinator {
             switch settings.kind {
             case .paper: return PaperControlFieldProvider(settings: settings)
             case .trackedMotion: return TrackedMotionFieldProvider(settings: settings, device: device)
-            case .opticalFlow, .combinedMotion: return nil
+            case .opticalFlow: return OpticalFlowFieldProvider(settings: settings, device: device)
+            case .combinedMotion: return CombinedMotionFieldProvider(settings: settings, device: device)
             }
         }
         #if DEBUG
         runDisabledPathSelfCheck()
         TrackedMotionFieldProvider.runDeterministicSelfCheck(device: device, store: store)
+        OpticalFlowFieldProvider.runSyntheticTranslationSelfCheck(device: device)
         #endif
     }
 
@@ -109,9 +114,15 @@ final class ControlFieldCoordinator {
         let activeIDs = providerClosure(from: routedIDs, settingsByID: settingsByID, enabledIDs: enabledIDs)
         reconcile(activeIDs: activeIDs, settingsByID: settingsByID)
 
+        lastMotionSeconds = 0
+        lastPaperSeconds = 0
         for id in topologicalOrder(activeIDs: activeIDs, settingsByID: settingsByID) {
             guard let provider = providers[id] else { continue }
+            let start = CFAbsoluteTimeGetCurrent()
             provider.update(context, store: store)
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            if settingsByID[id]?.kind == .paper { lastPaperSeconds += elapsed }
+            else { lastMotionSeconds += elapsed }
             #if DEBUG
             providerUpdateCount += 1
             #endif
@@ -153,6 +164,8 @@ final class ControlFieldCoordinator {
     func reset() {
         removeAllProviders()
         store.reset()
+        lastMotionSeconds = 0
+        lastPaperSeconds = 0
     }
 
     private func providerClosure(
@@ -227,6 +240,7 @@ final class ControlFieldCoordinator {
             outputSize: CGSize(width: 11, height: 7),
             cameraPixelBuffer: nil,
             moviePixelBuffer: nil,
+            inkTexturePixelBuffer: nil,
             detection: nil,
             settings: ProcessingSettings()
         )

@@ -50,6 +50,7 @@ extension TrackedMotionFieldProvider {
                 outputSize: CGSize(width: 64, height: 48),
                 cameraPixelBuffer: nil,
                 moviePixelBuffer: nil,
+                inkTexturePixelBuffer: nil,
                 detection: detection,
                 settings: ProcessingSettings()
             )
