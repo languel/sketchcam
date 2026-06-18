@@ -9,6 +9,7 @@ import SketchCamCore
 final class InkLayerCompositor {
     private let lock = NSLock()
     private var engine: MetalInkEngine? = MetalInkEngine()
+    private let paperRenderer = MetalPaperRenderer()
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil) -> CIImage? {
@@ -23,24 +24,53 @@ final class InkLayerCompositor {
             if engine == nil { engine = MetalInkEngine() }
             var renderSettings = settings
             let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
-            let routedTexture = textureInput.flatMap { input -> CIImage? in
-                guard paperOpacity > 0.001 else { return nil }
-                if paperOpacity >= 0.999 { return input }
-                let alpha = CIVector(x: 0, y: 0, z: 0, w: CGFloat(paperOpacity))
-                return input.applyingFilter("CIColorMatrix", parameters: [
-                    "inputAVector": alpha
-                ])
-            }
+            let hasRoutedTexture = textureInput != nil
             renderSettings.landmarks.inkPaperEnabled = paperOpacity > 0.001
-            if routedTexture != nil {
+            if hasRoutedTexture {
                 renderSettings.landmarks.inkPaperEnabled = false
             }
             let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex)
-            guard let routedTexture else { return ink }
             let rect = CGRect(origin: .zero, size: outputSize)
-            guard let ink else { return routedTexture.cropped(to: rect) }
-            return ink.composited(over: routedTexture).cropped(to: rect)
+            guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
+            let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
+            let config = settings.landmarks.inkPaperConfig ?? .metalDefault
+            let substrate: CIImage
+            if mode == .none || paperRenderer == nil {
+                substrate = routed
+            } else if let paper = paperRenderer?.image(config: config, rect: rect) {
+                substrate = blend(paper: paper, over: routed, mode: mode).cropped(to: rect)
+            } else {
+                substrate = routed
+            }
+            let visibleSubstrate = applyOpacity(paperOpacity, to: substrate)
+            guard let ink else { return visibleSubstrate }
+            return ink.composited(over: visibleSubstrate).cropped(to: rect)
         }
+    }
+
+    private func blend(paper: CIImage, over source: CIImage, mode: InkPaperCompositeMode) -> CIImage {
+        let filter: String
+        switch mode {
+        case .none: return source
+        case .normal: return paper.composited(over: source)
+        case .multiply: filter = "CIMultiplyBlendMode"
+        case .screen: filter = "CIScreenBlendMode"
+        case .add: filter = "CIAdditionCompositing"
+        case .overlay: filter = "CIOverlayBlendMode"
+        case .darken: filter = "CIDarkenBlendMode"
+        case .lighten: filter = "CILightenBlendMode"
+        case .difference: filter = "CIDifferenceBlendMode"
+        case .subtract: filter = "CISubtractBlendMode"
+        case .softLight: filter = "CISoftLightBlendMode"
+        }
+        return paper.applyingFilter(filter, parameters: [kCIInputBackgroundImageKey: source])
+    }
+
+    private func applyOpacity(_ opacity: Float, to image: CIImage) -> CIImage {
+        guard opacity < 0.999 else { return image }
+        return image.applyingFilter("CIColorMatrix", parameters: [
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(opacity))
+        ])
     }
 }

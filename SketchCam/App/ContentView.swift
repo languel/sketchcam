@@ -98,6 +98,7 @@ struct ContentView: View {
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
     @State private var inkHUDVisible = false
+    @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var inkUndoStack: [[InkEditorPath]] = []
     @State private var inkRedoStack: [[InkEditorPath]] = []
@@ -749,8 +750,19 @@ struct ContentView: View {
                 .help("Show or hide the Ink layer's paper/substrate. Off makes ink render over transparent.")
             SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
                       hint: "Opacity of the routed or internal paper substrate. 0 = transparent ink-only output.")
-            PaperControls(config: inkPaperConfigBinding)
-                .disabled(inkTextureBinding.wrappedValue != .none || inkPaperOpacityBinding.wrappedValue <= 0.001)
+            if inkTextureBinding.wrappedValue != .none {
+                Picker("Paper blend", selection: inkPaperCompositeBinding) {
+                    ForEach(InkPaperCompositeMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            DisclosureGroup("Paper settings", isExpanded: $inkPaperSettingsExpanded) {
+                PaperControls(config: inkPaperConfigBinding)
+                    .padding(.top, 4)
+            }
+            .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
 
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
@@ -1075,6 +1087,13 @@ struct ContentView: View {
                 model.settings.landmarks.inkPaperColor = config.tint
                 model.settings.landmarks.inkPaperGrain = config.grain
             }
+        )
+    }
+
+    private var inkPaperCompositeBinding: Binding<InkPaperCompositeMode> {
+        Binding(
+            get: { model.settings.landmarks.inkPaperCompositeMode ?? .multiply },
+            set: { model.settings.landmarks.inkPaperCompositeMode = $0 }
         )
     }
     private var inkPaperOpacityBinding: Binding<Double> {
@@ -1899,10 +1918,29 @@ private extension SketchCamCore.BlendMode {
         case .lighten: return "Lighten"
         case .difference: return "Difference"
         case .subtract: return "Subtract"
+        case .softLight: return "Soft Light"
         case .hue: return "Hue"
         case .saturation: return "Saturation"
         case .color: return "Color"
         case .luminosity: return "Luminosity"
+        }
+    }
+}
+
+private extension InkPaperCompositeMode {
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .normal: return "Normal"
+        case .multiply: return "Multiply"
+        case .screen: return "Screen"
+        case .add: return "Add"
+        case .overlay: return "Overlay"
+        case .darken: return "Darken"
+        case .lighten: return "Lighten"
+        case .difference: return "Difference"
+        case .subtract: return "Subtract"
+        case .softLight: return "Soft Light"
         }
     }
 }
@@ -2076,7 +2114,8 @@ private struct PaperControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
-            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...2)
+            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4)
+            paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2)
             paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5)
 
             paperHeading("Fiber")
@@ -2139,7 +2178,7 @@ private struct LayerStackEditor: View {
     @State private var editText: String = ""
     @FocusState private var nameFieldFocused: Bool
     private static let availableBlendModes: [SketchCamCore.BlendMode] = [
-        .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract
+        .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract, .softLight
     ]
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
