@@ -12,7 +12,9 @@ final class InkLayerCompositor {
     private let paperRenderer = MetalPaperRenderer()
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
-               endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil) -> CIImage? {
+               endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
+               controlFields: ResolvedControlFields = .empty) -> CIImage? {
+        _ = controlFields // Consumed by the paper/motion simulation pass in the next implementation plan.
         let l = settings.landmarks
         guard l.inkEnabled else {
             return lock.withLock {

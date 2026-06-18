@@ -97,6 +97,7 @@ final class SketchCamViewModel: ObservableObject {
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
+    private let controlFieldCoordinator = ControlFieldCoordinator()
     private let paperRenderer = MetalPaperRenderer()
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
@@ -551,6 +552,20 @@ final class SketchCamViewModel: ObservableObject {
                     )
                 }()
                 let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+                let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
+                let controlFields = self.timings.measure(.controlFields) {
+                    self.controlFieldCoordinator?.update(
+                        graph: settings.resolvedControlFields,
+                        context: ControlFieldFrameContext(
+                            frameIndex: frameIndex,
+                            timestamp: timestamp,
+                            outputSize: outputFormat.size,
+                            cameraPixelBuffer: controlSources.camera,
+                            moviePixelBuffer: controlSources.movie,
+                            detection: drawingDetection
+                        )
+                    ) ?? .empty
+                }
                 // The inkwash engine runs synchronously (Metal commit +
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
@@ -574,7 +589,8 @@ final class SketchCamViewModel: ObservableObject {
                         endedLiveID: liveInk.ended,
                         outputSize: outputFormat.size,
                         frameIndex: frameIndex,
-                        textureInput: inkTexture
+                        textureInput: inkTexture,
+                        controlFields: controlFields
                     )
                 }
                 // Overlay renders async; report the latest render duration

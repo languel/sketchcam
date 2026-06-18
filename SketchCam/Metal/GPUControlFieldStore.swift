@@ -139,6 +139,19 @@ final class GPUControlFieldStore {
         let vector = resolve(missingVector, width: 7, height: 5)
         assert(vector.kind == .vector && vector.texture.pixelFormat == .rg16Float)
         assert(zeroAllocationCount == 2)
+
+        let provider = UUID()
+        let reference = ControlFieldReference(provider: provider, output: .paperDrag)
+        guard let oldTexture = makeTexture(kind: .scalar, width: 3, height: 2),
+              let newTexture = makeTexture(kind: .scalar, width: 3, height: 2) else {
+            assertionFailure("Unable to allocate control-field self-check textures")
+            return
+        }
+        publish(GPUControlField(kind: .scalar, texture: newTexture, revision: 2), provider: provider, output: .paperDrag)
+        publish(GPUControlField(kind: .scalar, texture: oldTexture, revision: 1), provider: provider, output: .paperDrag)
+        assert(resolve(reference, width: 3, height: 2).texture === newTexture)
+        remove(provider: provider)
+        assert(resolve(reference, width: 3, height: 2).revision == 0)
     }
     #endif
 
