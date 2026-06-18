@@ -261,6 +261,9 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// the default graph from the feature flags. The compositor reconciles it
     /// against the current flags each frame.
     public var layerGraph: LayerGraph?
+    /// Typed scalar/vector providers and routes used by material simulations.
+    /// Nil preserves projects saved before control fields existed.
+    public var controlFields: ControlFieldGraph?
     /// v2 GPU path: composite every layer (camera/movie/solid/paper/drawing/ink/
     /// web) from the graph on the GPU — per-layer Metal effect chain + mask —
     /// instead of the CoreImage base. Experimental; off = legacy CoreImage path.
@@ -296,6 +299,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewEnabled: Bool = true,
         useLayerGraph: Bool = true,
         layerGraph: LayerGraph? = nil,
+        controlFields: ControlFieldGraph? = nil,
         useGPUCompositor: Bool = true,
         previewFPS: Double = 0,
         useMetalPreview: Bool = true,
@@ -322,12 +326,17 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewEnabled = previewEnabled
         self.useLayerGraph = useLayerGraph
         self.layerGraph = layerGraph
+        self.controlFields = controlFields
         self.useGPUCompositor = useGPUCompositor
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.processingQuality = processingQuality
         self.landmarks = landmarks
         self.web = web
+    }
+
+    public var resolvedControlFields: ControlFieldGraph {
+        controlFields ?? .empty
     }
 }
 
