@@ -504,7 +504,6 @@ struct ContentView: View {
     // MARK: - Layers tab
 
     @ViewBuilder private var layersTab: some View {
-        SectionHeader("Layer stack")
         LayerStackEditor(model: model)
             .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
     }
@@ -750,10 +749,7 @@ struct ContentView: View {
                 .help("Show or hide the Ink layer's paper/substrate. Off makes ink render over transparent.")
             SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
                       hint: "Opacity of the routed or internal paper substrate. 0 = transparent ink-only output.")
-            RGBAColorPicker("Tint", rgba: inkPaperColorRGBA, supportsOpacity: true)
-                .disabled(inkTextureBinding.wrappedValue != .none || inkPaperOpacityBinding.wrappedValue <= 0.001)
-            SliderRow(title: "Grain", value: floatBinding(\.landmarks.inkPaperGrain), defaultValue: 0.45,
-                      hint: "Fallback internal paper texture / grain strength.")
+            PaperControls(config: inkPaperConfigBinding)
                 .disabled(inkTextureBinding.wrappedValue != .none || inkPaperOpacityBinding.wrappedValue <= 0.001)
 
             SectionHeader("Editor")
@@ -1063,6 +1059,23 @@ struct ContentView: View {
     private var inkPaperColorRGBA: Binding<RGBAColor> {
         Binding(get: { model.settings.landmarks.inkPaperColor },
                 set: { model.settings.landmarks.inkPaperColor = $0 })
+    }
+
+    private var inkPaperConfigBinding: Binding<PaperConfig> {
+        Binding(
+            get: {
+                if let config = model.settings.landmarks.inkPaperConfig { return config }
+                var legacy = PaperConfig.metalDefault
+                legacy.tint = model.settings.landmarks.inkPaperColor
+                legacy.grain = model.settings.landmarks.inkPaperGrain
+                return legacy
+            },
+            set: { config in
+                model.settings.landmarks.inkPaperConfig = config
+                model.settings.landmarks.inkPaperColor = config.tint
+                model.settings.landmarks.inkPaperGrain = config.grain
+            }
+        )
     }
     private var inkPaperOpacityBinding: Binding<Double> {
         Binding(
@@ -2051,32 +2064,71 @@ private struct PaperNodeEditor: View {
     @Binding var config: PaperConfig
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Paper").font(.caption).foregroundStyle(.secondary)
-                Picker("Texture", selection: $config.texture) {
-                    ForEach(PaperTexture.allCases, id: \.self) { texture in
-                        Text(texture.title).tag(texture)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-            }
-            RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
-            HStack {
-                Text("Scale").font(.caption2).frame(width: 56, alignment: .leading)
-                Slider(value: $config.scale, in: 0.2...6).controlSize(.small)
-                Text(String(format: "%.1f", config.scale)).font(.caption2).frame(width: 32)
-            }
-            HStack {
-                Text("Grain").font(.caption2).frame(width: 56, alignment: .leading)
-                Slider(value: $config.grain, in: 0...1).controlSize(.small)
-                Text(String(format: "%.2f", config.grain)).font(.caption2).frame(width: 32)
-            }
-        }
+        PaperControls(config: $config)
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+    }
+}
+
+private struct PaperControls: View {
+    @Binding var config: PaperConfig
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
+            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...2)
+            paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5)
+
+            paperHeading("Fiber")
+            paperSlider("Strength", value: optional(\.fiberStrength, 0.05), range: 0...0.15)
+            paperSlider("X scale", value: optional(\.fiberScaleX, 0.055), range: 0.005...0.5, precision: 3)
+            paperSlider("Y scale", value: optional(\.fiberScaleY, 0.055), range: 0.005...0.5, precision: 3)
+            paperSlider("Angle", value: optional(\.fiberOrientation, 0), range: -Float.pi...Float.pi)
+
+            paperHeading("Tooth")
+            paperSlider("Strength", value: optional(\.toothStrength, 0.022), range: 0...0.1, precision: 3)
+            paperSlider("X scale", value: optional(\.toothScaleX, 0.42), range: 0.01...1)
+            paperSlider("Y scale", value: optional(\.toothScaleY, 0.42), range: 0.01...1)
+
+            paperHeading("Grain")
+            paperSlider("Strength", value: $config.grain, range: 0...1)
+            paperSlider("X scale", value: optional(\.grainScaleX, 0.12), range: 0.005...0.5, precision: 3)
+            paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, precision: 3)
+            HStack {
+                Stepper("Seed \(config.seed ?? 0)", value: seedBinding, in: 0...99_999)
+                    .font(.caption2)
+                Spacer()
+                Button("Shuffle") { config.seed = Int.random(in: 0..<100_000) }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+            }
+        }
+    }
+
+    private func paperHeading(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
+            .padding(.top, 3)
+    }
+
+    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, precision: Int = 2) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption2).frame(width: 56, alignment: .leading)
+            Slider(value: value, in: range).controlSize(.small)
+            Text(String(format: "%.*f", precision, value.wrappedValue))
+                .font(.caption2).monospacedDigit().frame(width: 38, alignment: .trailing)
+        }
+    }
+
+    private func optional(_ keyPath: WritableKeyPath<PaperConfig, Float?>, _ fallback: Float) -> Binding<Float> {
+        Binding(
+            get: { config[keyPath: keyPath] ?? fallback },
+            set: { config[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private var seedBinding: Binding<Int> {
+        Binding(get: { config.seed ?? 0 }, set: { config.seed = $0 })
     }
 }
 
@@ -2132,6 +2184,12 @@ private struct LayerStackEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                SectionHeader("Layer stack")
+                addLayerMenu
+                    .padding(.top, 6)
+                Spacer()
+            }
             ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
@@ -2204,32 +2262,35 @@ private struct LayerStackEditor: View {
                     }
                 }
             }
-            Menu {
-                Section("Sources") {
-                    Button("Camera") { addNode(.video, name: "Camera") }
-                    Button("Movie") { addNode(.movie, name: "Movie") }
-                    Button("Solid color") { addSolid() }
-                    Button("Paper") { addPaper() }
-                }
-                Section("Streams") {
-                    Button("Drawing") { addStream(.drawing) }
-                        .disabled(streamPresent(.drawing))
-                    Button("Ink") { addStream(.ink) }
-                        .disabled(streamPresent(.ink))
-                    Button("Web") { addStream(.web) }
-                        .disabled(streamPresent(.web))
-                }
-            } label: {
-                Label("Add layer", systemImage: "plus")
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 120)
-            .help("Add a layer. Solid is freeform (add as many as you like); a stream layer surfaces a shared source (single instance for now — multiplicity comes with the per-layer renderers).")
         }
         .onAppear(perform: normalize)
         // Re-sync the stack when any layer-affecting feature toggles (so enabling
         // Ink/Web/Marks/Drawing or changing placement updates the list live).
         .onChange(of: featureKey) { _, _ in normalize() }
+    }
+
+    private var addLayerMenu: some View {
+        Menu {
+            Section("Sources") {
+                Button("Camera") { addNode(.video, name: "Camera") }
+                Button("Movie") { addNode(.movie, name: "Movie") }
+                Button("Solid color") { addSolid() }
+                Button("Paper") { addPaper() }
+            }
+            Section("Streams") {
+                Button("Drawing") { addStream(.drawing) }
+                    .disabled(streamPresent(.drawing))
+                Button("Ink") { addStream(.ink) }
+                    .disabled(streamPresent(.ink))
+                Button("Web") { addStream(.web) }
+                    .disabled(streamPresent(.web))
+            }
+        } label: {
+            Label("Add layer", systemImage: "plus")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Add a layer. Solid and Paper support multiple independent instances; stream layers are shared sources.")
     }
 
     /// A signature of the flags that determine which layers exist.
