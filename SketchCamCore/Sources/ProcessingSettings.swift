@@ -499,6 +499,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// presets follow `inkPaperEnabled`.
     public var inkPaperOpacity: Float?
     public var inkPaperGrain: Float
+    /// Independent cached Metal substrate recipe. Nil preserves legacy Ink
+    /// paper settings when decoding older presets.
+    public var inkPaperConfig: PaperConfig?
     public var inkWashStrength: Float
     public var inkCurveFit: CurveFit
     public var inkBrushMode: InkBrushMode?
@@ -645,6 +648,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperColor: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 0.42),
         inkPaperOpacity: Float? = 1,
         inkPaperGrain: Float = 0.45,
+        inkPaperConfig: PaperConfig? = .metalDefault,
         inkWashStrength: Float = 0.9,
         inkCurveFit: CurveFit = .hobby,
         inkBrushMode: InkBrushMode? = .pen,
@@ -764,6 +768,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperColor = inkPaperColor
         self.inkPaperOpacity = inkPaperOpacity
         self.inkPaperGrain = inkPaperGrain
+        self.inkPaperConfig = inkPaperConfig
         self.inkWashStrength = inkWashStrength
         self.inkCurveFit = inkCurveFit
         self.inkBrushMode = inkBrushMode

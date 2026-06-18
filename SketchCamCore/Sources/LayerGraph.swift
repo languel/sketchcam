@@ -125,14 +125,98 @@ public struct PaperConfig: Codable, Sendable, Equatable {
     public var grain: Float
     public var scale: Float
     public var texture: PaperTexture
+    public var contrast: Float?
+    public var fiberStrength: Float?
+    public var fiberScaleX: Float?
+    public var fiberScaleY: Float?
+    public var fiberOrientation: Float?
+    public var toothStrength: Float?
+    public var toothScaleX: Float?
+    public var toothScaleY: Float?
+    public var grainScaleX: Float?
+    public var grainScaleY: Float?
+    public var seed: Int?
+    public var vignetteStrength: Float?
 
-    public init(tint: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 1),
-                grain: Float = 0.45, scale: Float = 1, texture: PaperTexture = .fiber) {
+    public init(
+        tint: RGBAColor = RGBAColor(red: 0.962, green: 0.954, blue: 0.930, alpha: 1),
+        grain: Float = 0.45,
+        scale: Float = 1,
+        texture: PaperTexture = .fiber,
+        contrast: Float? = 1,
+        fiberStrength: Float? = 0.05,
+        fiberScaleX: Float? = 0.055,
+        fiberScaleY: Float? = 0.055,
+        fiberOrientation: Float? = 0,
+        toothStrength: Float? = 0.022,
+        toothScaleX: Float? = 0.42,
+        toothScaleY: Float? = 0.42,
+        grainScaleX: Float? = 0.12,
+        grainScaleY: Float? = 0.12,
+        seed: Int? = 0,
+        vignetteStrength: Float? = 0.16
+    ) {
         self.tint = tint
         self.grain = grain
         self.scale = scale
         self.texture = texture
+        self.contrast = contrast
+        self.fiberStrength = fiberStrength
+        self.fiberScaleX = fiberScaleX
+        self.fiberScaleY = fiberScaleY
+        self.fiberOrientation = fiberOrientation
+        self.toothStrength = toothStrength
+        self.toothScaleX = toothScaleX
+        self.toothScaleY = toothScaleY
+        self.grainScaleX = grainScaleX
+        self.grainScaleY = grainScaleY
+        self.seed = seed
+        self.vignetteStrength = vignetteStrength
     }
+
+    public static let metalDefault = PaperConfig()
+
+    public var resolved: ResolvedPaperConfig {
+        let legacyScale = max(0.01, scale)
+        let legacyFiber: Float = texture == .fiber ? 0.05 : (texture == .wash ? 0.018 : 0)
+        let legacyTooth: Float = texture == .speckle ? 0.055 : 0.022
+        return ResolvedPaperConfig(
+            tintRed: tint.red, tintGreen: tint.green, tintBlue: tint.blue, tintAlpha: tint.alpha,
+            contrast: contrast ?? 1,
+            fiberStrength: fiberStrength ?? legacyFiber,
+            fiberScaleX: fiberScaleX ?? (0.055 / legacyScale),
+            fiberScaleY: fiberScaleY ?? (0.055 / legacyScale),
+            fiberOrientation: fiberOrientation ?? 0,
+            toothStrength: toothStrength ?? legacyTooth,
+            toothScaleX: toothScaleX ?? (0.42 / legacyScale),
+            toothScaleY: toothScaleY ?? (0.42 / legacyScale),
+            grainStrength: grain,
+            grainScaleX: grainScaleX ?? (0.12 / legacyScale),
+            grainScaleY: grainScaleY ?? (0.12 / legacyScale),
+            seed: seed ?? 0,
+            vignetteStrength: vignetteStrength ?? 0.16
+        )
+    }
+}
+
+public struct ResolvedPaperConfig: Hashable, Sendable {
+    public var tintRed: Float
+    public var tintGreen: Float
+    public var tintBlue: Float
+    public var tintAlpha: Float
+    public var contrast: Float
+    public var fiberStrength: Float
+    public var fiberScaleX: Float
+    public var fiberScaleY: Float
+    public var fiberOrientation: Float
+    public var toothStrength: Float
+    public var toothScaleX: Float
+    public var toothScaleY: Float
+    public var grainStrength: Float
+    public var grainScaleX: Float
+    public var grainScaleY: Float
+    public var seed: Int
+    public var vignetteStrength: Float
 }
 
 /// One entry in a layer's ordered effect chain (v2 — per-layer effects).

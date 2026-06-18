@@ -103,6 +103,28 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded, g)
     }
 
+    func testMetalPaperDefaultsMatchOriginalShader() {
+        let paper = PaperConfig.metalDefault.resolved
+        XCTAssertEqual(paper.tintRed, 0.962, accuracy: 0.0001)
+        XCTAssertEqual(paper.tintGreen, 0.954, accuracy: 0.0001)
+        XCTAssertEqual(paper.tintBlue, 0.930, accuracy: 0.0001)
+        XCTAssertEqual(paper.fiberStrength, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(paper.fiberScaleX, 0.055, accuracy: 0.0001)
+        XCTAssertEqual(paper.toothStrength, 0.022, accuracy: 0.0001)
+        XCTAssertEqual(paper.toothScaleX, 0.42, accuracy: 0.0001)
+        XCTAssertEqual(paper.grainStrength, 0.45, accuracy: 0.0001)
+        XCTAssertEqual(paper.grainScaleX, 0.12, accuracy: 0.0001)
+        XCTAssertEqual(paper.vignetteStrength, 0.16, accuracy: 0.0001)
+    }
+
+    func testLegacyPaperConfigDecodesWithResolvedDefaults() throws {
+        let json = #"{"tint":{"red":0.94,"green":0.92,"blue":0.86,"alpha":1},"grain":0.6,"scale":2,"texture":"fiber"}"#
+        let paper = try JSONDecoder().decode(PaperConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(paper.resolved.grainStrength, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.fiberScaleX, 0.0275, accuracy: 0.0001)
+        XCTAssertEqual(paper.resolved.seed, 0)
+    }
+
     func testCodableRoundTripWithEffectsAndStreamMask() throws {
         // A solid used as a threshold mask on a camera layer carrying an effect chain.
         let cam = Node(name: "Camera", kind: .video)
