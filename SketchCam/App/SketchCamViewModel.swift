@@ -97,6 +97,7 @@ final class SketchCamViewModel: ObservableObject {
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
+    private let paperRenderer = MetalPaperRenderer()
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
@@ -655,7 +656,7 @@ final class SketchCamViewModel: ObservableObject {
                 return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                                               blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)
             case .paper(let config):
-                return Self.paperImage(config: config, rect: outputRect)
+                return self.paperRenderer?.image(config: config, rect: outputRect)
             case .personMatte:
                 return personMatteImage
             case .overlay, .marks, .drawing:
@@ -682,50 +683,6 @@ final class SketchCamViewModel: ObservableObject {
         case .node(let id):
             return graph.node(id).flatMap(nodeImage)
         }
-    }
-
-    private static func paperImage(config: PaperConfig, rect: CGRect) -> CIImage {
-        let tint = CIColor(red: CGFloat(config.tint.red), green: CGFloat(config.tint.green),
-                           blue: CGFloat(config.tint.blue), alpha: CGFloat(config.tint.alpha))
-        let base = CIImage(color: tint).cropped(to: rect)
-        let grain = max(0, min(1, config.grain))
-        guard grain > 0.001, let random = CIFilter(name: "CIRandomGenerator")?.outputImage else {
-            return base
-        }
-
-        let scale = max(0.2, CGFloat(config.scale))
-        var texture = random
-            .transformed(by: CGAffineTransform(scaleX: 1 / scale, y: 1 / scale))
-            .cropped(to: rect.insetBy(dx: -64, dy: -64))
-            .applyingFilter("CIColorControls", parameters: [
-                kCIInputSaturationKey: 0,
-                kCIInputContrastKey: 1.2 + grain * 2.4
-            ])
-
-        switch config.texture {
-        case .fiber:
-            texture = texture.applyingFilter("CIMotionBlur", parameters: [
-                kCIInputRadiusKey: 8 * scale,
-                kCIInputAngleKey: 0
-            ])
-        case .speckle:
-            texture = texture.applyingFilter("CIColorControls", parameters: [
-                kCIInputSaturationKey: 0,
-                kCIInputContrastKey: 3.5 + grain * 4
-            ])
-        case .wash:
-            texture = texture.applyingFilter("CIGaussianBlur", parameters: [
-                kCIInputRadiusKey: 6 * scale
-            ])
-        }
-        texture = texture.cropped(to: rect)
-
-        let overlayAlpha = CGFloat(0.06 + grain * 0.28)
-        let light = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: overlayAlpha)).cropped(to: rect)
-        return light.applyingFilter("CIBlendWithAlphaMask", parameters: [
-            kCIInputBackgroundImageKey: base,
-            kCIInputMaskImageKey: texture
-        ]).cropped(to: rect)
     }
 
     /// Build the per-stream images and composite the graph on the GPU. Returns
@@ -764,7 +721,7 @@ final class SketchCamViewModel: ObservableObject {
                     return CIImage(color: CIColor(red: CGFloat(cfg.color.red), green: CGFloat(cfg.color.green),
                                                   blue: CGFloat(cfg.color.blue), alpha: CGFloat(cfg.color.alpha))).cropped(to: outputRect)
                 case .paper(let config):
-                    return Self.paperImage(config: config, rect: outputRect)
+                    return self.paperRenderer?.image(config: config, rect: outputRect)
                 case .personMatte:
                     return personMatteImage
                 case .overlay, .marks, .drawing:
