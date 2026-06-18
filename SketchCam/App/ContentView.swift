@@ -427,7 +427,7 @@ struct ContentView: View {
             Button("Load") { model.frameSource = .movie; model.openMovieURL(movieURLField) }
                 .disabled(movieURLField.isEmpty)
         }
-        SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, hint: "0 pauses")
+        SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, defaultValue: 1, hint: "0 pauses")
     }
 
     @ViewBuilder private var inputTab: some View {
@@ -460,7 +460,7 @@ struct ContentView: View {
         SliderRow(title: "Display fps", value: Binding(
             get: { model.settings.previewFPS },
             set: { model.settings.previewFPS = $0.rounded() }
-        ), range: 0...60, precision: 0, hint: "0 = full-tilt (every published frame)")
+        ), range: 0...60, precision: 0, defaultValue: 0, hint: "0 = full-tilt (every published frame)")
 
         SectionHeader("Window")
         HStack {
@@ -552,7 +552,7 @@ struct ContentView: View {
             SectionHeader("Other")
             featureRow("Hands", track: \.landmarks.trackHands, style: \.landmarks.handsStyle)
             featureRow("Person", track: \.landmarks.trackContour, style: \.landmarks.contourStyle)
-            SliderRow(title: "Detail", value: floatBinding(\.landmarks.contourDetail),
+            SliderRow(title: "Detail", value: floatBinding(\.landmarks.contourDetail), defaultValue: 0.4,
                       hint: "Person silhouette contour (Vision segmentation). Independent of Layers keying — tracks the outline without the keying composite. Coarse → fine (hugs concavities).")
                 .disabled(!model.settings.landmarks.trackContour)
             featureRow("Hull", track: \.landmarks.trackBodyHull, style: \.landmarks.bodyHullStyle)
@@ -560,7 +560,7 @@ struct ContentView: View {
 
             SectionHeader("Labels")
             Toggle("Show IDs", isOn: $model.settings.landmarks.showIDs)
-            SliderRow(title: "Size", value: floatBinding(\.landmarks.labelSize), range: 6...24)
+            SliderRow(title: "Size", value: floatBinding(\.landmarks.labelSize), range: 6...24, defaultValue: 11)
                 .disabled(!model.settings.landmarks.showIDs)
             Toggle("Match feature colors", isOn: $model.settings.landmarks.labelsMatchColor)
                 .disabled(!model.settings.landmarks.showIDs)
@@ -569,16 +569,16 @@ struct ContentView: View {
             SliderRow(title: "Rate (Hz)", value: Binding(
                 get: { model.settings.landmarks.detectionsPerSecond },
                 set: { model.settings.landmarks.detectionsPerSecond = $0.rounded() }
-            ), range: 1...30, precision: 0)
+            ), range: 1...30, precision: 0, defaultValue: 10)
             SliderRow(title: "Input px", value: Binding(
                 get: { Double(model.settings.landmarks.detectionMaxDimension) },
                 set: { model.settings.landmarks.detectionMaxDimension = max(96, Int(($0 / 32).rounded()) * 32) }
-            ), range: 128...512, precision: 0,
+            ), range: 128...512, precision: 0, defaultValue: 384,
                hint: "Longest side of the frame handed to Vision (snaps to /32; e.g. 256). NOTE: Vision resizes to a fixed internal size, so this mainly affects precision, NOT speed — to cut detection cost, track fewer categories or lower Rate.")
             Toggle("Predict motion (smooth tracking)", isOn: $model.settings.landmarks.predictiveTracking)
                 .help("Extrapolate landmark motion and redraw every frame so the drawing tracks at frame rate and lags the body less — without raising the detection rate.")
-            SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4)
-            SliderRow(title: "Stick width", value: floatBinding(\.landmarks.stickScale), range: 0.2...4)
+            SliderRow(title: "Dot size", value: floatBinding(\.landmarks.dotScale), range: 0.2...4, defaultValue: 1)
+            SliderRow(title: "Stick width", value: floatBinding(\.landmarks.stickScale), range: 0.2...4, defaultValue: 1)
         }
         .disabled(!model.settings.landmarks.enabled)
     }
@@ -605,11 +605,11 @@ struct ContentView: View {
             seedRow(\.landmarks.yarnSeed)
 
             SectionHeader("Yarn")
-            SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio),
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.subsetRatio), defaultValue: 0.65,
                       hint: "How many points are woven — higher = denser/heavier, lower = sparser.")
-            SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount))
-            SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8)
-            SliderRow(title: "Variation", value: floatBinding(\.landmarks.yarnWidthVariation),
+            SliderRow(title: "Weave", value: floatBinding(\.landmarks.yarnWeaveAmount), defaultValue: 0.7)
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.yarnWidth), range: 0.7...8, defaultValue: 2.2)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.yarnWidthVariation), defaultValue: 0.35,
                       hint: "Ribbon taper/swell along the stroke (0 = constant width).")
             Toggle("Halo (glow)", isOn: $model.settings.landmarks.yarnHalo)
                 .help("Add a wide dark underlay + white highlight around the ribbon.")
@@ -624,7 +624,7 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1,
+            SliderRow(title: "Winding", value: floatBinding(\.landmarks.yarnWinding), range: 1...6, precision: 1, defaultValue: 1,
                       hint: "Loops per segment for the circular noise — >1 makes local tangles/coils.")
         }
         .disabled(!model.settings.landmarks.yarnEnabled)
@@ -642,7 +642,7 @@ struct ContentView: View {
             seedRow(\.landmarks.wrapSeed)
 
             SectionHeader("Wrap the body")
-            SliderRow(title: "Density", value: floatBinding(\.landmarks.wrapDensity),
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.wrapDensity), defaultValue: 0.6,
                       hint: "How densely the wire samples inside the body — higher = woven mat, lower = sparse bent-wire.")
             Picker("Curve", selection: $model.settings.landmarks.wrapCurveFit) {
                 ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
@@ -661,16 +661,16 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            SliderRow(title: "Scale", value: floatBinding(\.landmarks.wrapScale),
+            SliderRow(title: "Scale", value: floatBinding(\.landmarks.wrapScale), defaultValue: 0.5,
                       hint: "Local (fine) → global (coarse, whole-wire drift)")
 
             SectionHeader("Loops")
-            SliderRow(title: "Loop", value: floatBinding(\.landmarks.wrapCircular),
+            SliderRow(title: "Loop", value: floatBinding(\.landmarks.wrapCircular), defaultValue: 0,
                       hint: "Coil/loop amplitude along the wire.")
-            SliderRow(title: "Winding", value: floatBinding(\.landmarks.wrapWinding), range: 1...6, precision: 1,
+            SliderRow(title: "Winding", value: floatBinding(\.landmarks.wrapWinding), range: 1...6, precision: 1, defaultValue: 1,
                       hint: "Loops per segment — >1 makes tangles.")
-            SliderRow(title: "Width", value: floatBinding(\.landmarks.wrapWidth), range: 0.7...8)
-            SliderRow(title: "Variation", value: floatBinding(\.landmarks.wrapWidthVariation),
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.wrapWidth), range: 0.7...8, defaultValue: 2.2)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.wrapWidthVariation), defaultValue: 0.35,
                       hint: "Ribbon taper/swell along the wire (0 = constant width).")
             Toggle("Halo (glow)", isOn: $model.settings.landmarks.wrapHalo)
                 .help("Add a wide dark underlay + white highlight around the ribbon.")
@@ -690,9 +690,9 @@ struct ContentView: View {
             seedRow(\.landmarks.lineWalkSeed)
 
             SectionHeader("Line walk")
-            SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity),
+            SliderRow(title: "Continuity", value: floatBinding(\.landmarks.lineWalkContinuity), defaultValue: 1,
                       hint: "One continuous line → separate semantic paths → fragmented segments")
-            SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity),
+            SliderRow(title: "Density", value: floatBinding(\.landmarks.lineWalkDensity), defaultValue: 0.5,
                       hint: "Few points (minimal) → dense sampling with subdivided lines")
             Picker("Curve", selection: $model.settings.landmarks.lineWalkCurveFit) {
                 ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
@@ -711,12 +711,12 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            SliderRow(title: "Scale", value: floatBinding(\.landmarks.lineWalkScale),
+            SliderRow(title: "Scale", value: floatBinding(\.landmarks.lineWalkScale), defaultValue: 0.5,
                       hint: "Local (fine, per sub-stroke) → global (coarse, whole-line drift)")
 
             SectionHeader("Stroke")
-            SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8)
-            SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation),
+            SliderRow(title: "Width", value: floatBinding(\.landmarks.lineWalkWidth), range: 0.4...8, defaultValue: 2)
+            SliderRow(title: "Variation", value: floatBinding(\.landmarks.lineWalkWidthVariation), defaultValue: 0.3,
                       hint: "Width modulation along the curve (calligraphic swell)")
             Toggle("Halo (glow)", isOn: $model.settings.landmarks.lineWalkHalo)
                 .help("Add a wide dark underlay + white highlight around the ribbon.")
@@ -765,12 +765,16 @@ struct ContentView: View {
             .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
 
             DisclosureGroup("Physical response") {
-                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1)
-                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1)
-                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2)
-                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1)
-                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2)
-                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1)
+                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0)
+                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0)
+                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2, defaultValue: 0)
+                SliderRow(title: "Motion wetness", value: optionalLandmarkFloatBinding(\.inkMotionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "Continuously wets pixels where optical flow is detected, allowing that motion to carry pigment.")
+                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0)
+                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5)
+                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1)
+                Button("Wet canvas") { wetInkCanvas() }
+                    .help("Flood the persistent wetness field once. It then moves, creeps, and dries normally.")
             }
 
             SectionHeader("Editor")
@@ -940,6 +944,10 @@ struct ContentView: View {
 
     private func fixInk() {
         model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+    }
+
+    private func wetInkCanvas() {
+        model.settings.landmarks.inkWetCanvasRevision = (model.settings.landmarks.inkWetCanvasRevision ?? 0) + 1
     }
 
     private func rerenderInk() {
@@ -1334,8 +1342,8 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            SliderRow(title: "Opacity", value: floatBinding(\.web.opacity))
-            SliderRow(title: "Refresh fps", value: floatBinding(\.web.refreshFPS), range: 1...60, precision: 0,
+            SliderRow(title: "Opacity", value: floatBinding(\.web.opacity), defaultValue: 1)
+            SliderRow(title: "Refresh fps", value: floatBinding(\.web.refreshFPS), range: 1...60, precision: 0, defaultValue: 20,
                       hint: "How often the page is re-snapshotted into the frame (independent of output fps).")
 
             SectionHeader("Interact")
@@ -1786,6 +1794,9 @@ private struct MaskEditor: View {
                 if mask?.mode != .luma {
                     HStack {
                         Text("Level").font(.caption2).frame(width: 56, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { levelBinding.wrappedValue = 0.5 }
+                            .help("Double-click to reset")
                         Slider(value: levelBinding, in: 0...1).controlSize(.small)
                     }
                 }
@@ -1998,7 +2009,8 @@ private struct EffectChainEditor: View {
         case .threshold: return 0.5
         case .outline: return 0.3
         case .blur: return 3
-        case .invert, .mirror, .personKey: return 0
+        case .opticalFlow: return 1
+        case .invert, .mirror, .personKey, .levels: return 0
         }
     }
 }
@@ -2046,6 +2058,8 @@ private struct EffectPanel: View {
         case .invert: return "Inverts this layer's colours."
         case .mirror: return "Flips this layer horizontally."
         case .personKey: return "Keeps only the person (Vision matte). Invert to drop the person and keep the background. Higher matte quality is sharper but costs more."
+        case .opticalFlow: return "Visualizes frame-to-frame motion. Red/green encode direction; brightness encodes speed."
+        case .levels: return "Remaps black and white points, then applies gamma. Useful before or after analytical effects."
         }
     }
 
@@ -2053,6 +2067,9 @@ private struct EffectPanel: View {
         if effect.kind.usesAmount {
             HStack {
                 Text(amountLabel).font(.caption2).frame(width: 56, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { effect.amount = defaultAmount }
+                    .help("Double-click to reset to \(String(format: "%.2f", defaultAmount))")
                 Slider(value: $effect.amount, in: amountRange).controlSize(.small)
                 Text(String(format: "%.2f", effect.amount)).font(.caption2).frame(width: 32)
             }
@@ -2075,6 +2092,22 @@ private struct EffectPanel: View {
             }
             .pickerStyle(.segmented).controlSize(.small)
         }
+        if effect.kind == .levels {
+            levelSlider("Black", value: $effect.levelBlack, range: 0...0.99, defaultValue: 0)
+            levelSlider("White", value: $effect.levelWhite, range: 0.01...1, defaultValue: 1)
+            levelSlider("Gamma", value: $effect.levelGamma, range: 0.1...3, defaultValue: 1)
+        }
+    }
+
+    private func levelSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float) -> some View {
+        HStack {
+            Text(title).font(.caption2).frame(width: 56, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
+                .help("Double-click to reset")
+            Slider(value: value, in: range).controlSize(.small)
+            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).frame(width: 32)
+        }
     }
 
     private var amountLabel: String {
@@ -2082,6 +2115,7 @@ private struct EffectPanel: View {
         case .threshold: return "Level"
         case .outline: return "Strength"
         case .blur: return "Radius"
+        case .opticalFlow: return "Gain"
         default: return "Amount"
         }
     }
@@ -2090,7 +2124,16 @@ private struct EffectPanel: View {
         case .threshold: return 0...1
         case .outline: return 0...2
         case .blur: return 0...20
+        case .opticalFlow: return 0...4
         default: return 0...1
+        }
+    }
+    private var defaultAmount: Float {
+        switch effect.kind {
+        case .threshold: return 0.52
+        case .outline: return 0.25
+        case .blur, .opticalFlow: return 0.5
+        default: return 0.5
         }
     }
     private var colorBinding: Binding<Color> {
@@ -2125,9 +2168,9 @@ private struct AcrylicNodeEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             RGBAColorPicker("Color", rgba: $config.color, supportsOpacity: true)
-            acrylicSlider("Size", value: $config.width, range: 0.002...0.15)
-            acrylicSlider("Loading", value: $config.paintLoading, range: 0...1)
-            acrylicSlider("Body", value: Binding(get: { config.body }, set: { config.applyBody($0) }), range: 0...1)
+            acrylicSlider("Size", value: $config.width, range: 0.002...0.15, defaultValue: 0.035)
+            acrylicSlider("Loading", value: $config.paintLoading, range: 0...1, defaultValue: 0.65)
+            acrylicSlider("Body", value: Binding(get: { config.body }, set: { config.applyBody($0) }), range: 0...1, defaultValue: 0.5)
             Picker("Mixing", selection: $config.mixModel) {
                 Text("RGB").tag(AcrylicMixModel.rgb)
                 Text("Pigment").tag(AcrylicMixModel.pigment)
@@ -2161,24 +2204,27 @@ private struct AcrylicNodeEditor: View {
                 Button("Rerender") { config.rebuildRevision += 1 }
             }.buttonStyle(.borderless)
             DisclosureGroup("Advanced", isExpanded: $advanced) {
-                acrylicSlider("Opacity", value: $config.pigmentOpacity, range: 0...2)
-                acrylicSlider("Viscosity", value: $config.viscosity, range: 0...1)
-                acrylicSlider("Leveling", value: $config.leveling, range: 0...1)
-                acrylicSlider("Retention", value: $config.brushRetention, range: 0...1)
-                acrylicSlider("Flow", value: $config.flow, range: 0...1)
-                acrylicSlider("Dry rate", value: $config.dryRate, range: 0...1)
-                acrylicSlider("Paper", value: $config.paperInfluence, range: 0...1)
-                acrylicSlider("Live surface", value: $config.liveSurfaceInfluence, range: 0...1)
-                acrylicSlider("Motion", value: $config.motionForce, range: 0...2)
+                acrylicSlider("Opacity", value: $config.pigmentOpacity, range: 0...2, defaultValue: 0.85)
+                acrylicSlider("Viscosity", value: $config.viscosity, range: 0...1, defaultValue: 0.45)
+                acrylicSlider("Leveling", value: $config.leveling, range: 0...1, defaultValue: 0.5)
+                acrylicSlider("Retention", value: $config.brushRetention, range: 0...1, defaultValue: 0.35)
+                acrylicSlider("Flow", value: $config.flow, range: 0...1, defaultValue: 0.55)
+                acrylicSlider("Dry rate", value: $config.dryRate, range: 0...1, defaultValue: 0.15)
+                acrylicSlider("Paper", value: $config.paperInfluence, range: 0...1, defaultValue: 0)
+                acrylicSlider("Live surface", value: $config.liveSurfaceInfluence, range: 0...1, defaultValue: 0)
+                acrylicSlider("Motion", value: $config.motionForce, range: 0...2, defaultValue: 0)
             }
         }
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
     }
 
-    private func acrylicSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>) -> some View {
+    private func acrylicSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float) -> some View {
         HStack {
             Text(title).font(.caption2).frame(width: 72, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
+                .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
             Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).monospacedDigit().frame(width: 38)
         }
@@ -2191,28 +2237,28 @@ private struct PaperControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            paperSlider("Response", value: optional(\.response, 1), range: 0...1)
-            paperSlider("Variation", value: optional(\.variation, 1), range: 0...2)
+            paperSlider("Response", value: optional(\.response, 1), range: 0...1, defaultValue: 1)
+            paperSlider("Variation", value: optional(\.variation, 1), range: 0...2, defaultValue: 1)
             RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
-            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4)
-            paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2)
-            paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5)
+            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4, defaultValue: 1)
+            paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2, defaultValue: 1)
+            paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5, defaultValue: 0.16)
 
             paperHeading("Fiber")
-            paperSlider("Strength", value: optional(\.fiberStrength, 0.05), range: 0...0.15)
-            paperSlider("X scale", value: optional(\.fiberScaleX, 0.055), range: 0.005...0.5, precision: 3)
-            paperSlider("Y scale", value: optional(\.fiberScaleY, 0.055), range: 0.005...0.5, precision: 3)
-            paperSlider("Angle", value: optional(\.fiberOrientation, 0), range: -Float.pi...Float.pi)
+            paperSlider("Strength", value: optional(\.fiberStrength, 0.05), range: 0...0.15, defaultValue: 0.05)
+            paperSlider("X scale", value: optional(\.fiberScaleX, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3)
+            paperSlider("Y scale", value: optional(\.fiberScaleY, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3)
+            paperSlider("Angle", value: optional(\.fiberOrientation, 0), range: -Float.pi...Float.pi, defaultValue: 0)
 
             paperHeading("Tooth")
-            paperSlider("Strength", value: optional(\.toothStrength, 0.022), range: 0...0.1, precision: 3)
-            paperSlider("X scale", value: optional(\.toothScaleX, 0.42), range: 0.01...1)
-            paperSlider("Y scale", value: optional(\.toothScaleY, 0.42), range: 0.01...1)
+            paperSlider("Strength", value: optional(\.toothStrength, 0.022), range: 0...0.1, defaultValue: 0.022, precision: 3)
+            paperSlider("X scale", value: optional(\.toothScaleX, 0.42), range: 0.01...1, defaultValue: 0.42)
+            paperSlider("Y scale", value: optional(\.toothScaleY, 0.42), range: 0.01...1, defaultValue: 0.42)
 
             paperHeading("Grain")
-            paperSlider("Strength", value: $config.grain, range: 0...1)
-            paperSlider("X scale", value: optional(\.grainScaleX, 0.12), range: 0.005...0.5, precision: 3)
-            paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, precision: 3)
+            paperSlider("Strength", value: $config.grain, range: 0...1, defaultValue: 0.45)
+            paperSlider("X scale", value: optional(\.grainScaleX, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3)
+            paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3)
             HStack {
                 Stepper("Seed \(config.seed ?? 0)", value: seedBinding, in: 0...99_999)
                     .font(.caption2)
@@ -2223,11 +2269,11 @@ private struct PaperControls: View {
             }
 
             DisclosureGroup("Physical response", isExpanded: $physicalExpanded) {
-                paperSlider("Absorbency", value: optional(\.absorbency, 1), range: 0...1)
-                paperSlider("Drag", value: optional(\.drag, 1), range: 0...1)
-                paperSlider("Resist", value: optional(\.resist, 1), range: 0...1)
-                paperSlider("Threshold", value: optional(\.resistThreshold, 0.5), range: 0...1)
-                paperSlider("Softness", value: optional(\.resistSoftness, 0.1), range: 0...1)
+                paperSlider("Absorbency", value: optional(\.absorbency, 1), range: 0...1, defaultValue: 1)
+                paperSlider("Drag", value: optional(\.drag, 1), range: 0...1, defaultValue: 1)
+                paperSlider("Resist", value: optional(\.resist, 1), range: 0...1, defaultValue: 1)
+                paperSlider("Threshold", value: optional(\.resistThreshold, 0.5), range: 0...1, defaultValue: 0.5)
+                paperSlider("Softness", value: optional(\.resistSoftness, 0.1), range: 0...1, defaultValue: 0.1)
             }
         }
     }
@@ -2238,9 +2284,12 @@ private struct PaperControls: View {
             .padding(.top, 3)
     }
 
-    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, precision: Int = 2) -> some View {
+    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float, precision: Int = 2) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.caption2).frame(width: 56, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
+                .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
             Text(String(format: "%.*f", precision, value.wrappedValue))
                 .font(.caption2).monospacedDigit().frame(width: 38, alignment: .trailing)
@@ -2666,7 +2715,7 @@ private struct SliderRow: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
     var precision: Int = 2
-    var defaultValue: Double?
+    let defaultValue: Double
     var hint: String?
     @FocusState private var editing: Bool
 
@@ -2676,7 +2725,7 @@ private struct SliderRow: View {
                 .frame(width: 64, alignment: .leading)
                 .contentShape(Rectangle())
                 // Double-click the label to reset this parameter to its default.
-                .onTapGesture(count: 2) { if let defaultValue { value = defaultValue } }
+                .onTapGesture(count: 2) { value = defaultValue }
                 .help(hint ?? title)
             Slider(value: $value, in: range)
                 .controlSize(.small)
@@ -2727,12 +2776,12 @@ private struct InkBottomHUD: View {
                         .labelsHidden()
                         .frame(width: 22, height: 22)
                 }
-                hudSlider("size", value: $size)
-                hudSlider("flow", value: $flow)
-                hudSlider("bleed", value: $bleed)
-                hudSlider("dry", value: $dry)
-                hudSlider("color", value: $colorSeparation)
-                hudSlider("brush ink", value: $brushInk)
+                hudSlider("size", value: $size, defaultValue: 0.5)
+                hudSlider("flow", value: $flow, defaultValue: 0.9)
+                hudSlider("bleed", value: $bleed, defaultValue: 0.8)
+                hudSlider("dry", value: $dry, defaultValue: 0.25)
+                hudSlider("color", value: $colorSeparation, defaultValue: 0.5)
+                hudSlider("brush ink", value: $brushInk, defaultValue: 0)
                 command("fix", action: fix)
                 command("clear", action: clear)
                 command("save", action: save)
@@ -2759,10 +2808,13 @@ private struct InkBottomHUD: View {
         }
     }
 
-    private func hudSlider(_ label: String, value: Binding<Double>) -> some View {
+    private func hudSlider(_ label: String, value: Binding<Double>, defaultValue: Double) -> some View {
         VStack(spacing: 7) {
             Text(label)
                 .hudLabel()
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
+                .help("Double-click to reset")
             Slider(value: value, in: 0...1)
                 .frame(width: 86)
         }
@@ -3120,9 +3172,8 @@ private struct InkPreviewDrawingLayer: View {
     @Binding var selectedPointIndex: Int?
     @State private var current: [CGPoint] = []
     @State private var currentPathID: UUID?
-    @State private var combinedPathID: UUID?
     @State private var currentStrokeMode: InkBrushMode?
-    @State private var currentCombined = false
+    @State private var currentWetOnly = false
     @State private var currentDissolveWash = false
     @State private var dragStartPaths: [InkEditorPath] = []
     @State private var dragStartPoint: CGPoint?
@@ -3223,27 +3274,9 @@ private struct InkPreviewDrawingLayer: View {
     private func handleDragEnded(committed: Bool) {
         let strokeMode = currentStrokeMode ?? brushMode
         let immediate = (strokeMode == .pen && immediatePen) || (strokeMode == .brush && immediateWash)
-        // Option-drag stores the release wash before the pen so a later full
-        // replay preserves the pen on top. This companion must be committed
-        // even when Immediate Wash is enabled because it was not drawn live.
-        if tool == .draw, committed, current.count > 1, currentCombined {
-            paths.append(InkEditorPath(
-                id: combinedPathID ?? UUID(),
-                points: current,
-                brushMode: .brush,
-                inkKind: inkKind,
-                width: washWidth * 0.5,
-                flow: flow * 0.5,
-                bleed: bleed,
-                dry: dry,
-                colorSeparation: colorSeparation,
-                brushInk: brushInk,
-                color: inkRGBA
-            ))
-        }
         // Immediate mode: the live ink is already baked onto the canvas — keep
         // it, but don't add an editable path (so the buffer doesn't grow).
-        if tool == .draw, committed, current.count > 1, !immediate {
+        if tool == .draw, committed, current.count > 1, !immediate, !currentWetOnly {
             paths.append(InkEditorPath(
                 id: currentPathID ?? UUID(),
                 points: current,
@@ -3261,9 +3294,8 @@ private struct InkPreviewDrawingLayer: View {
         onLiveEnd()
         current = []
         currentPathID = nil
-        combinedPathID = nil
         currentStrokeMode = nil
-        currentCombined = false
+        currentWetOnly = false
         currentDissolveWash = false
         dragStartPaths = []
         dragStartPoint = nil
@@ -3277,10 +3309,9 @@ private struct InkPreviewDrawingLayer: View {
         if current.isEmpty {
             let id = UUID()
             currentPathID = id
-            currentStrokeMode = dissolveWash ? .brush : (combined ? .pen : (secondary ? .brush : brushMode))
-            currentCombined = combined && !dissolveWash
+            currentStrokeMode = dissolveWash ? .brush : (combined ? .brush : (secondary ? .brush : brushMode))
+            currentWetOnly = combined && !dissolveWash
             currentDissolveWash = dissolveWash
-            combinedPathID = currentCombined ? UUID() : nil
             current = [point]
             emitLiveSamples(point: point, shift: shift, charge: charge)
             return
@@ -3292,10 +3323,6 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func emitLiveSamples(point: CGPoint, shift: Bool, charge: Float) {
-        // The live channel carries one active pointer. For Option-drag, keep the
-        // pen responsive here and apply the companion wash from its committed
-        // path on release; sending both live would make the second replace the
-        // first in InkLiveStroke.
         onLive(makeSample(id: currentPathID ?? UUID(), point: point, mode: currentStrokeMode ?? brushMode, shift: shift, charge: charge))
     }
 
@@ -3318,7 +3345,8 @@ private struct InkPreviewDrawingLayer: View {
             brushInk: currentDissolveWash ? 1 : brushInk,
             color: inkRGBA,
             smoothBoost: shift,
-            destructive: strokeMode == .brush && immediateWash,
+            destructive: strokeMode == .brush && immediateWash && !currentWetOnly,
+            wetOnly: currentWetOnly,
             charge: charge
         )
     }

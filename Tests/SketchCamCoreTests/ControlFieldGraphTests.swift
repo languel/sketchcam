@@ -118,6 +118,7 @@ final class ControlFieldGraphTests: XCTestCase {
         XCTAssertEqual(ink.resolvedInkPaperInfluence, 0)
         XCTAssertEqual(ink.resolvedInkLiveSurfaceInfluence, 0)
         XCTAssertEqual(ink.resolvedInkMotionForce, 0)
+        XCTAssertEqual(ink.resolvedInkMotionWetness, 0)
         XCTAssertEqual(ink.resolvedInkLiveAbsorbency, 0)
         XCTAssertEqual(ink.resolvedInkLiveDrag, 0.5)
         XCTAssertEqual(ink.resolvedInkLiveResist, 1)
@@ -159,13 +160,15 @@ final class ControlFieldGraphTests: XCTestCase {
         var settings = ProcessingSettings()
         settings.landmarks.inkLiveSurfaceInfluence = 0.5
         settings.landmarks.inkMotionForce = 1
+        settings.landmarks.inkMotionWetness = 0.75
 
         let graph = settings.resolvedControlFields
         let provider = try XCTUnwrap(graph.providers.first { $0.kind == .opticalFlow })
         XCTAssertTrue(provider.resolvedMotionConfig.enabled)
-        XCTAssertEqual(provider.resolvedMotionConfig.input, .camera)
+        XCTAssertEqual(provider.resolvedMotionConfig.input, .inkTexture)
         XCTAssertEqual(graph.routes.first { $0.input == .surfaceModulation }?.source.output, .motionMagnitude)
         XCTAssertEqual(graph.routes.first { $0.input == .motionVector }?.source.output, .motionVector)
+        XCTAssertEqual(graph.routes.first { $0.input == .wetness }?.source.output, .motionMagnitude)
         XCTAssertNoThrow(try graph.validate())
     }
 

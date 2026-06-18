@@ -85,7 +85,7 @@ final class MetalLayerCompositor {
                     }
                 } else if let matte = maskBuffer(for: mask.source, graph: graph, streams: streams,
                                                  raw: matteBuf, processed: fxScratch, scratch: masked,
-                                                 personMatteScratch: sourceFx) {
+                                                 personMatteScratch: sourceFx, frameIndex: frameIndex) {
                     guard effects.mask(content: content, matte: matte, output: masked,
                                        mode: mask.mode, level: mask.level, invert: mask.invert) else { return nil }
                     chainInput = masked
@@ -103,7 +103,7 @@ final class MetalLayerCompositor {
 
             // Per-layer effect chain after source masking.
             guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
-                                     effects: layer.effects, matte: chainMatte) else { return nil }
+                                     effects: layer.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
 
             // Composite onto the accumulator with the layer opacity/blend mode.
             guard effects.composite(base: cur, overlay: chainOutput, output: other,
@@ -129,7 +129,7 @@ final class MetalLayerCompositor {
     /// This deliberately uses dedicated buffers: the returned CIImage remains
     /// valid while the main compositor reuses its own working set later in the frame.
     func layerOutput(nodeID: UUID, graph: LayerGraph, streams: Streams,
-                     outputFormat: FrameFormat) -> CIImage? {
+                     outputFormat: FrameFormat, frameIndex: Int) -> CIImage? {
         guard let node = graph.node(nodeID),
               let raw = streams.image(node),
               let layer = graph.layers.first(where: { $0.node == nodeID })
@@ -166,7 +166,7 @@ final class MetalLayerCompositor {
             effectMatte = routeMatte
         }
         guard effects.applyChain(input: chainInput, output: chainOutput, scratch: routeScratch,
-                                 effects: enabledEffects, matte: effectMatte) else { return raw }
+                                 effects: enabledEffects, matte: effectMatte, frameIndex: frameIndex) else { return raw }
         var image = CIImage(cvPixelBuffer: chainOutput).cropped(to: CGRect(origin: .zero, size: outputFormat.size))
         if layer.opacity < 0.999 {
             image = image.applyingFilter("CIColorMatrix", parameters: [
@@ -180,7 +180,7 @@ final class MetalLayerCompositor {
 
     private func maskBuffer(for source: PortBinding, graph: LayerGraph, streams: Streams,
                             raw: CVPixelBuffer, processed: CVPixelBuffer, scratch: CVPixelBuffer,
-                            personMatteScratch: CVPixelBuffer) -> CVPixelBuffer? {
+                            personMatteScratch: CVPixelBuffer, frameIndex: Int) -> CVPixelBuffer? {
         switch source {
         case .none:
             return nil
@@ -202,7 +202,7 @@ final class MetalLayerCompositor {
                 chainMatte = personMatteScratch
             }
             guard effects.applyChain(input: raw, output: processed, scratch: scratch,
-                                     effects: layer.effects, matte: chainMatte) else { return nil }
+                                     effects: layer.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
             return processed
         }
     }

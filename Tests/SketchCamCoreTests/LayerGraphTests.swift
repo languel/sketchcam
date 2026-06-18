@@ -4,6 +4,18 @@ import XCTest
 /// Phase 1: the layer/routing graph model, validation, scheduling, and the
 /// legacy→graph migration. No rendering yet.
 final class LayerGraphTests: XCTestCase {
+    func testFreshSettingsStartWithCameraThresholdOnly() throws {
+        let settings = ProcessingSettings()
+        XCTAssertTrue(settings.thresholdEnabled)
+        XCTAssertFalse(settings.outlineEnabled)
+
+        let graph = LayerGraph.defaultGraph(from: settings)
+        XCTAssertEqual(graph.layers.count, 1)
+        let camera = try XCTUnwrap(graph.layers.first)
+        XCTAssertEqual(graph.node(camera.node)?.kind, .video)
+        XCTAssertEqual(camera.effects.map(\.kind), [.threshold])
+    }
+
     func testAcrylicDefaultsAndBodyMacro() throws {
         var config = AcrylicConfig()
         XCTAssertEqual(config.body, 0.5)

@@ -32,6 +32,13 @@ struct InkCopyParams {
     float value;
 };
 
+struct InkWetInjectParams {
+    float amount;
+    float threshold;
+    uint invert;
+    uint fullCanvas;
+};
+
 struct InkAdvectVelocityParams {
     float2 texel;
     float dt;
@@ -220,6 +227,24 @@ kernel void ink_copy(texture2d<float, access::sample> inTex [[texture(0)]],
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
     outTex.write(inTex.sample(s, uv) * p.value, gid);
+}
+
+// MAX-blend an external scalar mask (or a one-shot full-canvas flood) into the
+// persistent wetness field. Injection precedes velocity advection so newly wet
+// pixels can carry control motion during the same simulation step.
+kernel void ink_inject_wet(texture2d<float, access::read_write> wet [[texture(0)]],
+                           texture2d<float, access::sample> mask [[texture(1)]],
+                           constant InkWetInjectParams &p [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= wet.get_width() || gid.y >= wet.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 uv = uv_for(gid, wet.get_width(), wet.get_height());
+    float value = p.fullCanvas != 0u ? 1.0 : clamp(mask.sample(s, uv).x, 0.0, 1.0);
+    if (p.invert != 0u) value = 1.0 - value;
+    value = p.threshold > 0.0 ? smoothstep(p.threshold, min(1.0, p.threshold + 0.04), value) : value;
+    float injected = clamp(value * p.amount, 0.0, 1.0);
+    float old = wet.read(gid).x;
+    wet.write(float4(max(old, injected), 0.0, 0.0, 1.0), gid);
 }
 
 kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]],

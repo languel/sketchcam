@@ -3,6 +3,7 @@ import Foundation
 import Metal
 import simd
 import SketchCamCore
+import SketchCamShared
 
 /// GPU effect kernels (threshold, Sobel outline, morphology, blur, composite) —
 /// the Metal replacement for the CoreImage effect chain. Operates on
@@ -16,6 +17,13 @@ final class MetalEffects {
     private struct CompositeParams { var opacity: Float; var blendMode: UInt32 }
     private struct MaskParams { var level: Float; var mode: UInt32; var invert: UInt32 }
     private struct SilhouetteParams { var color: SIMD4<Float>; var invert: UInt32 }
+    private struct OpticalFlowParams { var gain: Float }
+    private struct LevelsParams { var blackPoint: Float; var whitePoint: Float; var gamma: Float }
+    private struct OpticalFlowState {
+        var previous: CVPixelBuffer
+        var cached: CVPixelBuffer
+        var lastFrameIndex: Int?
+    }
 
     let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -30,6 +38,9 @@ final class MetalEffects {
     private let invertPSO: MTLComputePipelineState
     private let mirrorPSO: MTLComputePipelineState
     private let silhouettePSO: MTLComputePipelineState
+    private let opticalFlowPSO: MTLComputePipelineState
+    private let levelsPSO: MTLComputePipelineState
+    private var opticalFlowStates: [UUID: OpticalFlowState] = [:]
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -43,7 +54,8 @@ final class MetalEffects {
               let m = pso("effect_morphology"), let b = pso("effect_box_blur"),
               let c = pso("effect_composite"), let co = pso("effect_composite_op"),
               let mk = pso("effect_mask"), let iv = pso("effect_invert"),
-              let mir = pso("effect_mirror"), let sil = pso("effect_silhouette") else { return nil }
+              let mir = pso("effect_mirror"), let sil = pso("effect_silhouette"),
+              let flow = pso("effect_optical_flow"), let levels = pso("effect_levels") else { return nil }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         self.device = device
@@ -52,6 +64,8 @@ final class MetalEffects {
         self.thresholdPSO = t; self.outlinePSO = o; self.morphPSO = m; self.blurPSO = b
         self.compositePSO = c; self.compositeOpPSO = co; self.maskPSO = mk
         self.invertPSO = iv; self.mirrorPSO = mir; self.silhouettePSO = sil
+        self.opticalFlowPSO = flow
+        self.levelsPSO = levels
     }
 
     // MARK: - Public ops (each runs on its own command buffer, synchronous)
@@ -152,13 +166,14 @@ final class MetalEffects {
     /// `scratch` is a same-size working buffer for ping-ponging. Unknown/disabled
     /// effects are skipped; an empty chain copies input→output.
     func applyChain(input: CVPixelBuffer, output: CVPixelBuffer, scratch: CVPixelBuffer,
-                    effects: [EffectConfig], matte: CVPixelBuffer? = nil) -> Bool {
+                    effects: [EffectConfig], matte: CVPixelBuffer? = nil,
+                    frameIndex: Int? = nil) -> Bool {
         let enabled = effects.filter { $0.enabled }
         guard !enabled.isEmpty else { return copy(input: input, output: output) }
         var src = input
         for (i, e) in enabled.enumerated() {
             let dst: CVPixelBuffer = (i % 2 == 0) ? scratch : output
-            guard apply(e, input: src, output: dst, matte: matte) else { return false }
+            guard apply(e, input: src, output: dst, matte: matte, frameIndex: frameIndex) else { return false }
             src = dst
         }
         // If the last write landed in scratch, mirror it into output.
@@ -166,7 +181,8 @@ final class MetalEffects {
         return true
     }
 
-    private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer, matte: CVPixelBuffer?) -> Bool {
+    private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer,
+                       matte: CVPixelBuffer?, frameIndex: Int?) -> Bool {
         switch e.kind {
         case .threshold:
             return threshold(input: input, output: output, threshold: e.amount, invert: e.invert, inkOnly: e.inkOnly)
@@ -188,7 +204,50 @@ final class MetalEffects {
                 return silhouette(matte: matte, output: output, color: c, invert: e.invert)
             }
             return mask(content: input, matte: matte, output: output, mode: .luma, level: 0.5, invert: e.invert)
+        case .opticalFlow:
+            return opticalFlow(id: e.id, input: input, output: output, gain: e.amount, frameIndex: frameIndex)
+        case .levels:
+            guard let inTex = texture(input), let outTex = texture(output) else { return false }
+            var params = LevelsParams(
+                blackPoint: min(e.levelBlack, e.levelWhite - 0.001),
+                whitePoint: max(e.levelWhite, e.levelBlack + 0.001),
+                gamma: max(0.01, e.levelGamma)
+            )
+            return run(levelsPSO, textures: [inTex, outTex], bytes: &params,
+                       length: MemoryLayout<LevelsParams>.stride, grid: outTex)
         }
+    }
+
+    private func opticalFlow(id: UUID, input: CVPixelBuffer, output: CVPixelBuffer,
+                             gain: Float, frameIndex: Int?) -> Bool {
+        if let state = opticalFlowStates[id], let frameIndex,
+           state.lastFrameIndex == frameIndex {
+            return copy(input: state.cached, output: output)
+        }
+        let width = CVPixelBufferGetWidth(input), height = CVPixelBufferGetHeight(input)
+        var state = opticalFlowStates[id]
+        if state == nil || CVPixelBufferGetWidth(state!.previous) != width || CVPixelBufferGetHeight(state!.previous) != height {
+            let format = FrameFormat(id: "optical-flow-effect", width: width, height: height)
+            guard let previous = try? PixelBufferUtils.makePixelBuffer(format: format),
+                  let cached = try? PixelBufferUtils.makePixelBuffer(format: format),
+                  copy(input: input, output: previous)
+            else { return false }
+            state = OpticalFlowState(previous: previous, cached: cached, lastFrameIndex: nil)
+        }
+        guard var state,
+              let currentTexture = texture(input),
+              let previousTexture = texture(state.previous),
+              let outputTexture = texture(output)
+        else { return false }
+        var params = OpticalFlowParams(gain: max(0, gain))
+        guard run(opticalFlowPSO, textures: [currentTexture, previousTexture, outputTexture],
+                  bytes: &params, length: MemoryLayout<OpticalFlowParams>.stride, grid: outputTexture),
+              copy(input: input, output: state.previous),
+              copy(input: output, output: state.cached)
+        else { return false }
+        state.lastFrameIndex = frameIndex
+        opticalFlowStates[id] = state
+        return true
     }
 
     // MARK: - Dispatch

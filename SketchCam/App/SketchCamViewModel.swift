@@ -559,6 +559,7 @@ final class SketchCamViewModel: ObservableObject {
                     outputFormat: outputFormat,
                     pixelBuffer: pixelBuffer,
                     clockSource: clockSource,
+                    frameIndex: frameIndex,
                     matte: matte,
                     overlay: overlay,
                     webLayer: webLayer
@@ -663,7 +664,7 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func routedInkTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
-                                  pixelBuffer: CVPixelBuffer, clockSource: FrameSource, matte: CIImage?,
+                                  pixelBuffer: CVPixelBuffer, clockSource: FrameSource, frameIndex: Int, matte: CIImage?,
                                   overlay: CIImage?, webLayer: CIImage?) -> CIImage? {
         guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
               let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
@@ -729,7 +730,8 @@ final class SketchCamViewModel: ObservableObject {
                 nodeID: id,
                 graph: graph,
                 streams: streams,
-                outputFormat: outputFormat
+                outputFormat: outputFormat,
+                frameIndex: frameIndex
             ) ?? nodeImage(node)
         }
     }

@@ -7,6 +7,9 @@ using namespace metal;
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
 
+struct OpticalFlowParams { float gain; };
+struct LevelsParams { float blackPoint; float whitePoint; float gamma; };
+
 // Vector fields first so Swift `MemoryLayout` matches without manual padding.
 struct ThresholdParams {
     float2 inSize;       // input pixel size (for aspect-fill)
@@ -186,6 +189,47 @@ kernel void effect_mirror(texture2d<float, access::read> inTex [[texture(0)]],
     uint w = outTex.get_width();
     if (gid.x >= w || gid.y >= outTex.get_height()) return;
     outTex.write(inTex.read(uint2(w - 1 - gid.x, gid.y)), gid);
+}
+
+// Lightweight dense optical-flow visualization using a one-step
+// brightness-constancy estimate. Direction is encoded in red/green and speed
+// in brightness/blue, making the result useful as both a visible layer and a
+// downstream luminance mask.
+kernel void effect_optical_flow(texture2d<float, access::sample> current [[texture(0)]],
+                                texture2d<float, access::sample> previous [[texture(1)]],
+                                texture2d<float, access::write> outTex [[texture(2)]],
+                                constant OpticalFlowParams &p [[buffer(0)]],
+                                uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(outTex.get_width(), outTex.get_height());
+    float2 uv = (float2(gid) + 0.5) / size;
+    float2 texel = 1.0 / size;
+    auto lum = [&](texture2d<float, access::sample> tex, float2 q) {
+        float4 c = tex.sample(s, q);
+        return dot(c.rgb, kLuma);
+    };
+    float gx = 0.5 * (lum(current, uv + float2(texel.x, 0.0)) - lum(current, uv - float2(texel.x, 0.0)));
+    float gy = 0.5 * (lum(current, uv + float2(0.0, texel.y)) - lum(current, uv - float2(0.0, texel.y)));
+    float gt = lum(current, uv) - lum(previous, uv);
+    float denom = gx * gx + gy * gy + 0.0015;
+    float2 flow = clamp(-gt * float2(gx, gy) / denom, -1.0, 1.0);
+    float magnitude = clamp(length(flow) * max(0.0, p.gain), 0.0, 1.0);
+    float3 encoded = float3(0.5 + 0.5 * flow.x, 0.5 + 0.5 * flow.y, 1.0) * magnitude;
+    outTex.write(float4(encoded, magnitude), gid);
+}
+
+kernel void effect_levels(texture2d<float, access::read> inTex [[texture(0)]],
+                          texture2d<float, access::write> outTex [[texture(1)]],
+                          constant LevelsParams &p [[buffer(0)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 c = inTex.read(gid);
+    float3 rgb = c.a > 1e-5 ? c.rgb / c.a : c.rgb;
+    float span = max(0.001, p.whitePoint - p.blackPoint);
+    rgb = clamp((rgb - p.blackPoint) / span, 0.0, 1.0);
+    rgb = pow(rgb, float3(1.0 / max(0.01, p.gamma)));
+    outTex.write(float4(rgb * c.a, c.a), gid);
 }
 
 // Silhouette: fill the person matte region with a flat colour (ignores the

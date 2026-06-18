@@ -289,7 +289,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         effectsEnabled: Bool = true,
         thresholdEnabled: Bool = true,
         thresholdInkOnly: Bool = false,
-        outlineEnabled: Bool = true,
+        outlineEnabled: Bool = false,
         outlineThickness: Float = 1,
         outlineColor: RGBAColor = .black,
         inputLayerEnabled: Bool = true,
@@ -340,7 +340,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         if landmarks.resolvedInkPaperInfluence > 0 {
             graph = graph.addingDefaultInkPaperRoutes()
         }
-        if landmarks.resolvedInkLiveSurfaceInfluence > 0 || landmarks.resolvedInkMotionForce > 0 {
+        if landmarks.resolvedInkLiveSurfaceInfluence > 0 || landmarks.resolvedInkMotionForce > 0 || landmarks.resolvedInkMotionWetness > 0 {
             graph = graph.addingDefaultInkMotionRoutes()
         }
         return graph
@@ -523,6 +523,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkPaperInfluence: Float?
     public var inkLiveSurfaceInfluence: Float?
     public var inkMotionForce: Float?
+    /// How strongly the routed motion-magnitude field continuously wets the
+    /// canvas before velocity is gated. Zero preserves the historical behavior.
+    public var inkMotionWetness: Float?
     public var inkLiveAbsorbency: Float?
     public var inkLiveDrag: Float?
     public var inkLiveResist: Float?
@@ -535,6 +538,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Incremented by the UI to ask the Metal ink engine to settle mobile
     /// pigment into the fixed paper layer without clearing the painting.
     public var inkFixRevision: Int?
+    /// Incremented to flood the current wet field once without changing pigment.
+    public var inkWetCanvasRevision: Int?
     /// Show the live mouse path as a thin dashed guide while drawing (the
     /// rendered ink lags behind the cursor). Off by default.
     public var inkShowLivePath: Bool
@@ -677,6 +682,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperInfluence: Float? = 0,
         inkLiveSurfaceInfluence: Float? = 0,
         inkMotionForce: Float? = 0,
+        inkMotionWetness: Float? = 0,
         inkLiveAbsorbency: Float? = 0,
         inkLiveDrag: Float? = 0.5,
         inkLiveResist: Float? = 1,
@@ -687,6 +693,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkColorSeparation: Float? = 0.5,
         inkBrushInk: Float? = 0,
         inkFixRevision: Int? = 0,
+        inkWetCanvasRevision: Int? = 0,
         inkShowLivePath: Bool = false,
         inkSmoothing: Float = 0.5,
         inkRebuildRevision: Int = 0,
@@ -804,6 +811,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperInfluence = inkPaperInfluence
         self.inkLiveSurfaceInfluence = inkLiveSurfaceInfluence
         self.inkMotionForce = inkMotionForce
+        self.inkMotionWetness = inkMotionWetness
         self.inkLiveAbsorbency = inkLiveAbsorbency
         self.inkLiveDrag = inkLiveDrag
         self.inkLiveResist = inkLiveResist
@@ -814,6 +822,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkColorSeparation = inkColorSeparation
         self.inkBrushInk = inkBrushInk
         self.inkFixRevision = inkFixRevision
+        self.inkWetCanvasRevision = inkWetCanvasRevision
         self.inkShowLivePath = inkShowLivePath
         self.inkSmoothing = inkSmoothing
         self.inkRebuildRevision = inkRebuildRevision
@@ -851,6 +860,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedInkPaperInfluence: Float { inkPaperInfluence ?? 0 }
     public var resolvedInkLiveSurfaceInfluence: Float { inkLiveSurfaceInfluence ?? 0 }
     public var resolvedInkMotionForce: Float { inkMotionForce ?? 0 }
+    public var resolvedInkMotionWetness: Float { inkMotionWetness ?? 0 }
     public var resolvedInkLiveAbsorbency: Float { inkLiveAbsorbency ?? 0 }
     public var resolvedInkLiveDrag: Float { inkLiveDrag ?? 0.5 }
     public var resolvedInkLiveResist: Float { inkLiveResist ?? 1 }

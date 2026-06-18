@@ -275,7 +275,7 @@ public struct ResolvedPaperConfig: Hashable, Sendable {
 /// A single struct carries the params for every effect kind; only the fields
 /// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
 public enum EffectKind: String, Codable, Sendable, CaseIterable {
-    case threshold, outline, blur, invert, mirror, personKey
+    case threshold, outline, blur, invert, mirror, personKey, opticalFlow, levels
 
     public var title: String {
         switch self {
@@ -285,11 +285,13 @@ public enum EffectKind: String, Codable, Sendable, CaseIterable {
         case .invert: return "Invert"
         case .mirror: return "Mirror"
         case .personKey: return "Person Key"
+        case .opticalFlow: return "Optical Flow"
+        case .levels: return "Levels"
         }
     }
 
     /// Which parameter controls this kind shows in the editor.
-    public var usesAmount: Bool { self == .threshold || self == .outline || self == .blur }
+    public var usesAmount: Bool { self == .threshold || self == .outline || self == .blur || self == .opticalFlow }
     public var usesColor: Bool { self == .outline }
     public var usesThresholdOptions: Bool { self == .threshold }
     public var usesInvert: Bool { self == .personKey }   // invert = key out the person
@@ -307,10 +309,14 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
     public var invert: Bool         // threshold invert / personKey: key out person
     public var inkOnly: Bool        // threshold: transparent paper
     public var silhouette: Bool     // personKey: fill the matte with `color` instead of the content
+    public var levelBlack: Float
+    public var levelWhite: Float
+    public var levelGamma: Float
 
     public init(id: UUID = UUID(), kind: EffectKind, enabled: Bool = true,
                 amount: Float = 0.5, color: RGBAColor = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
-                thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false, silhouette: Bool = false) {
+                thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false, silhouette: Bool = false,
+                levelBlack: Float = 0, levelWhite: Float = 1, levelGamma: Float = 1) {
         self.id = id
         self.kind = kind
         self.enabled = enabled
@@ -320,11 +326,15 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
         self.invert = invert
         self.inkOnly = inkOnly
         self.silhouette = silhouette
+        self.levelBlack = levelBlack
+        self.levelWhite = levelWhite
+        self.levelGamma = levelGamma
     }
 
     // Tolerant decoding so chains persisted before a field existed still load.
     private enum CodingKeys: String, CodingKey {
-        case id, kind, enabled, amount, color, thickness, invert, inkOnly, silhouette
+        case id, kind, enabled, amount, color, thickness, invert, inkOnly, silhouette,
+             levelBlack, levelWhite, levelGamma
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -337,6 +347,9 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
         invert = try c.decodeIfPresent(Bool.self, forKey: .invert) ?? false
         inkOnly = try c.decodeIfPresent(Bool.self, forKey: .inkOnly) ?? false
         silhouette = try c.decodeIfPresent(Bool.self, forKey: .silhouette) ?? false
+        levelBlack = try c.decodeIfPresent(Float.self, forKey: .levelBlack) ?? 0
+        levelWhite = try c.decodeIfPresent(Float.self, forKey: .levelWhite) ?? 1
+        levelGamma = try c.decodeIfPresent(Float.self, forKey: .levelGamma) ?? 1
     }
 }
 

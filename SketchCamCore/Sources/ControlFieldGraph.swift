@@ -28,6 +28,7 @@ public enum ControlFieldInputID: String, Codable, Sendable, CaseIterable {
     case resist
     case surfaceModulation
     case motionVector
+    case wetness
 
     public var kind: ControlFieldKind {
         self == .motionVector ? .vector : .scalar
@@ -199,7 +200,8 @@ public struct ControlFieldGraph: Codable, Sendable, Equatable {
     private static let internalInkMotionProviderID = UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1010")!
     private static let internalInkMotionRouteIDs: [ControlFieldInputID: UUID] = [
         .surfaceModulation: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1011")!,
-        .motionVector: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1012")!
+        .motionVector: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1012")!,
+        .wetness: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1013")!
     ]
     public var providers: [ControlFieldProvider]
     public var routes: [ControlFieldRoute]
@@ -240,11 +242,13 @@ public struct ControlFieldGraph: Codable, Sendable, Equatable {
         return result
     }
 
-    /// Uses camera optical flow as the zero-configuration live source. Its
-    /// vector drives force; its magnitude can modulate the physical surface.
+    /// Uses optical flow from the Ink node's routed texture as the
+    /// zero-configuration live source. This makes a post-effect Camera or
+    /// Movie layer drive the same physical response that is visible as paper.
     public func addingDefaultInkMotionRoutes() -> ControlFieldGraph {
         let mappings: [(ControlFieldInputID, ControlFieldOutputID)] = [
-            (.surfaceModulation, .motionMagnitude), (.motionVector, .motionVector)
+            (.surfaceModulation, .motionMagnitude), (.motionVector, .motionVector),
+            (.wetness, .motionMagnitude)
         ]
         let missing = mappings.filter { input, _ in
             !routes.contains { $0.consumer == .ink && $0.input == input }
@@ -254,9 +258,9 @@ public struct ControlFieldGraph: Codable, Sendable, Equatable {
         if !result.providers.contains(where: { $0.id == Self.internalInkMotionProviderID }) {
             result.providers.append(ControlFieldProvider(
                 id: Self.internalInkMotionProviderID,
-                name: "Camera Motion",
+                name: "Paper Input Motion",
                 kind: .opticalFlow,
-                motionConfig: MotionControlConfig(enabled: true, mode: .opticalFlow, input: .camera)
+                motionConfig: MotionControlConfig(enabled: true, mode: .opticalFlow, input: .inkTexture)
             ))
         }
         result.routes.append(contentsOf: missing.map { input, output in

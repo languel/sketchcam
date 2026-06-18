@@ -63,6 +63,12 @@ final class MetalInkEngine {
     }
 
     private struct CopyParams { var value: Float }
+    private struct WetInjectParams {
+        var amount: Float
+        var threshold: Float
+        var invert: UInt32
+        var fullCanvas: UInt32
+    }
     private struct AdvectVelocityParams { var texel: SIMD2<Float>; var dt: Float; var dissipation: Float; var control: SIMD4<Float> }
     private struct ControlForceParams { var dt: Float; var force: Float; var maximumForce: Float; var pad0: Float = 0 }
     private struct VorticityParams { var texel: SIMD2<Float>; var curlAmount: Float; var dt: Float }
@@ -126,6 +132,7 @@ final class MetalInkEngine {
     private let textureCache: CVMetalTextureCache
     private let clearPSO: MTLComputePipelineState
     private let copyPSO: MTLComputePipelineState
+    private let injectWetPSO: MTLComputePipelineState
     private let splatPSO: MTLComputePipelineState
     private let capsulePSO: MTLComputePipelineState
     private let accumulatePSO: MTLComputePipelineState
@@ -160,6 +167,7 @@ final class MetalInkEngine {
     private var rebuildKey: RebuildKey?
     private var lastFrameIndex: Int?
     private var lastFixRevision = 0
+    private var lastWetCanvasRevision = 0
     private var lastRebuildRevision = 0
     private var lastStepTime: CFAbsoluteTime = 0
     private var fixTimer: Float = 0
@@ -198,6 +206,36 @@ final class MetalInkEngine {
         return (resolved.field.texture, max(0, resolved.strength))
     }
 
+    private func injectMotionWetness(amount: Float, commandBuffer: MTLCommandBuffer) {
+        guard let resolved = controlFields.field(for: .ink, input: .wetness) else { return }
+        injectWet(
+            mask: resolved.field.texture,
+            amount: max(0, amount) * max(0, resolved.strength),
+            threshold: resolved.threshold,
+            invert: resolved.invert,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    private func injectWet(
+        mask: MTLTexture?,
+        amount: Float,
+        threshold: Float = 0,
+        invert: Bool = false,
+        commandBuffer: MTLCommandBuffer
+    ) {
+        guard let wet else { return }
+        var params = WetInjectParams(
+            amount: max(0, amount),
+            threshold: min(1, max(0, threshold)),
+            invert: invert ? 1 : 0,
+            fullCanvas: mask == nil ? 1 : 0
+        )
+        encode(injectWetPSO, textures: [wet.read, mask ?? zeroScalar], bytes: &params,
+               length: MemoryLayout<WetInjectParams>.stride, grid: wet.read,
+               commandBuffer: commandBuffer)
+    }
+
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
@@ -209,6 +247,7 @@ final class MetalInkEngine {
         }
         guard let clear = pso("ink_clear"),
               let copy = pso("ink_copy"),
+              let injectWet = pso("ink_inject_wet"),
               let splat = pso("ink_splat"),
               let capsule = pso("ink_splat_capsule"),
               let accumulate = pso("ink_accumulate"),
@@ -232,6 +271,7 @@ final class MetalInkEngine {
         self.textureCache = cache
         self.clearPSO = clear
         self.copyPSO = copy
+        self.injectWetPSO = injectWet
         self.splatPSO = splat
         self.capsulePSO = capsule
         self.accumulatePSO = accumulate
@@ -269,6 +309,7 @@ final class MetalInkEngine {
         rebuildKey = nil
         lastFrameIndex = nil
         lastFixRevision = 0
+        lastWetCanvasRevision = 0
         lastRebuildRevision = 0
         lastStepTime = 0
         fixTimer = 0
@@ -301,6 +342,8 @@ final class MetalInkEngine {
         let pathsChanged = replayablePaths != replayedPaths
         let fixRevision = l.inkFixRevision ?? 0
         let fixRequested = fixRevision != lastFixRevision
+        let wetCanvasRevision = l.inkWetCanvasRevision ?? 0
+        let wetCanvasRequested = wetCanvasRevision != lastWetCanvasRevision
         let fadeDuration = max(0.15, l.inkFadeDuration ?? 1.2)
         let clearFadeRev = l.inkClearFadeRevision ?? 0
         let clearFadeRequested = clearFadeRev != lastClearFadeRevision && !needRebuild
@@ -318,7 +361,13 @@ final class MetalInkEngine {
             washTint: Self.washTint(l.inkWashColor)
         )
         let sigChanged = renderSig != lastRenderSig
-        let evolving = activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
+        // A routed motion field is an ongoing physical input, just like a held
+        // wash brush. Keep simulating while it is enabled; otherwise the normal
+        // post-stroke frame budget freezes the canvas even though the source is
+        // still moving.
+        let motionDriven = l.resolvedInkMotionForce > 0 && controlFields.field(for: .ink, input: .motionVector) != nil
+        let motionWetDriven = l.resolvedInkMotionWetness > 0 && controlFields.field(for: .ink, input: .wetness) != nil
+        let evolving = motionDriven || motionWetDriven || wetCanvasRequested || activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
 
         // Nothing to draw at all → blank. Immediate strokes are not replayable
         // paths, but they leave pigment in the Metal textures; once the sim goes
@@ -392,6 +441,11 @@ final class MetalInkEngine {
             }
             activeFramesRemaining = max(activeFramesRemaining, 2)
         }
+        if wetCanvasRequested {
+            lastWetCanvasRevision = wetCanvasRevision
+            injectWet(mask: nil, amount: 1, commandBuffer: commandBuffer)
+            activeFramesRemaining = max(activeFramesRemaining, 120)
+        }
 
         if lastFrameIndex != frameIndex {
             // Real elapsed time, clamped, instead of a fixed 1/60 — so stroke
@@ -416,7 +470,10 @@ final class MetalInkEngine {
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
-            if activeFramesRemaining > 0 || liveActive {
+            if motionWetDriven {
+                injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
+            }
+            if motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
@@ -629,7 +686,7 @@ final class MetalInkEngine {
         // additive (lift 0) so its accumulative smear is unchanged. Strength
         // (slider) + charge (hold-before-drag) scale how much lifts per frame and
         // how hard it's pushed.
-        let destructiveWash = mode == .brush && (sample.destructive || kind == .white)
+        let destructiveWash = mode == .brush && !sample.wetOnly && (sample.destructive || kind == .white)
         let smear = clamp01(settings.landmarks.inkSmearStrength)
         // Every wash re-mobilizes a little dried pigment so smearing EXISTING
         // (dried) strokes is consistent — previously a wash only moved still-wet
@@ -638,7 +695,7 @@ final class MetalInkEngine {
         // scales it. (Hold-to-charge removed: it multiplied force up to 3x by
         // pre-drag hold time, which you don't consciously control → wildly
         // variable. Strength + actual movement now drive the smear predictably.)
-        brushLift = mode == .brush ? (destructiveWash ? min(1.0, 0.5 + 0.5 * smear) : 0.05 + 0.65 * smear) : 0
+        brushLift = mode == .brush && !sample.wetOnly ? (destructiveWash ? min(1.0, 0.5 + 0.5 * smear) : 0.05 + 0.65 * smear) : 0
         let forceBoost: Float = mode == .brush ? (0.15 + 1.9 * smear) * (destructiveWash ? 1.4 : 1.0) : 1
         // The Smear slider also sets the movement SENSITIVITY: low Smear needs a
         // deliberate move before it smears (fine control), high Smear smears on
@@ -692,11 +749,23 @@ final class MetalInkEngine {
                 let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
-                let loadedDensity = brushInk * 0.10 * (0.4 + 0.6 * pressure)
+                let loadedDensity = sample.wetOnly ? 0 : brushInk * 0.10 * (0.4 + 0.6 * pressure)
                 var vel = delta / max(subDtW, 0.0001) * force
                 let vm = simd_length(vel)
                 if vm > velCap { vel *= velCap / vm }
-                if dist < smearThreshold {
+                if sample.wetOnly {
+                    // Option-drag is a water-only spray. Connect its samples
+                    // into a continuous wet ribbon, but never inject velocity,
+                    // pigment, or fixed-pigment lift.
+                    let spacing = radius * 0.7
+                    let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
+                    for i in 1...steps {
+                        let t = Float(i) / Float(steps)
+                        splat(texture: wet.read, point: previous + delta * t, radius: radius,
+                              color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max,
+                              commandBuffer: commandBuffer)
+                    }
+                } else if dist < smearThreshold {
                     // Below the Smear-controlled sensitivity threshold: just
                     // wet/pool, no velocity. (Was radius*0.25 — a velocity-
                     // dependent cutoff that made slow drags fail to smear. Now it's
@@ -865,7 +934,11 @@ final class MetalInkEngine {
         let dry = clamp01(l.inkDry)
         let bleed = clamp01(l.inkBleed)
         let washStrength = clamp01(l.inkWashStrength)
-        let fixing = fixTimer > 0
+        // Motion-driven painting remains mobile while the external field is
+        // active. Preserve the pending settle timer so turning Motion Force off
+        // still lets the stroke dry into the paper normally.
+        let motionDriven = l.resolvedInkMotionForce > 0 && controlFields.field(for: .ink, input: .motionVector) != nil
+        let fixing = fixTimer > 0 && !motionDriven
         if fixing { fixTimer = max(0, fixTimer - dt) }
         // Longer Fade → gentler freeze, so the motion keeps drifting/settling for
         // the whole window instead of snapping still (1.2s is the baseline feel).

@@ -157,11 +157,13 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
         current: CVPixelBuffer,
         quality: ControlFieldUpdateQuality
     ) -> SIMD2<Float>? {
-        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: previous, options: [:])
+        // Vision reports flow from the handler image toward the targeted image.
+        // Use previous -> current so the field matches cursor/solver velocity.
+        let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: current, options: [:])
         request.computationAccuracy = quality == .high ? .medium : .low
         request.outputPixelFormat = kCVPixelFormatType_TwoComponent16Half
         request.keepNetworkOutput = false
-        let handler = VNImageRequestHandler(cvPixelBuffer: current, options: [:])
+        let handler = VNImageRequestHandler(cvPixelBuffer: previous, options: [:])
         guard (try? handler.perform([request])) != nil,
               let flow = request.results?.first?.pixelBuffer else { return nil }
         CVPixelBufferLockBaseAddress(flow, .readOnly)
@@ -225,11 +227,13 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
         let accuracy: VNGenerateOpticalFlowRequest.ComputationAccuracy = quality == .high ? .medium : .low
         visionQueue.async { [weak self] in
             guard let self else { return }
-            let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: work.previous, options: [:])
+            // Generate forward temporal flow (previous -> current). Reversing
+            // these frames makes physical advection move opposite the subject.
+            let request = VNGenerateOpticalFlowRequest(targetedCVPixelBuffer: work.current, options: [:])
             request.computationAccuracy = accuracy
             request.outputPixelFormat = kCVPixelFormatType_TwoComponent16Half
             request.keepNetworkOutput = false
-            let handler = VNImageRequestHandler(cvPixelBuffer: work.current, options: [:])
+            let handler = VNImageRequestHandler(cvPixelBuffer: work.previous, options: [:])
             let result: CVPixelBuffer? = (try? handler.perform([request])).flatMap { request.results?.first?.pixelBuffer }
             self.lock.withLock {
                 self.requestInFlight = false

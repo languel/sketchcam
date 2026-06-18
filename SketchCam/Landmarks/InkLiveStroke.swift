@@ -18,6 +18,8 @@ struct InkLiveStrokeSample: Equatable {
     var smoothBoost: Bool
     /// Immediate wash → the brush re-mobilizes & pushes dried ink (destructive).
     var destructive: Bool
+    /// Water-only spray: deposits wetness but no velocity, pigment, or lift.
+    var wetOnly: Bool
     /// 0…1 "charge" from holding before dragging — multiplies destructive force.
     var charge: Float
 }
