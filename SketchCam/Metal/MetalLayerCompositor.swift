@@ -31,6 +31,8 @@ final class MetalLayerCompositor {
     // them alive at once keeps the pool vending distinct IOSurfaces.
     private var size: CGSize = .zero
     private var accumA, accumB, content, masked, fxScratch, matteBuf, sourceFx: CVPixelBuffer?
+    private var routeSize: CGSize = .zero
+    private var routeInput, routeOutput, routeScratch, routeMatte: CVPixelBuffer?
 
     init?(ciContext: CIContext) {
         guard let fx = MetalEffects() else { return nil }
@@ -123,6 +125,57 @@ final class MetalLayerCompositor {
         return ProcessedFrame(pixelBuffer: output, sampleBuffer: sampleBuffer, state: state)
     }
 
+    /// Materialize a layer's post-effect pixels for downstream node routing.
+    /// This deliberately uses dedicated buffers: the returned CIImage remains
+    /// valid while the main compositor reuses its own working set later in the frame.
+    func layerOutput(nodeID: UUID, graph: LayerGraph, streams: Streams,
+                     outputFormat: FrameFormat) -> CIImage? {
+        guard let node = graph.node(nodeID),
+              let raw = streams.image(node),
+              let layer = graph.layers.first(where: { $0.node == nodeID })
+        else { return nil }
+        let enabledEffects = layer.effects.filter(\.enabled)
+        guard !enabledEffects.isEmpty || layer.mask != nil || layer.opacity < 0.999 else { return raw }
+        guard ensureRouteBuffers(for: outputFormat),
+              let routeInput, let routeOutput, let routeScratch, let routeMatte else { return raw }
+        rasterize(raw, into: routeInput)
+        var chainInput = routeInput
+        var chainOutput = routeOutput
+        if let mask = layer.mask {
+            let matteImage: CIImage?
+            switch mask.source {
+            case .source(.personMatte): matteImage = streams.personMatte
+            case .node(let id): matteImage = graph.node(id).flatMap(streams.image)
+            default: matteImage = nil
+            }
+            if let matteImage {
+                rasterize(matteImage, into: routeMatte)
+                let invert = mask.source == .source(.personMatte)
+                    ? mask.personKeyInvert != mask.invert
+                    : mask.invert
+                guard effects.mask(content: routeInput, matte: routeMatte, output: routeOutput,
+                                   mode: mask.mode, level: mask.level, invert: invert) else { return raw }
+                chainInput = routeOutput
+                chainOutput = routeInput
+            }
+        }
+        var effectMatte: CVPixelBuffer? = nil
+        if enabledEffects.contains(where: { $0.kind.needsPersonMatte }),
+           let personMatte = streams.personMatte {
+            rasterize(personMatte, into: routeMatte)
+            effectMatte = routeMatte
+        }
+        guard effects.applyChain(input: chainInput, output: chainOutput, scratch: routeScratch,
+                                 effects: enabledEffects, matte: effectMatte) else { return raw }
+        var image = CIImage(cvPixelBuffer: chainOutput).cropped(to: CGRect(origin: .zero, size: outputFormat.size))
+        if layer.opacity < 0.999 {
+            image = image.applyingFilter("CIColorMatrix", parameters: [
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(max(0, layer.opacity)))
+            ])
+        }
+        return image
+    }
+
     // MARK: - Helpers
 
     private func maskBuffer(for source: PortBinding, graph: LayerGraph, streams: Streams,
@@ -166,6 +219,16 @@ final class MetalLayerCompositor {
               let m = make(), let s = make(), let mt = make(), let sf = make() else { return false }
         accumA = a; accumB = b; content = c; masked = m; fxScratch = s; matteBuf = mt; sourceFx = sf
         size = format.size
+        return true
+    }
+
+
+    private func ensureRouteBuffers(for format: FrameFormat) -> Bool {
+        if routeSize == format.size, routeInput != nil { return true }
+        func make() -> CVPixelBuffer? { try? pool.makeBuffer(format: format) }
+        guard let input = make(), let output = make(), let scratch = make(), let matte = make() else { return false }
+        routeInput = input; routeOutput = output; routeScratch = scratch; routeMatte = matte
+        routeSize = format.size
         return true
     }
 }

@@ -123,6 +123,52 @@ final class ControlFieldGraphTests: XCTestCase {
         XCTAssertEqual(ink.resolvedInkLiveResist, 1)
     }
 
+    func testPaperInfluenceSynthesizesStableInternalPaperRoutes() throws {
+        var settings = ProcessingSettings()
+        settings.landmarks.inkPaperInfluence = 1
+
+        let first = settings.resolvedControlFields
+        let second = settings.resolvedControlFields
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.providers.count, 1)
+        XCTAssertEqual(first.providers.first?.kind, .paper)
+        XCTAssertNil(first.providers.first?.paperNodeID)
+        XCTAssertEqual(Set(first.routes.map(\.input)), [.absorbency, .drag, .resist])
+        XCTAssertTrue(first.routes.allSatisfy { $0.consumer == .ink })
+        XCTAssertNoThrow(try first.validate())
+    }
+
+    func testExplicitPaperRouteIsNotReplacedByInternalDefault() {
+        let custom = ControlFieldProvider(id: paperID, name: "Custom", kind: .paper)
+        let customRoute = ControlFieldRoute(
+            consumer: .ink,
+            input: .drag,
+            source: .init(provider: paperID, output: .paperDrag),
+            strength: 0.25
+        )
+        var settings = ProcessingSettings(controlFields: .init(providers: [custom], routes: [customRoute]))
+        settings.landmarks.inkPaperInfluence = 1
+
+        let graph = settings.resolvedControlFields
+        XCTAssertEqual(graph.routes.first(where: { $0.input == .drag }), customRoute)
+        XCTAssertEqual(graph.routes.filter { $0.input == .drag }.count, 1)
+        XCTAssertEqual(Set(graph.routes.map(\.input)), [.absorbency, .drag, .resist])
+    }
+
+    func testLiveAndMotionInfluenceSynthesizesOpticalFlowRoutes() throws {
+        var settings = ProcessingSettings()
+        settings.landmarks.inkLiveSurfaceInfluence = 0.5
+        settings.landmarks.inkMotionForce = 1
+
+        let graph = settings.resolvedControlFields
+        let provider = try XCTUnwrap(graph.providers.first { $0.kind == .opticalFlow })
+        XCTAssertTrue(provider.resolvedMotionConfig.enabled)
+        XCTAssertEqual(provider.resolvedMotionConfig.input, .camera)
+        XCTAssertEqual(graph.routes.first { $0.input == .surfaceModulation }?.source.output, .motionMagnitude)
+        XCTAssertEqual(graph.routes.first { $0.input == .motionVector }?.source.output, .motionVector)
+        XCTAssertNoThrow(try graph.validate())
+    }
+
     func testProviderPaperAndMotionSettingsRoundTrip() throws {
         let nodeID = UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!
         let motion = MotionControlConfig(

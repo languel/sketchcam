@@ -302,7 +302,10 @@ kernel void ink_add_control_force(texture2d<float, access::sample> velocityIn [[
     float2 force = motionField.sample(s, uv).xy * p.force;
     float magnitude = length(force);
     if (magnitude > p.maximumForce) force *= p.maximumForce / max(magnitude, 1e-6);
-    float2 velocity = velocityIn.sample(s, uv).xy + force * p.dt;
+    // Control motion is normalized-canvas velocity; the Ink solver stores
+    // velocity in simulation pixels/second because advection multiplies by texel.
+    float2 simulationForce = force * float2(velocityOut.get_width(), velocityOut.get_height());
+    float2 velocity = velocityIn.sample(s, uv).xy + simulationForce * p.dt;
     if (!all(isfinite(velocity))) velocity = float2(0.0);
     velocityOut.write(float4(velocity, 0.0, 1.0), gid);
 }

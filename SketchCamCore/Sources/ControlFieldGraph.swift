@@ -190,6 +190,17 @@ public enum ControlFieldGraphError: Error, Equatable {
 }
 
 public struct ControlFieldGraph: Codable, Sendable, Equatable {
+    private static let internalInkPaperProviderID = UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1001")!
+    private static let internalInkPaperRouteIDs: [ControlFieldInputID: UUID] = [
+        .absorbency: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1002")!,
+        .drag: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1003")!,
+        .resist: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1004")!
+    ]
+    private static let internalInkMotionProviderID = UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1010")!
+    private static let internalInkMotionRouteIDs: [ControlFieldInputID: UUID] = [
+        .surfaceModulation: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1011")!,
+        .motionVector: UUID(uuidString: "7BDE6A90-6B1F-4DA5-9B42-A2174A0B1012")!
+    ]
     public var providers: [ControlFieldProvider]
     public var routes: [ControlFieldRoute]
 
@@ -199,6 +210,65 @@ public struct ControlFieldGraph: Codable, Sendable, Equatable {
     }
 
     public static let empty = ControlFieldGraph()
+
+    /// Supplies the Ink engine's internal paper as a physical source whenever
+    /// Paper Influence is active. Explicit routes win input-by-input.
+    public func addingDefaultInkPaperRoutes() -> ControlFieldGraph {
+        let mappings: [(ControlFieldInputID, ControlFieldOutputID)] = [
+            (.absorbency, .paperAbsorbency), (.drag, .paperDrag), (.resist, .paperResist)
+        ]
+        let missing = mappings.filter { input, _ in
+            !routes.contains { $0.consumer == .ink && $0.input == input }
+        }
+        guard !missing.isEmpty else { return self }
+        var result = self
+        if !result.providers.contains(where: { $0.id == Self.internalInkPaperProviderID }) {
+            result.providers.append(ControlFieldProvider(
+                id: Self.internalInkPaperProviderID,
+                name: "Internal Ink Paper",
+                kind: .paper
+            ))
+        }
+        result.routes.append(contentsOf: missing.map { input, output in
+            ControlFieldRoute(
+                id: Self.internalInkPaperRouteIDs[input]!,
+                consumer: .ink,
+                input: input,
+                source: .init(provider: Self.internalInkPaperProviderID, output: output)
+            )
+        })
+        return result
+    }
+
+    /// Uses camera optical flow as the zero-configuration live source. Its
+    /// vector drives force; its magnitude can modulate the physical surface.
+    public func addingDefaultInkMotionRoutes() -> ControlFieldGraph {
+        let mappings: [(ControlFieldInputID, ControlFieldOutputID)] = [
+            (.surfaceModulation, .motionMagnitude), (.motionVector, .motionVector)
+        ]
+        let missing = mappings.filter { input, _ in
+            !routes.contains { $0.consumer == .ink && $0.input == input }
+        }
+        guard !missing.isEmpty else { return self }
+        var result = self
+        if !result.providers.contains(where: { $0.id == Self.internalInkMotionProviderID }) {
+            result.providers.append(ControlFieldProvider(
+                id: Self.internalInkMotionProviderID,
+                name: "Camera Motion",
+                kind: .opticalFlow,
+                motionConfig: MotionControlConfig(enabled: true, mode: .opticalFlow, input: .camera)
+            ))
+        }
+        result.routes.append(contentsOf: missing.map { input, output in
+            ControlFieldRoute(
+                id: Self.internalInkMotionRouteIDs[input]!,
+                consumer: .ink,
+                input: input,
+                source: .init(provider: Self.internalInkMotionProviderID, output: output)
+            )
+        })
+        return result
+    }
 
     public func validate() throws {
         var providersByID: [UUID: ControlFieldProvider] = [:]

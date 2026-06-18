@@ -723,7 +723,14 @@ final class SketchCamViewModel: ObservableObject {
                 return nil
             }
         case .node(let id):
-            return graph.node(id).flatMap(nodeImage)
+            guard let node = graph.node(id) else { return nil }
+            let streams = MetalLayerCompositor.Streams(image: nodeImage, personMatte: personMatteImage)
+            return gpuCompositor?.layerOutput(
+                nodeID: id,
+                graph: graph,
+                streams: streams,
+                outputFormat: outputFormat
+            ) ?? nodeImage(node)
         }
     }
 

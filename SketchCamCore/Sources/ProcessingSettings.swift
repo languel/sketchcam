@@ -336,7 +336,14 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     }
 
     public var resolvedControlFields: ControlFieldGraph {
-        controlFields ?? .empty
+        var graph = controlFields ?? .empty
+        if landmarks.resolvedInkPaperInfluence > 0 {
+            graph = graph.addingDefaultInkPaperRoutes()
+        }
+        if landmarks.resolvedInkLiveSurfaceInfluence > 0 || landmarks.resolvedInkMotionForce > 0 {
+            graph = graph.addingDefaultInkMotionRoutes()
+        }
+        return graph
     }
 }
 
