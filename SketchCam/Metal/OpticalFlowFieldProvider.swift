@@ -42,6 +42,7 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
     private var requestInFlight = false
     private var pendingFlow: PendingFlow?
     private var generation: UInt64 = 0
+    private var inputAvailable = false
     private var vectorPing: MTLTexture?
     private var vectorPong: MTLTexture?
     private var magnitude: MTLTexture?
@@ -75,7 +76,7 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
 
     func update(_ context: ControlFieldFrameContext, store: GPUControlFieldStore) {
         let selected = selectedInput(context)
-        if let selected { scheduleIfIdle(selected, timestamp: context.timestamp) }
+        if let selected { inputAvailable = true; scheduleIfIdle(selected, timestamp: context.timestamp) }
         else { clearInputHistory() }
 
         let pending = lock.withLock { () -> PendingFlow? in
@@ -240,6 +241,11 @@ final class OpticalFlowFieldProvider: GPUControlFieldProvider {
 
     private func clearInputHistory() {
         lock.withLock {
+            if inputAvailable {
+                generation &+= 1
+                pendingFlow = nil
+                inputAvailable = false
+            }
             previousFrame = nil
             previousTimestamp = nil
         }

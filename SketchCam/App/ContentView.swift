@@ -2117,6 +2117,74 @@ private struct PaperNodeEditor: View {
     }
 }
 
+private struct AcrylicNodeEditor: View {
+    @Binding var config: AcrylicConfig
+    @State private var advanced = false
+    @State private var activeStroke: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            RGBAColorPicker("Color", rgba: $config.color, supportsOpacity: true)
+            acrylicSlider("Size", value: $config.width, range: 0.002...0.15)
+            acrylicSlider("Loading", value: $config.paintLoading, range: 0...1)
+            acrylicSlider("Body", value: Binding(get: { config.body }, set: { config.applyBody($0) }), range: 0...1)
+            Picker("Mixing", selection: $config.mixModel) {
+                Text("RGB").tag(AcrylicMixModel.rgb)
+                Text("Pigment").tag(AcrylicMixModel.pigment)
+            }.pickerStyle(.segmented)
+            Canvas { context, size in
+                for stroke in config.strokes where stroke.points.count > 1 {
+                    var path = Path()
+                    path.move(to: CGPoint(x: stroke.points[0].x * size.width, y: stroke.points[0].y * size.height))
+                    for point in stroke.points.dropFirst() { path.addLine(to: CGPoint(x: point.x * size.width, y: point.y * size.height)) }
+                    context.stroke(path, with: .color(Color(.sRGB, red: Double(stroke.color.red), green: Double(stroke.color.green), blue: Double(stroke.color.blue), opacity: Double(stroke.loading * config.pigmentOpacity))),
+                                   style: StrokeStyle(lineWidth: CGFloat(stroke.width) * min(size.width, size.height), lineCap: .round, lineJoin: .round))
+                }
+            }
+            .frame(height: 130)
+            .background(Color.white.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                let point = CGPoint(x: min(max(value.location.x / 240, 0), 1), y: min(max(value.location.y / 130, 0), 1))
+                if let id = activeStroke, let index = config.strokes.firstIndex(where: { $0.id == id }) {
+                    config.strokes[index].points.append(point)
+                } else {
+                    let stroke = AcrylicStroke(points: [point], color: config.color, width: config.width,
+                                               loading: config.paintLoading, body: config.body, mixModel: config.mixModel)
+                    activeStroke = stroke.id; config.strokes.append(stroke)
+                }
+            }.onEnded { _ in activeStroke = nil })
+            HStack {
+                Button("Clear") { config.strokes.removeAll(); config.clearRevision += 1 }
+                Button("Instant Dry") { config.instantDryRevision += 1 }
+                Button("Rerender") { config.rebuildRevision += 1 }
+            }.buttonStyle(.borderless)
+            DisclosureGroup("Advanced", isExpanded: $advanced) {
+                acrylicSlider("Opacity", value: $config.pigmentOpacity, range: 0...2)
+                acrylicSlider("Viscosity", value: $config.viscosity, range: 0...1)
+                acrylicSlider("Leveling", value: $config.leveling, range: 0...1)
+                acrylicSlider("Retention", value: $config.brushRetention, range: 0...1)
+                acrylicSlider("Flow", value: $config.flow, range: 0...1)
+                acrylicSlider("Dry rate", value: $config.dryRate, range: 0...1)
+                acrylicSlider("Paper", value: $config.paperInfluence, range: 0...1)
+                acrylicSlider("Live surface", value: $config.liveSurfaceInfluence, range: 0...1)
+                acrylicSlider("Motion", value: $config.motionForce, range: 0...2)
+            }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+    }
+
+    private func acrylicSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>) -> some View {
+        HStack {
+            Text(title).font(.caption2).frame(width: 72, alignment: .leading)
+            Slider(value: value, in: range).controlSize(.small)
+            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).monospacedDigit().frame(width: 38)
+        }
+    }
+}
+
 private struct PaperControls: View {
     @Binding var config: PaperConfig
     @State private var physicalExpanded = false
@@ -2310,6 +2378,9 @@ private struct LayerStackEditor: View {
                                 if case .paper = node.kind {
                                     PaperNodeEditor(config: paperConfigBinding(node.id))
                                 }
+                                if case .acrylic = node.kind {
+                                    AcrylicNodeEditor(config: acrylicConfigBinding(node.id))
+                                }
                             }
                             MaskEditor(mask: maskBinding(layer.id),
                                        personMatteQuality: $model.settings.segmentation.quality,
@@ -2335,6 +2406,7 @@ private struct LayerStackEditor: View {
                 Button("Movie") { addNode(.movie, name: "Movie") }
                 Button("Solid color") { addSolid() }
                 Button("Paper") { addPaper() }
+                Button("Acrylic") { addAcrylic() }
             }
             Section("Streams") {
                 Button("Drawing") { addStream(.drawing) }
@@ -2416,6 +2488,21 @@ private struct LayerStackEditor: View {
                 mutate { g in
                     guard let i = g.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
                     g.nodes[i].kind = .paper(newValue)
+                }
+            }
+        )
+    }
+
+    private func acrylicConfigBinding(_ nodeID: UUID) -> Binding<AcrylicConfig> {
+        Binding(
+            get: {
+                guard let node = model.settings.layerGraph?.node(nodeID), case .acrylic(let config) = node.kind else { return AcrylicConfig() }
+                return config
+            },
+            set: { value in
+                mutate { graph in
+                    guard let index = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                    graph.nodes[index].kind = .acrylic(value)
                 }
             }
         )
@@ -2514,6 +2601,11 @@ private struct LayerStackEditor: View {
             g.nodes.append(node)
             g.layers.append(Layer(node: node.id))
         }
+    }
+
+
+    private func addAcrylic() {
+        addNode(.acrylic(AcrylicConfig()), name: "Acrylic")
     }
 
     private func delete(_ id: UUID) {

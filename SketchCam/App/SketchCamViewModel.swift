@@ -97,6 +97,7 @@ final class SketchCamViewModel: ObservableObject {
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
+    private let acrylicCompositor = AcrylicLayerCompositor()
     private let controlFieldCoordinator = ControlFieldCoordinator()
     private let paperRenderer = MetalPaperRenderer.shared
     /// Live in-progress ink stroke, handed to the engine off the @Published
@@ -702,7 +703,9 @@ final class SketchCamViewModel: ObservableObject {
                 return overlay
             case .web:
                 return webLayer
-            case .ink, .acrylic, .effect:
+            case .acrylic(let config):
+                return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
+            case .ink, .effect:
                 return nil
             }
         }
@@ -767,8 +770,8 @@ final class SketchCamViewModel: ObservableObject {
                     return overlay
                 case .ink:
                     return inkLayer
-                case .acrylic:
-                    return nil
+                case .acrylic(let config):
+                    return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
                 case .web:
                     return webLayer
                 case .effect:
