@@ -3009,6 +3009,24 @@ private struct InkPreviewDrawingLayer: View {
     private func handleDragEnded(committed: Bool) {
         let strokeMode = currentStrokeMode ?? brushMode
         let immediate = (strokeMode == .pen && immediatePen) || (strokeMode == .brush && immediateWash)
+        // Option-drag stores the release wash before the pen so a later full
+        // replay preserves the pen on top. This companion must be committed
+        // even when Immediate Wash is enabled because it was not drawn live.
+        if tool == .draw, committed, current.count > 1, currentCombined {
+            paths.append(InkEditorPath(
+                id: combinedPathID ?? UUID(),
+                points: current,
+                brushMode: .brush,
+                inkKind: inkKind,
+                width: washWidth * 0.5,
+                flow: flow * 0.5,
+                bleed: bleed,
+                dry: dry,
+                colorSeparation: colorSeparation,
+                brushInk: brushInk,
+                color: inkRGBA
+            ))
+        }
         // Immediate mode: the live ink is already baked onto the canvas — keep
         // it, but don't add an editable path (so the buffer doesn't grow).
         if tool == .draw, committed, current.count > 1, !immediate {
@@ -3023,21 +3041,6 @@ private struct InkPreviewDrawingLayer: View {
                 dry: dry,
                 colorSeparation: colorSeparation,
                 brushInk: currentDissolveWash ? 1 : brushInk,
-                color: inkRGBA
-            ))
-        }
-        if tool == .draw, committed, current.count > 1, currentCombined, !immediateWash {
-            paths.append(InkEditorPath(
-                id: combinedPathID ?? UUID(),
-                points: current,
-                brushMode: .brush,
-                inkKind: inkKind,
-                width: washWidth,
-                flow: flow,
-                bleed: bleed,
-                dry: dry,
-                colorSeparation: colorSeparation,
-                brushInk: brushInk,
                 color: inkRGBA
             ))
         }
@@ -3075,20 +3078,29 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func emitLiveSamples(point: CGPoint, shift: Bool, charge: Float) {
+        // The live channel carries one active pointer. For Option-drag, keep the
+        // pen responsive here and apply the companion wash from its committed
+        // path on release; sending both live would make the second replace the
+        // first in InkLiveStroke.
         onLive(makeSample(id: currentPathID ?? UUID(), point: point, mode: currentStrokeMode ?? brushMode, shift: shift, charge: charge))
-        if currentCombined {
-            onLive(makeSample(id: combinedPathID ?? UUID(), point: point, mode: .brush, shift: shift, charge: charge))
-        }
     }
 
-    private func makeSample(id: UUID, point: CGPoint, mode strokeMode: InkBrushMode, shift: Bool, charge: Float) -> InkLiveStrokeSample {
+    private func makeSample(
+        id: UUID,
+        point: CGPoint,
+        mode strokeMode: InkBrushMode,
+        widthScale: Float = 1,
+        flowScale: Float = 1,
+        shift: Bool,
+        charge: Float
+    ) -> InkLiveStrokeSample {
         return InkLiveStrokeSample(
             id: id,
             point: point,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
-            width: strokeMode == .brush ? washWidth : width,
-            flow: flow,
+            width: (strokeMode == .brush ? washWidth : width) * widthScale,
+            flow: flow * flowScale,
             brushInk: currentDissolveWash ? 1 : brushInk,
             color: inkRGBA,
             smoothBoost: shift,
