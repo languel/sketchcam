@@ -490,6 +490,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkFlow: Float
     public var inkBleed: Float
     public var inkDry: Float
+    /// Multiplies wet-field evaporation. 0 preserves wetness; 1 keeps the
+    /// historical Dry/Fade-derived behavior. Optional for old presets.
+    public var inkWetnessDecay: Float?
     public var inkPaperEnabled: Bool
     public var inkPaperColor: RGBAColor
     /// Opacity for the Ink tab's paper/substrate input. Nil means legacy
@@ -637,6 +640,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkFlow: Float = 0.9,
         inkBleed: Float = 0.8,
         inkDry: Float = 0.25,
+        inkWetnessDecay: Float? = 1,
         inkPaperEnabled: Bool = true,
         inkPaperColor: RGBAColor = RGBAColor(red: 0.94, green: 0.92, blue: 0.86, alpha: 0.42),
         inkPaperOpacity: Float? = 1,
@@ -755,6 +759,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkFlow = inkFlow
         self.inkBleed = inkBleed
         self.inkDry = inkDry
+        self.inkWetnessDecay = inkWetnessDecay
         self.inkPaperEnabled = inkPaperEnabled
         self.inkPaperColor = inkPaperColor
         self.inkPaperOpacity = inkPaperOpacity

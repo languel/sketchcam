@@ -868,6 +868,8 @@ struct ContentView: View {
                       hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)")
             SliderRow(title: "Dry", value: floatBinding(\.landmarks.inkDry), defaultValue: 0.25,
                       hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.")
+            SliderRow(title: "Wet decay", value: optionalLandmarkFloatBinding(\.inkWetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1,
+                      hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.")
             SliderRow(title: "Fade", value: optionalLandmarkFloatBinding(\.inkFadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
                       hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.")
             SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5,

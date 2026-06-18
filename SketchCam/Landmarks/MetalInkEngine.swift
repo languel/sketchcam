@@ -852,8 +852,9 @@ final class MetalInkEngine {
         // Longer Fade → larger tau while fixing → wet lingers longer, so the
         // settle/diffusion stretches over the whole fade window.
         let dryTau: Float = fixing ? 0.22 / fadeScale : 0.12 + pow(1 - dry, 2.2) * 26
+        let wetnessDecay = max(0, l.inkWetnessDecay ?? 1)
         let spread: Float = 0.18 * (1 - dry * 0.78)
-        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau), spread: spread)
+        var advWet = AdvectWetParams(velTexel: simTexel, wetTexel: dyeTexel, dt: dt, decay: exp(-dt / dryTau * wetnessDecay), spread: spread)
         encode(advectWetPSO, textures: [velocity.read, wet.read, wet.write], bytes: &advWet, length: MemoryLayout<AdvectWetParams>.stride, grid: wet.write, commandBuffer: commandBuffer)
         wet.swap()
 
