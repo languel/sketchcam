@@ -21,7 +21,7 @@ final class MetalInkEngine {
     /// engine reuses the cached image instead of re-rendering.
     private struct RenderSignature: Equatable {
         var paperOpacity: Float
-        var grain: Float
+        var paper: ResolvedPaperConfig
         var opacity: Float
         var colorSep: Float
         var washTint: SIMD4<Float>
@@ -99,6 +99,7 @@ final class MetalInkEngine {
         var paperOn: Float
         var inkFade: Float
         var washTint: SIMD4<Float>
+        var grainScaleSeed: SIMD4<Float>
     }
 
     private final class DoubleTexture {
@@ -133,6 +134,7 @@ final class MetalInkEngine {
     private let advectInkPSO: MTLComputePipelineState
     private let exchangePSO: MTLComputePipelineState
     private let displayPSO: MTLComputePipelineState
+    private let paperRenderer: MetalPaperRenderer
 
     private var velocity: DoubleTexture?
     private var pressure: DoubleTexture?
@@ -220,6 +222,8 @@ final class MetalInkEngine {
         self.advectInkPSO = advectInk
         self.exchangePSO = exchange
         self.displayPSO = display
+        guard let paperRenderer = MetalPaperRenderer(device: device) else { return nil }
+        self.paperRenderer = paperRenderer
     }
 
     func reset() {
@@ -253,6 +257,7 @@ final class MetalInkEngine {
         bakedLiveIDs = []
         lastRenderSig = nil
         cachedImage = nil
+        paperRenderer.reset()
     }
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int) -> CIImage? {
@@ -273,9 +278,14 @@ final class MetalInkEngine {
         let clearFadeRev = l.inkClearFadeRevision ?? 0
         let clearFadeRequested = clearFadeRev != lastClearFadeRevision && !needRebuild
         let paperOpacity = l.inkPaperEnabled ? clamp01(l.inkPaperOpacity ?? 1) : 0
+        var paperConfig = l.inkPaperConfig ?? .metalDefault
+        if l.inkPaperConfig == nil {
+            paperConfig.tint = l.inkPaperColor
+            paperConfig.grain = l.inkPaperGrain
+        }
         let renderSig = RenderSignature(
             paperOpacity: paperOpacity,
-            grain: clamp01(l.inkPaperGrain),
+            paper: paperConfig.resolved,
             opacity: clamp01(l.inkOpacity),
             colorSep: clamp01(l.inkColorSeparation ?? 0.5),
             washTint: Self.washTint(l.inkWashColor)
@@ -385,7 +395,7 @@ final class MetalInkEngine {
             }
             lastFrameIndex = frameIndex
         }
-        render(settings: settings, commandBuffer: commandBuffer)
+        render(settings: settings, paperConfig: paperConfig, commandBuffer: commandBuffer)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         lastRenderSig = renderSig
@@ -881,25 +891,28 @@ final class MetalInkEngine {
         ink.swap()
     }
 
-    private func render(settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
+    private func render(settings: ProcessingSettings, paperConfig: PaperConfig, commandBuffer: MTLCommandBuffer) {
         guard let ink, let fixed, let wet, let locked, let outputTexture else { return }
         let l = settings.landmarks
+        guard let paperTexture = paperRenderer.texture(config: paperConfig, size: CGSize(width: outputTexture.width, height: outputTexture.height), commandBuffer: commandBuffer) else { return }
+        let resolvedPaper = paperConfig.resolved
         let texel = SIMD2<Float>(1 / Float(ink.read.width), 1 / Float(ink.read.height))
         var params = DisplayParams(
             texel: texel,
             res: SIMD2(Float(outputTexture.width), Float(outputTexture.height)),
             inkStrength: 1.9,
             edge: 1.35,
-            grain: max(0, clamp01(l.inkPaperGrain)),
+            grain: max(0, resolvedPaper.grainStrength),
             whiteTint: clamp01(l.inkColorSeparation ?? 0.5) * 0.35,
             opacity: clamp01(l.inkOpacity),
             paperOn: l.inkPaperEnabled ? clamp01(l.inkPaperOpacity ?? 1) : 0,
             // Clear fade scales the PIGMENT (and wet tint) to 0, leaving the paper
             // fully opaque — so a fade-out doesn't show through to the camera.
             inkFade: clearFadeActive ? clearFade : 1,
-            washTint: Self.washTint(l.inkWashColor)
+            washTint: Self.washTint(l.inkWashColor),
+            grainScaleSeed: SIMD4(resolvedPaper.grainScaleX, resolvedPaper.grainScaleY, Float(resolvedPaper.seed), 0)
         )
-        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
+        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, paperTexture, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }
 
     private func encodeClear(_ texture: MTLTexture, commandBuffer: MTLCommandBuffer) {

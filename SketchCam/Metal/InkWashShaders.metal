@@ -83,6 +83,7 @@ struct InkDisplayParams {
     float paperOn;
     float inkFade;   // scales pigment + wet tint (1 = normal, 0 = cleared); paper unaffected
     float4 washTint; // wet field's transmission colour (rgb)
+    float4 grainScaleSeed;
 };
 
 struct InkPaperParams {
@@ -406,7 +407,8 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
                         texture2d<float, access::sample> fixedTex [[texture(1)]],
                         texture2d<float, access::sample> wet [[texture(2)]],
                         texture2d<float, access::sample> locked [[texture(3)]],
-                        texture2d<float, access::write> outTex [[texture(4)]],
+                        texture2d<float, access::sample> paperTex [[texture(4)]],
+                        texture2d<float, access::write> outTex [[texture(5)]],
                         constant InkDisplayParams &p [[buffer(0)]],
                         uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
@@ -423,12 +425,9 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float t = dot(pig(uv + float2(0.0, p.texel.y)).rgb, float3(1.0));
     float edge = length(float2(r - l, t - b));
     float2 px = uv * p.res;
-    float fiber = fbm(px * 0.055);
-    float tooth = vnoise(px * 0.42);
-    float grain = fbm(px * 0.12 + 31.7);
-    float3 paper = float3(0.962, 0.954, 0.930);
-    paper -= (fiber - 0.5) * 0.05;
-    paper -= (tooth - 0.5) * 0.022;
+    float2 grainSeed = float2(p.grainScaleSeed.z * 17.41, p.grainScaleSeed.z * 7.23);
+    float grain = fbm(px * p.grainScaleSeed.xy + 31.7 + grainSeed);
+    float3 paper = paperTex.sample(s, uv).rgb;
     float3 absb = dens * p.inkStrength;
     absb *= 1.0 + (grain - 0.5) * p.grain * clamp(c * 2.0, 0.0, 1.0);
     absb *= 1.0 + edge * p.edge;
@@ -442,9 +441,6 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     // Wet paper transmits the wash tint (default ≈ (0.84,0.85,0.89) reproduces
     // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Pick a colour for tinted washes.
     col *= mix(float3(1.0), p.washTint.rgb, ws * p.washTint.a);
-    float2 q = uv - 0.5;
-    col *= 1.0 - dot(q, q) * 0.16;
-
     float densityAlpha = clamp(1.0 - exp(-(c + pw.a) * 1.4), 0.0, 1.0);
     float alpha = p.opacity * mix(densityAlpha, 1.0, p.paperOn);
     outTex.write(float4(col * alpha, alpha), gid);
