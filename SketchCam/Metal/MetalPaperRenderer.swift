@@ -113,7 +113,7 @@ final class MetalPaperRenderer {
             fiber: SIMD4(config.fiberStrength, config.fiberScaleX, config.fiberScaleY, config.fiberOrientation),
             tooth: SIMD4(config.toothStrength, config.toothScaleX, config.toothScaleY, 0),
             grain: SIMD4(config.grainStrength, config.grainScaleX, config.grainScaleY, Float(config.seed)),
-            finish: SIMD4(config.contrast, config.vignetteStrength, 0, 0)
+            finish: SIMD4(config.contrast, config.vignetteStrength, config.saturation, 0)
         )
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(pipeline)

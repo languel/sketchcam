@@ -93,7 +93,7 @@ struct InkPaperParams {
     float4 fiber; // strength, scale x, scale y, orientation radians
     float4 tooth; // strength, scale x, scale y, unused
     float4 grain; // strength, scale x, scale y, seed
-    float4 finish; // contrast, vignette, unused, unused
+    float4 finish; // contrast, vignette, saturation, unused
 };
 
 static float2 uv_for(uint2 gid, uint w, uint h) {
@@ -145,7 +145,9 @@ kernel void ink_generate_paper(texture2d<float, access::write> outTex [[texture(
     paper -= (fiberNoise - 0.5) * p.fiber.x;
     paper -= (toothNoise - 0.5) * p.tooth.x;
     paper -= (grainNoise - 0.5) * p.grain.x * 0.018;
-    paper = (paper - 0.5) * p.finish.x + 0.5;
+    paper = p.tint.rgb + (paper - p.tint.rgb) * p.finish.x;
+    float luminance = dot(paper, float3(0.2126, 0.7152, 0.0722));
+    paper = mix(float3(luminance), paper, p.finish.z);
     float2 q = uv - 0.5;
     paper *= 1.0 - dot(q, q) * p.finish.y;
     outTex.write(float4(clamp(paper, 0.0, 1.0) * p.tint.a, p.tint.a), gid);
