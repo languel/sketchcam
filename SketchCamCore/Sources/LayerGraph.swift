@@ -370,6 +370,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
     case marks                  // landmark dots / stick (Phase 3b: own image)
     case drawing(DrawingAlgorithm)  // (Phase 3b: own image per algorithm)
     case ink
+    case acrylic(AcrylicConfig)
     case web
 
     /// Input ports this kind exposes, in binding order.
@@ -387,6 +388,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .drawing: return [Port(name: "analysis", type: .path)]
         case .ink:     return [Port(name: "strokes", type: .path),
                                Port(name: "texture", type: .pixel)]
+        case .acrylic: return [Port(name: "strokes", type: .path), Port(name: "texture", type: .pixel)]
         case .web:     return []
         }
     }
@@ -408,6 +410,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .marks: return "marks"
         case .drawing(let a): return "drawing.\(a.rawValue)"
         case .ink: return "ink"
+        case .acrylic: return "acrylic"
         case .web: return "web"
         }
     }
@@ -425,6 +428,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .marks:   return [.source(.landmarks)]
         case .drawing: return [.source(.landmarks)]
         case .ink:     return [.source(.mouse), .none]   // texture unrouted by default
+        case .acrylic: return [.source(.mouse), .none]
         case .web:     return []
         }
     }

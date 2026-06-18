@@ -4,6 +4,24 @@ import XCTest
 /// Phase 1: the layer/routing graph model, validation, scheduling, and the
 /// legacy→graph migration. No rendering yet.
 final class LayerGraphTests: XCTestCase {
+    func testAcrylicDefaultsAndBodyMacro() throws {
+        var config = AcrylicConfig()
+        XCTAssertEqual(config.body, 0.5)
+        XCTAssertEqual(config.mixModel, .pigment)
+        config.applyBody(0)
+        XCTAssertEqual(config.viscosity, 0.1, accuracy: 0.0001)
+        config.applyBody(1)
+        XCTAssertEqual(config.viscosity, 0.95, accuracy: 0.0001)
+        let decoded = try JSONDecoder().decode(AcrylicConfig.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(decoded, config)
+    }
+
+    func testAcrylicNodePortsAndRoundTrip() throws {
+        let node = Node(name: "Acrylic", kind: .acrylic(AcrylicConfig()), managed: false)
+        XCTAssertEqual(node.kind.ports.map(\.type), [.path, .pixel])
+        let graph = LayerGraph(nodes: [node], layers: [Layer(node: node.id)])
+        XCTAssertEqual(try JSONDecoder().decode(LayerGraph.self, from: JSONEncoder().encode(graph)), graph)
+    }
 
     // MARK: - Kind invariants
 

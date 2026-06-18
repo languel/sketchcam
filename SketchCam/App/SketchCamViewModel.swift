@@ -702,7 +702,7 @@ final class SketchCamViewModel: ObservableObject {
                 return overlay
             case .web:
                 return webLayer
-            case .ink, .effect:
+            case .ink, .acrylic, .effect:
                 return nil
             }
         }
@@ -767,6 +767,8 @@ final class SketchCamViewModel: ObservableObject {
                     return overlay
                 case .ink:
                     return inkLayer
+                case .acrylic:
+                    return nil
                 case .web:
                     return webLayer
                 case .effect:

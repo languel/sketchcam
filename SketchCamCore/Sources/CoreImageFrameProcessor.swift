@@ -286,6 +286,8 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 image = webLayer
             case .ink:
                 image = inkLayer
+            case .acrylic:
+                image = nil
             case .overlay, .marks, .drawing:
                 image = overlayDone ? nil : overlay   // the one merged overlay, once
                 overlayDone = true

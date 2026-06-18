@@ -81,6 +81,7 @@
 		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
 		DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */; };
 		DC1AD4420A3047544009C546 /* OpticalFlowFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A63B02550B658217469650 /* OpticalFlowFieldProviderSelfCheck.swift */; };
+		DEB84A185E52E975B0D4F74E /* AcrylicConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */; };
 		E5383731BB4BFCECB3CC7913 /* BodyHullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */; };
 		E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69372C0E7B99EADDD8731E11 /* SketchCamState.swift */; };
 		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
@@ -172,6 +173,7 @@
 		1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreImageFrameProcessor.swift; sourceTree = "<group>"; };
 		1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamApp.swift; sourceTree = "<group>"; };
 		250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferUtils.swift; sourceTree = "<group>"; };
+		25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcrylicConfig.swift; sourceTree = "<group>"; };
 		2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyHullTests.swift; sourceTree = "<group>"; };
 		2836CF880DAF3F0A8928640F /* LineWalk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalk.swift; sourceTree = "<group>"; };
 		291424DBAD8774D373DAC93E /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
@@ -512,6 +514,7 @@
 		FC8904B8801C317767B20C47 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */,
 				177F3E230DF6259E3ECAE346 /* BodyHull.swift */,
 				1B76938CF9C16060A016345E /* ControlFieldGraph.swift */,
 				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
@@ -772,6 +775,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DEB84A185E52E975B0D4F74E /* AcrylicConfig.swift in Sources */,
 				57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */,
 				EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */,
 				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
