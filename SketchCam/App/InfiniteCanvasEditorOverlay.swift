@@ -13,6 +13,8 @@ private struct CanvasPointerEvent {
     var clickCount: Int
 }
 
+private enum CanvasObjectTransform { case scale, rotate }
+
 private struct InfiniteCanvasEventSurface: NSViewRepresentable {
     var onPointer: (CanvasPointerEvent) -> Void
     var onPan: (CGSize) -> Void
@@ -21,6 +23,8 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
     var onDelete: () -> Void
     var onEscape: () -> Void
     var onEnter: () -> Void
+    var onCopy: () -> Void
+    var onPaste: () -> Void
 
     func makeNSView(context: Context) -> EventView {
         NSEvent.isMouseCoalescingEnabled = false
@@ -39,6 +43,7 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
         view.onDelete = onDelete
         view.onEscape = onEscape
         view.onEnter = onEnter
+        view.onCopy = onCopy; view.onPaste = onPaste
     }
 
     final class EventView: NSView {
@@ -49,6 +54,8 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
         var onDelete: (() -> Void)?
         var onEscape: (() -> Void)?
         var onEnter: (() -> Void)?
+        var onCopy: (() -> Void)?
+        var onPaste: (() -> Void)?
         private var start: CGPoint?
         private var previous: CGPoint?
         private var secondary = false
@@ -70,6 +77,8 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
         override func otherMouseUp(with event: NSEvent) { finish(event) }
 
         override func keyDown(with event: NSEvent) {
+            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" { onCopy?(); return }
+            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" { onPaste?(); return }
             if event.keyCode == 49 { spaceHeld = true; return }
             if event.keyCode == 51 || event.keyCode == 117 { onDelete?(); return }
             if event.keyCode == 53 { onEscape?(); return }
@@ -170,6 +179,8 @@ struct InfiniteCanvasEditorOverlay: View {
     let onLive: (InkLiveStrokeSample) -> Void
     let onLiveEnd: () -> Void
     let onProjectChanged: () -> Void
+    let onCopy: () -> Void
+    let onPaste: () -> Void
 
     @State private var activeID: UUID?
     @State private var activeSamples: [GestureSample] = []
@@ -180,6 +191,8 @@ struct InfiniteCanvasEditorOverlay: View {
     @State private var marqueeStart: CGPoint?
     @State private var marqueeEnd: CGPoint?
     @State private var selectedTangent: (anchorID: UUID, outgoing: Bool)?
+    @State private var objectTransform: CanvasObjectTransform?
+    @State private var transformPivot: CGPoint?
 
     var body: some View {
         GeometryReader { geometry in
@@ -195,7 +208,9 @@ struct InfiniteCanvasEditorOverlay: View {
                     onRotate: { project.camera.rotation += $0; onProjectChanged() },
                     onDelete: deleteSelection,
                     onEscape: { editingPoints = false; selectedAnchorID = nil },
-                    onEnter: { if !selectedGestureIDs.isEmpty { editingPoints = true } }
+                    onEnter: { if !selectedGestureIDs.isEmpty { editingPoints = true } },
+                    onCopy: onCopy,
+                    onPaste: onPaste
                 )
             }
             .contentShape(Rectangle())
@@ -227,6 +242,7 @@ struct InfiniteCanvasEditorOverlay: View {
                     let b = viewPoint(CGPoint(x: bounds.maxX, y: bounds.maxY), rect: rect)
                     context.stroke(Path(CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))),
                                    with: .color(.accentColor.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    if !editingPoints { drawTransformHandles(bounds, context: &context, rect: rect) }
                 }
                 if editingPoints {
                     drawAnchors(gesture.curve, context: &context, rect: rect)
@@ -239,6 +255,21 @@ struct InfiniteCanvasEditorOverlay: View {
             context.fill(Path(box), with: .color(.accentColor.opacity(0.08)))
             context.stroke(Path(box), with: .color(.accentColor.opacity(0.8)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
         }
+    }
+
+    private func drawTransformHandles(_ bounds: CGRect, context: inout GraphicsContext, rect: CGRect) {
+        let corners = [bounds.origin, CGPoint(x: bounds.maxX, y: bounds.minY), CGPoint(x: bounds.minX, y: bounds.maxY), CGPoint(x: bounds.maxX, y: bounds.maxY)]
+        for corner in corners {
+            let p = viewPoint(corner, rect: rect)
+            context.fill(Path(CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.white))
+            context.stroke(Path(CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.accentColor), lineWidth: 1)
+        }
+        let top = viewPoint(CGPoint(x: bounds.midX, y: bounds.minY), rect: rect)
+        let rotate = CGPoint(x: top.x, y: top.y - 22)
+        var stem = Path(); stem.move(to: top); stem.addLine(to: rotate)
+        context.stroke(stem, with: .color(.accentColor), lineWidth: 1)
+        context.fill(Path(ellipseIn: CGRect(x: rotate.x - 4, y: rotate.y - 4, width: 8, height: 8)), with: .color(.white))
+        context.stroke(Path(ellipseIn: CGRect(x: rotate.x - 4, y: rotate.y - 4, width: 8, height: 8)), with: .color(.accentColor), lineWidth: 1)
     }
 
     private func drawAnchors(_ curve: EditableCurve, context: inout GraphicsContext, rect: CGRect) {
@@ -352,6 +383,9 @@ struct InfiniteCanvasEditorOverlay: View {
         case .began:
             originalGestures = project.gestures
             dragWorldStart = world
+            if !editingPoints, let hit = transformHandle(at: event.location, rect: rect) {
+                objectTransform = hit.mode; transformPivot = hit.pivot; return
+            }
             if editingPoints, let tangent = nearestTangent(to: world, rect: rect) {
                 selectedGestureIDs = [tangent.gestureID]
                 selectedAnchorID = tangent.anchorID
@@ -378,7 +412,9 @@ struct InfiniteCanvasEditorOverlay: View {
                 marqueeStart = world; marqueeEnd = world
             }
         case .changed:
-            if marqueeStart != nil {
+            if let objectTransform, let pivot = transformPivot, let start = dragWorldStart {
+                transformSelection(objectTransform, pivot: pivot, start: start, current: world, constrained: event.modifiers.contains(.shift))
+            } else if marqueeStart != nil {
                 marqueeEnd = world
                 updateMarqueeSelection()
             } else if let tangent = selectedTangent, editingPoints {
@@ -394,7 +430,7 @@ struct InfiniteCanvasEditorOverlay: View {
                 translateSelection(delta)
             }
         case .ended:
-            marqueeStart = nil; marqueeEnd = nil; originalGestures = []; dragWorldStart = nil; selectedTangent = nil
+            marqueeStart = nil; marqueeEnd = nil; originalGestures = []; dragWorldStart = nil; selectedTangent = nil; objectTransform = nil; transformPivot = nil
             onProjectChanged()
         }
     }
@@ -455,6 +491,45 @@ struct InfiniteCanvasEditorOverlay: View {
             value.curve.anchors = value.curve.anchors.map { var anchor = $0; anchor.position.x += delta.x; anchor.position.y += delta.y; return anchor }
             return value
         }
+    }
+
+    private func transformSelection(_ mode: CanvasObjectTransform, pivot: CGPoint, start: CGPoint, current: CGPoint, constrained: Bool) {
+        let a = CGPoint(x: start.x - pivot.x, y: start.y - pivot.y)
+        let b = CGPoint(x: current.x - pivot.x, y: current.y - pivot.y)
+        let transform: (CGPoint) -> CGPoint
+        switch mode {
+        case .scale:
+            var sx = abs(a.x) > 0.000_001 ? b.x / a.x : 1
+            var sy = abs(a.y) > 0.000_001 ? b.y / a.y : 1
+            if constrained { let s = abs(sx) > abs(sy) ? sx : sy; sx = s; sy = s }
+            transform = { CGPoint(x: pivot.x + ($0.x - pivot.x) * sx, y: pivot.y + ($0.y - pivot.y) * sy) }
+        case .rotate:
+            let angle = atan2(b.y, b.x) - atan2(a.y, a.x)
+            let snapped = constrained ? (angle / (.pi / 12)).rounded() * (.pi / 12) : angle
+            let c = cos(snapped), s = sin(snapped)
+            transform = { point in let x = point.x - pivot.x, y = point.y - pivot.y; return CGPoint(x: pivot.x + x * c - y * s, y: pivot.y + x * s + y * c) }
+        }
+        project.gestures = originalGestures.map { source in
+            guard selectedGestureIDs.contains(source.id) else { return source }
+            var value = source
+            value.samples = value.samples.map { var sample = $0; sample.position = transform(sample.position); return sample }
+            value.curve.anchors = value.curve.anchors.map { var anchor = $0; let old = anchor.position; anchor.position = transform(old); anchor.tangentIn = CGPoint(x: transform(CGPoint(x: old.x + anchor.tangentIn.x, y: old.y + anchor.tangentIn.y)).x - anchor.position.x, y: transform(CGPoint(x: old.x + anchor.tangentIn.x, y: old.y + anchor.tangentIn.y)).y - anchor.position.y); anchor.tangentOut = CGPoint(x: transform(CGPoint(x: old.x + anchor.tangentOut.x, y: old.y + anchor.tangentOut.y)).x - anchor.position.x, y: transform(CGPoint(x: old.x + anchor.tangentOut.x, y: old.y + anchor.tangentOut.y)).y - anchor.position.y); return anchor }
+            value.curve.hasCustomGeometry = true
+            return value
+        }
+    }
+
+    private func transformHandle(at point: CGPoint, rect: CGRect) -> (mode: CanvasObjectTransform, pivot: CGPoint)? {
+        guard selectedGestureIDs.count == 1, let gesture = project.gestures.first(where: { selectedGestureIDs.contains($0.id) }) else { return nil }
+        let bounds = gesture.curve.bounds
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let corners = [bounds.origin, CGPoint(x: bounds.maxX, y: bounds.minY), CGPoint(x: bounds.minX, y: bounds.maxY), CGPoint(x: bounds.maxX, y: bounds.maxY)]
+        for corner in corners where hypot(viewPoint(corner, rect: rect).x - point.x, viewPoint(corner, rect: rect).y - point.y) < 9 {
+            return (.scale, center)
+        }
+        let top = viewPoint(CGPoint(x: bounds.midX, y: bounds.minY), rect: rect)
+        if hypot(top.x - point.x, top.y - 22 - point.y) < 10 { return (.rotate, center) }
+        return nil
     }
 
     private func moveAnchor(id: UUID, to world: CGPoint) {

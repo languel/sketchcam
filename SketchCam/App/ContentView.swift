@@ -211,7 +211,9 @@ struct ContentView: View {
                         fitRecipe: CurveFitRecipe(model.settings.landmarks.inkCurveFit),
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
-                        onProjectChanged: { model.markProjectDirty() }
+                        onProjectChanged: { model.markProjectDirty() },
+                        onCopy: copyCanvasSelection,
+                        onPaste: pasteCanvasObjects
                     )
                     .zIndex(20)
                 }
@@ -482,14 +484,6 @@ struct ContentView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            HStack(spacing: 6) {
-                Button("Copy") { copyCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
-                Button("Paste") { pasteCanvasObjects() }
-                Button("Refit") { refitCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
-                Button("Render as Ink") { renderSelectionAsInk() }.disabled(selectedGestureIDs.isEmpty)
-                Button("Replay to New Canvas") { renderPerformanceToNewCanvas() }
-            }
-            .controlSize(.small)
     }
 
     // MARK: - Layers tab
@@ -819,6 +813,24 @@ struct ContentView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Button("Copy") { copyCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Paste") { pasteCanvasObjects() }
+                Button("Refit") { refitCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Render as Ink") { renderSelectionAsInk() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Replay") { renderPerformanceToNewCanvas() }.help("Render Performance to New Canvas")
+            }
+            .controlSize(.small)
+            if selectedGestureIDs.count == 1 {
+                DisclosureGroup("Selected stroke profile") {
+                    SliderRow(title: "Size", value: selectedProfileBinding(\.size), range: 0...3, defaultValue: 1)
+                    SliderRow(title: "Thinning", value: selectedProfileBinding(\.thinning), range: -1...1, defaultValue: 0.5)
+                    SliderRow(title: "Smoothing", value: selectedProfileBinding(\.smoothing), defaultValue: 0.5)
+                    SliderRow(title: "Streamline", value: selectedProfileBinding(\.streamline), defaultValue: 0.5)
+                    SliderRow(title: "Start taper", value: selectedProfileBinding(\.startTaper), defaultValue: 0)
+                    SliderRow(title: "End taper", value: selectedProfileBinding(\.endTaper), defaultValue: 0)
+                }
+            }
 
             HStack {
                 Button {
@@ -955,6 +967,19 @@ struct ContentView: View {
     private func copyCanvasSelection() {
         do { try CanvasClipboard.copy(model.project.gestures.filter { selectedGestureIDs.contains($0.id) }) }
         catch { model.errorText = "Copy failed: \(error.localizedDescription)" }
+    }
+
+    private func selectedProfileBinding(_ keyPath: WritableKeyPath<StrokeProfile, Float>) -> Binding<Double> {
+        Binding(get: {
+            guard let id = selectedGestureIDs.first,
+                  let value = model.project.gestures.first(where: { $0.id == id }) else { return 0 }
+            return Double(value.strokeProfile[keyPath: keyPath])
+        }, set: { value in
+            guard let id = selectedGestureIDs.first,
+                  let index = model.project.gestures.firstIndex(where: { $0.id == id }) else { return }
+            model.project.gestures[index].strokeProfile[keyPath: keyPath] = Float(value)
+            model.markProjectDirty()
+        })
     }
 
     private func pasteCanvasObjects() {
