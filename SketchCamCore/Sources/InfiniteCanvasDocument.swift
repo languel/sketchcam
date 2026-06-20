@@ -56,6 +56,30 @@ public struct CanvasCamera: Codable, Equatable, Sendable {
         let local = CGPoint(x: dx * c + dy * s, y: -dx * s + dy * c)
         return CGPoint(x: local.x / size.width + 0.5, y: local.y / size.height + 0.5)
     }
+
+    /// The camera frame enlarged by its guard band. The returned camera is the
+    /// bounded simulation domain; its own guard is zero because the expansion
+    /// has already been applied.
+    public func simulationDomain() -> CanvasCamera {
+        CanvasCamera(center: center,
+                     viewHeight: viewHeight * (1 + 2 * guardFraction),
+                     rotation: rotation,
+                     guardFraction: 0)
+    }
+
+    /// True when every corner of `camera` is still inside this camera's frame.
+    /// Testing in viewport space makes this work for rotated cameras as well as
+    /// ordinary axis-aligned pans and zooms.
+    public func containsViewport(_ camera: CanvasCamera, aspect: CGFloat, tolerance: CGFloat = 0.000_001) -> Bool {
+        let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0),
+                       CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1)]
+        return corners.allSatisfy { corner in
+            let world = camera.worldPoint(fromViewportUV: corner, aspect: aspect)
+            let uv = viewportUV(fromWorldPoint: world, aspect: aspect)
+            return uv.x >= -tolerance && uv.x <= 1 + tolerance &&
+                   uv.y >= -tolerance && uv.y <= 1 + tolerance
+        }
+    }
 }
 
 public enum SceneCoordinateSpace: String, Codable, CaseIterable, Sendable {
@@ -181,6 +205,10 @@ public struct GestureClip: Codable, Equatable, Sendable, Identifiable {
     public var samples: [GestureSample]
     public var curve: EditableCurve
     public var strokeProfile: StrokeProfile
+    /// Camera height when the brush was recorded. Brush sliders are expressed
+    /// relative to the viewport, so this preserves their physical world width
+    /// when the camera later zooms. Older projects use the initial height 1.
+    public var recordedViewHeight: CGFloat?
     public var kind: MaterialGestureKind
     public var color: RGBAColor
     public var flow: Float
@@ -193,7 +221,8 @@ public struct GestureClip: Codable, Equatable, Sendable, Identifiable {
     public init(
         id: UUID = UUID(), name: String = "Gesture", startTime: TimeInterval = 0,
         duration: TimeInterval, samples: [GestureSample], curve: EditableCurve,
-        strokeProfile: StrokeProfile = StrokeProfile(), kind: MaterialGestureKind = .pen,
+        strokeProfile: StrokeProfile = StrokeProfile(), recordedViewHeight: CGFloat? = nil,
+        kind: MaterialGestureKind = .pen,
         color: RGBAColor = .ink, flow: Float = 1, bleed: Float = 0.8,
         dry: Float = 0.25, brushInk: Float = 0, timingEstimated: Bool = false,
         muted: Bool = false
@@ -205,6 +234,7 @@ public struct GestureClip: Codable, Equatable, Sendable, Identifiable {
         self.samples = samples
         self.curve = curve
         self.strokeProfile = strokeProfile
+        self.recordedViewHeight = recordedViewHeight
         self.kind = kind
         self.color = color
         self.flow = flow
@@ -213,6 +243,12 @@ public struct GestureClip: Codable, Equatable, Sendable, Identifiable {
         self.brushInk = brushInk
         self.timingEstimated = timingEstimated
         self.muted = muted
+    }
+
+    /// Brush size expected by the viewport-normalized ink engine for this
+    /// gesture at the supplied camera zoom.
+    public func viewportBrushSize(camera: CanvasCamera) -> Float {
+        strokeProfile.size * Float((recordedViewHeight ?? 1) / max(0.000_001, camera.viewHeight))
     }
 }
 
@@ -473,6 +509,7 @@ public extension GestureClip {
             samples: samples,
             curve: EditableCurve(anchors: anchors, fitRecipe: CurveFitRecipe(fit)),
             strokeProfile: StrokeProfile(size: path.width ?? 0.5),
+            recordedViewHeight: 1,
             kind: mode == .brush ? .wash : .pen,
             color: path.color ?? .ink,
             flow: path.flow ?? 1,

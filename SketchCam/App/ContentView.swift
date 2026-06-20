@@ -99,10 +99,13 @@ struct ContentView: View {
     @State private var selectedInkPointIndex: Int?
     @State private var selectedGestureIDs: Set<UUID> = []
     @State private var selectedGestureAnchorID: UUID?
+    @State private var pathLayerVisible = false
     @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var inkUndoStack: [[InkEditorPath]] = []
     @State private var inkRedoStack: [[InkEditorPath]] = []
+    @State private var performanceReplayTask: Task<Void, Never>?
+    @State private var performanceReplayActive = false
 
     var body: some View {
         Group {
@@ -128,7 +131,11 @@ struct ContentView: View {
             registerShortcuts()
             ShortcutRegistry.shared.start()
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            performanceReplayTask?.cancel()
+            model.cancelInkLiveStroke()
+            model.stop()
+        }
     }
 
     private var contentWithOverlayPanel: some View {
@@ -194,10 +201,10 @@ struct ContentView: View {
                 if tab == .ink, model.settings.landmarks.inkEnabled {
                     InfiniteCanvasEditorOverlay(
                         project: Binding(get: { model.project }, set: { model.project = $0 }),
-                        legacyPaths: inkPathsBinding,
                         tool: $inkTool,
                         selectedGestureIDs: $selectedGestureIDs,
                         selectedAnchorID: $selectedGestureAnchorID,
+                        pathLayerVisible: pathLayerVisible,
                         outputSize: model.outputFormat.size,
                         brushMode: currentInkMode,
                         inkKind: currentInkKind,
@@ -808,17 +815,41 @@ struct ContentView: View {
             HStack {
                 Text("\(model.project.gestures.count) timed gestures")
                 Spacer()
-                Text(String(format: "view %.2fx  rot %.0f°", 1 / model.project.camera.viewHeight,
+                Text(String(format: "view %.2fx  center %.2f, %.2f  rot %.0f°",
+                            1 / model.project.camera.viewHeight,
+                            model.project.camera.center.x,
+                            model.project.camera.center.y,
                             model.project.camera.rotation * 180 / .pi))
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             HStack(spacing: 6) {
+                Button { zoomCanvas(1.25) } label: { Image(systemName: "plus.magnifyingglass") }
+                    .help("Zoom in around the camera center. Command-scroll or pinch zooms around the pointer.")
+                Button { zoomCanvas(0.8) } label: { Image(systemName: "minus.magnifyingglass") }
+                    .help("Zoom out around the camera center.")
+                Button { rotateCanvas(-.pi / 12) } label: { Image(systemName: "rotate.left") }
+                Button { rotateCanvas(.pi / 12) } label: { Image(systemName: "rotate.right") }
+                Button("Reset view") { model.project.camera = CanvasCamera(); model.markProjectDirty() }
+                Spacer()
+                Text("Space-drag pan · ⌘scroll zoom").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.borderless)
+            HStack(spacing: 6) {
+                Toggle(isOn: $pathLayerVisible) {
+                    Label("Paths", systemImage: pathLayerVisible ? "eye" : "eye.slash")
+                }
+                .toggleStyle(.button)
+                .help("Show the editable vector Paths layer. The simulated ink artifact is a separate layer.")
                 Button("Copy") { copyCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
                 Button("Paste") { pasteCanvasObjects() }
                 Button("Refit") { refitCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
-                Button("Render as Ink") { renderSelectionAsInk() }.disabled(selectedGestureIDs.isEmpty)
-                Button("Replay") { renderPerformanceToNewCanvas() }.help("Render Performance to New Canvas")
+                Button("Render Paths") { renderPathsAtCurrentFrame() }.disabled(model.project.gestures.isEmpty)
+                    .help("Paint selected paths, or all paths up to the playhead, into the current ink artifact. Editing paths later does not silently repaint them.")
+                Button(performanceReplayActive ? "Stop Replay" : "Replay") {
+                    performanceReplayActive ? stopPerformanceReplay() : renderPerformanceToNewCanvas()
+                }
+                .help("Clear a fresh ink artifact and replay recorded gestures using their original sample timing.")
             }
             .controlSize(.small)
             if selectedGestureIDs.count == 1 {
@@ -969,6 +1000,16 @@ struct ContentView: View {
         catch { model.errorText = "Copy failed: \(error.localizedDescription)" }
     }
 
+    private func zoomCanvas(_ factor: CGFloat) {
+        model.project.camera.viewHeight = min(1_000_000, max(0.000_01, model.project.camera.viewHeight / factor))
+        model.markProjectDirty()
+    }
+
+    private func rotateCanvas(_ delta: CGFloat) {
+        model.project.camera.rotation += delta
+        model.markProjectDirty()
+    }
+
     private func selectedProfileBinding(_ keyPath: WritableKeyPath<StrokeProfile, Float>) -> Binding<Double> {
         Binding(get: {
             guard let id = selectedGestureIDs.first,
@@ -1002,31 +1043,81 @@ struct ContentView: View {
         model.markProjectDirty()
     }
 
-    private func renderSelectionAsInk() {
+    private func renderPathsAtCurrentFrame() {
         let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
-        let paths = model.project.gestures.filter { selectedGestureIDs.contains($0.id) }.map { gesture in
-            InkEditorPath(id: UUID(), points: gesture.curve.sampled().map { model.project.camera.viewportUV(fromWorldPoint: $0, aspect: aspect) },
-                          brushMode: gesture.kind == .pen ? .pen : .brush, inkKind: InkKind.black,
-                          width: gesture.strokeProfile.size, flow: gesture.flow, bleed: gesture.bleed,
-                          dry: gesture.dry, brushInk: gesture.brushInk, color: gesture.color)
+        let candidates = selectedGestureIDs.isEmpty
+            ? model.project.gestures.filter { $0.startTime <= model.project.timeline.playhead }
+            : model.project.gestures.filter { selectedGestureIDs.contains($0.id) }
+        let paths = candidates.map { gesture in
+            let width = gesture.viewportBrushSize(camera: model.project.camera)
+            return InkEditorPath(id: UUID(), points: gesture.curve.sampled().map { model.project.camera.viewportUV(fromWorldPoint: $0, aspect: aspect) },
+                                 brushMode: gesture.kind == .pen ? .pen : .brush, inkKind: InkKind.black,
+                                 width: width, flow: gesture.flow, bleed: gesture.bleed,
+                                 dry: gesture.dry, brushInk: gesture.brushInk, color: gesture.color)
         }
         setInkPaths(model.settings.landmarks.inkPaths + paths)
         model.settings.landmarks.inkRebuildRevision += 1
     }
 
     private func renderPerformanceToNewCanvas() {
+        stopPerformanceReplay()
         model.cancelInkLiveStroke()
         model.settings.landmarks.inkClearFadeRevision = (model.settings.landmarks.inkClearFadeRevision ?? 0) + 1
-        let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
-        let ordered = model.project.gestures.filter { !$0.muted && ($0.kind == .pen || $0.kind == .wash) }.sorted { $0.startTime < $1.startTime }
-        model.settings.landmarks.inkPaths = ordered.map { gesture in
-            InkEditorPath(id: gesture.id, points: gesture.samples.map { model.project.camera.viewportUV(fromWorldPoint: $0.position, aspect: aspect) },
-                          brushMode: gesture.kind == .pen ? .pen : .brush, inkKind: InkKind.black,
-                          width: gesture.strokeProfile.size, flow: gesture.flow, bleed: gesture.bleed,
-                          dry: gesture.dry, brushInk: gesture.brushInk,
-                          color: gesture.color)
+        setInkPaths([])
+        model.project.timeline.playhead = 0
+        let ordered = model.project.gestures.filter { !$0.muted }.sorted { $0.startTime < $1.startTime }
+        guard !ordered.isEmpty else { return }
+        performanceReplayActive = true
+        performanceReplayTask = Task { @MainActor in
+            var replayTime: TimeInterval = 0
+            // Give the renderer one frame to consume the clear revision.
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            for gesture in ordered {
+                guard !Task.isCancelled else { break }
+                let startDelay = max(0, gesture.startTime - replayTime)
+                if startDelay > 0 { try? await Task.sleep(nanoseconds: UInt64(startDelay * 1_000_000_000)) }
+                guard !Task.isCancelled else { break }
+                replayTime = max(replayTime, gesture.startTime)
+                for sample in gesture.samples {
+                    let targetTime = gesture.startTime + sample.time
+                    let delay = max(0, targetTime - replayTime)
+                    if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                    guard !Task.isCancelled else { break }
+                    model.project.timeline.playhead = targetTime
+                    applyTimeline(at: targetTime)
+                    let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
+                    let uv = model.project.camera.viewportUV(fromWorldPoint: sample.position, aspect: aspect)
+                    let wetOnly = gesture.kind == .rewet
+                    let fixOnly = gesture.kind == .fix
+                    model.updateInkLiveStroke(InkLiveStrokeSample(
+                        id: gesture.id,
+                        point: uv,
+                        brushMode: gesture.kind == .pen ? .pen : .brush,
+                        inkKind: .black,
+                        width: gesture.viewportBrushSize(camera: model.project.camera),
+                        flow: gesture.flow,
+                        brushInk: (wetOnly || fixOnly) ? 0 : gesture.brushInk,
+                        color: gesture.color,
+                        smoothBoost: false,
+                        destructive: gesture.kind == .wash,
+                        wetOnly: wetOnly,
+                        fixOnly: fixOnly,
+                        charge: 0
+                    ))
+                    replayTime = targetTime
+                }
+                model.endInkLiveStroke()
+            }
+            performanceReplayActive = false
+            performanceReplayTask = nil
         }
-        model.settings.landmarks.inkRebuildRevision += 1
+    }
+
+    private func stopPerformanceReplay() {
+        performanceReplayTask?.cancel()
+        performanceReplayTask = nil
+        performanceReplayActive = false
+        model.cancelInkLiveStroke()
     }
 
     private func clearInkSelection() {

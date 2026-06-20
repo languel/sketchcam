@@ -29,8 +29,14 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
     func makeNSView(context: Context) -> EventView {
         NSEvent.isMouseCoalescingEnabled = false
         let view = EventView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
         update(view)
         return view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: EventView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 1, height: proposal.height ?? 1)
     }
 
     func updateNSView(_ nsView: EventView, context: Context) { update(nsView) }
@@ -64,6 +70,8 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
 
         override var isFlipped: Bool { true }
         override var acceptsFirstResponder: Bool { true }
+        override var isOpaque: Bool { false }
+        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) { begin(event, secondary: event.modifierFlags.contains(.control)) }
@@ -100,7 +108,11 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
             window?.makeFirstResponder(self)
             let point = convert(event.locationInWindow, from: nil)
             if event.modifierFlags.contains(.command) {
-                onZoom?(exp(-event.scrollingDeltaY * 0.012), point)
+                // Mouse wheels report much larger deltas than trackpads. Keep
+                // one event from teleporting across orders of magnitude while
+                // retaining smooth, pointer-anchored trackpad zoom.
+                let delta = max(-24, min(24, event.scrollingDeltaY))
+                onZoom?(exp(-delta * 0.008), point)
             } else {
                 onPan?(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
             }
@@ -161,10 +173,10 @@ private struct InfiniteCanvasEventSurface: NSViewRepresentable {
 /// performance representation.
 struct InfiniteCanvasEditorOverlay: View {
     @Binding var project: SketchProjectManifest
-    @Binding var legacyPaths: [InkEditorPath]
     @Binding var tool: InkTool
     @Binding var selectedGestureIDs: Set<UUID>
     @Binding var selectedAnchorID: UUID?
+    let pathLayerVisible: Bool
     let outputSize: CGSize
     let brushMode: InkBrushMode
     let inkKind: InkKind
@@ -212,6 +224,8 @@ struct InfiniteCanvasEditorOverlay: View {
                     onCopy: onCopy,
                     onPaste: onPaste
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
             }
             .contentShape(Rectangle())
         }
@@ -220,13 +234,17 @@ struct InfiniteCanvasEditorOverlay: View {
     private func drawScene(context: inout GraphicsContext, rect: CGRect) {
         for gesture in project.gestures where !gesture.muted {
             let selected = selectedGestureIDs.contains(gesture.id)
-            let outline = ExpressiveStrokeBuilder.outline(samples: gesture.samples, curve: gesture.curve, profile: gesture.strokeProfile)
-            if outline.count > 2 {
+            var worldProfile = gesture.strokeProfile
+            worldProfile.size *= Float(gesture.recordedViewHeight ?? 1)
+            let outline = pathLayerVisible
+                ? ExpressiveStrokeBuilder.outline(samples: gesture.samples, curve: gesture.curve, profile: worldProfile)
+                : []
+            if pathLayerVisible, outline.count > 2 {
                 var shape = Path()
                 shape.move(to: viewPoint(outline[0], rect: rect))
                 for point in outline.dropFirst() { shape.addLine(to: viewPoint(point, rect: rect)) }
                 shape.closeSubpath()
-                context.fill(shape, with: .color(color(gesture.color).opacity(selected ? 0.38 : 0.18)))
+                context.fill(shape, with: .color(color(gesture.color).opacity(selected ? 0.24 : 0.12)))
             }
             if selected {
                 var center = Path()
@@ -356,6 +374,7 @@ struct InfiniteCanvasEditorOverlay: View {
             samples: activeSamples,
             curve: curve,
             strokeProfile: StrokeProfile(size: kind == .pen ? width : washWidth),
+            recordedViewHeight: project.camera.viewHeight,
             kind: kind,
             color: inkColor,
             flow: flow,
@@ -365,14 +384,10 @@ struct InfiniteCanvasEditorOverlay: View {
         )
         project.gestures.append(clip)
         project.sceneObjects.append(SceneObject(id: id, name: clip.name, payload: .gesture(id)))
-        if kind == .pen || kind == .wash {
-            legacyPaths.append(InkEditorPath(id: id,
-                                             points: activeSamples.map { project.camera.viewportUV(fromWorldPoint: $0.position, aspect: aspect) },
-                                             brushMode: kind == .pen ? .pen : .brush,
-                                             inkKind: inkKind,
-                                             width: kind == .pen ? width : washWidth,
-                                             flow: flow, bleed: bleed, dry: dry, brushInk: brushInk, color: inkColor))
-        }
+        // The live stroke has already painted the persistent artifact. Its
+        // editable representation is the world-space GestureClip above; adding
+        // a second legacy viewport path would replay it after a camera-domain
+        // shift and produce a displaced duplicate.
         selectedGestureIDs = [id]
         project.timeline.duration = max(project.timeline.duration, project.timeline.playhead + duration)
         onProjectChanged()

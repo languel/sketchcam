@@ -31,6 +31,16 @@ final class InfiniteCanvasDocumentTests: XCTestCase {
         XCTAssertGreaterThan(guarded.height, plain.height)
     }
 
+    func testGuardedSimulationDomainContainsSmallPanAndZoom() {
+        let camera = CanvasCamera(center: .zero, viewHeight: 1, rotation: .pi / 9, guardFraction: 0.05)
+        let domain = camera.simulationDomain()
+        XCTAssertTrue(domain.containsViewport(camera, aspect: 16.0 / 9.0))
+        XCTAssertTrue(domain.containsViewport(CanvasCamera(center: CGPoint(x: 0.02, y: 0), viewHeight: 0.95,
+                                                           rotation: camera.rotation), aspect: 16.0 / 9.0))
+        XCTAssertFalse(domain.containsViewport(CanvasCamera(center: CGPoint(x: 0.2, y: 0), viewHeight: 1,
+                                                            rotation: camera.rotation), aspect: 16.0 / 9.0))
+    }
+
     func testLegacyPathMigrationPreservesIdentityAndEndpoints() {
         let id = UUID()
         let legacy = InkEditorPath(
@@ -49,6 +59,19 @@ final class InfiniteCanvasDocumentTests: XCTestCase {
         XCTAssertEqual(clip.strokeProfile.size, 0.7)
         XCTAssertTrue(clip.timingEstimated)
         XCTAssertGreaterThan(clip.duration, 0)
+    }
+
+    func testRecordedBrushSizePreservesWorldScaleAcrossZoom() {
+        let clip = GestureClip(
+            duration: 1,
+            samples: [],
+            curve: EditableCurve(anchors: []),
+            strokeProfile: StrokeProfile(size: 0.5),
+            recordedViewHeight: 2
+        )
+        XCTAssertEqual(clip.viewportBrushSize(camera: CanvasCamera(viewHeight: 2)), 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(clip.viewportBrushSize(camera: CanvasCamera(viewHeight: 1)), 1, accuracy: 0.000_001)
+        XCTAssertEqual(clip.viewportBrushSize(camera: CanvasCamera(viewHeight: 4)), 0.25, accuracy: 0.000_001)
     }
 
     func testManifestRoundTripIncludesTypedAutomation() throws {

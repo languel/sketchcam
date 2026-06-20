@@ -11,10 +11,14 @@ final class InkLayerCompositor {
     private var engine: MetalInkEngine? = MetalInkEngine()
     private let paperRenderer = MetalPaperRenderer.shared
     private let artifact = WorldInkArtifactCache()
+    /// World-aligned camera represented by the live Metal textures. It is the
+    /// visible camera plus a guard band, and only shifts when the visible frame
+    /// leaves that domain.
     private var activeCamera: CanvasCamera?
     private var pendingInk: CIImage?
     private var settleFrames = 0
     private var lastClearRevision = 0
+    private var worldBakedPathIDs: Set<UUID> = []
 
     func artifactReferences() -> [ArtifactTileReference] {
         lock.withLock { artifact.references() }
@@ -30,6 +34,7 @@ final class InkLayerCompositor {
             pendingInk = nil
             settleFrames = 0
             try artifact.loadTiles(from: packageURL, references: references)
+            worldBakedPathIDs.removeAll()
         }
     }
 
@@ -58,42 +63,61 @@ final class InkLayerCompositor {
         return lock.withLock {
             if engine == nil { engine = MetalInkEngine() }
             artifact.resetBaseDensity(outputSize.height)
-            if let activeCamera, activeCamera != camera {
+            let aspect = outputSize.width / max(1, outputSize.height)
+            if let activeCamera, !activeCamera.containsViewport(camera, aspect: aspect) {
                 if let pendingInk { artifact.commit(pendingInk, camera: activeCamera, outputSize: outputSize) }
+                worldBakedPathIDs.formUnion(l.inkPaths.map(\.id))
                 pendingInk = nil
                 engine?.reset()
                 settleFrames = 0
+                self.activeCamera = nil
             }
-            activeCamera = camera
+            if activeCamera == nil { activeCamera = camera.simulationDomain() }
+            guard let simulationCamera = activeCamera else { return nil }
             let clearRevision = settings.landmarks.inkClearFadeRevision ?? 0
             if clearRevision != lastClearRevision {
                 lastClearRevision = clearRevision
                 artifact.clear()
+                worldBakedPathIDs.removeAll()
             }
             var renderSettings = settings
+            // Once a viewport path has been materialized into world tiles it
+            // must not be replayed in a later simulation domain. Fresh paths
+            // (Paste / Render as Ink / legacy presets) remain eligible.
+            renderSettings.landmarks.inkPaths.removeAll { worldBakedPathIDs.contains($0.id) }
             let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
             let hasRoutedTexture = textureInput != nil
             // The world tile cache stores ink only. Paper/substrate is applied
             // after the camera extracts the visible artifact.
             renderSettings.landmarks.inkPaperEnabled = false
             renderSettings.landmarks.inkPaperOpacity = 0
-            let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
+            let mappedLive: InkLiveStrokeSample? = live.map { value in
+                var mapped = value
+                let world = camera.worldPoint(fromViewportUV: value.point, aspect: aspect)
+                mapped.point = simulationCamera.viewportUV(fromWorldPoint: world, aspect: aspect)
+                return mapped
+            }
+            let mappedPoints = livePoints.map { point in
+                simulationCamera.viewportUV(fromWorldPoint: camera.worldPoint(fromViewportUV: point, aspect: aspect), aspect: aspect)
+            }
+            let domainInk = engine?.layer(settings: renderSettings, live: mappedLive, livePoints: mappedPoints,
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
                                     controlFields: controlFields)
             let rect = CGRect(origin: .zero, size: outputSize)
             if live != nil || endedLiveID != nil { settleFrames = 180 }
-            if let ink { pendingInk = ink }
+            if let domainInk { pendingInk = domainInk }
             if settleFrames > 0 {
                 settleFrames -= 1
                 if settleFrames == 0, let pendingInk {
-                    artifact.commit(pendingInk, camera: camera, outputSize: outputSize)
+                    artifact.commit(pendingInk, camera: simulationCamera, outputSize: outputSize)
                     self.pendingInk = nil
                     engine?.reset()
                 }
             }
             let settled = artifact.image(camera: camera, outputSize: outputSize)
             let visibleInk: CIImage? = {
-                guard let ink else { return settled }
+                guard let domainInk else { return settled }
+                let ink = artifact.reproject(domainInk, from: simulationCamera, to: camera, outputSize: outputSize)
                 guard let settled else { return ink }
                 return ink.composited(over: settled).cropped(to: rect)
             }()

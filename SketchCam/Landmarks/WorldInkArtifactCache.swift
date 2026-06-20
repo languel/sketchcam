@@ -96,6 +96,18 @@ final class WorldInkArtifactCache {
         return world.transformed(by: transform.inverted()).cropped(to: CGRect(origin: .zero, size: outputSize))
     }
 
+    /// Reprojects a viewport image between two world cameras without touching
+    /// the tile store. Used to display the guarded simulation domain through a
+    /// camera that is freely moving inside it.
+    func reproject(_ image: CIImage, from source: CanvasCamera, to destination: CanvasCamera, outputSize: CGSize) -> CIImage {
+        let density = max(1, outputSize.height / max(0.000_001, destination.viewHeight))
+        let sourceToWorld = viewportToWorldRaster(camera: source, outputSize: outputSize, density: density)
+        let destinationToWorld = viewportToWorldRaster(camera: destination, outputSize: outputSize, density: density)
+        return image.transformed(by: sourceToWorld)
+            .transformed(by: destinationToWorld.inverted())
+            .cropped(to: CGRect(origin: .zero, size: outputSize))
+    }
+
     func references() -> [ArtifactTileReference] {
         Set(tiles.keys).union(backedKeys).sorted { ($0.level, $0.y, $0.x) < ($1.level, $1.y, $1.x) }.map {
             ArtifactTileReference(level: $0.level, x: $0.x, y: $0.y,
