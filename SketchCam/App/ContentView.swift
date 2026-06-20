@@ -764,17 +764,32 @@ struct ContentView: View {
             }
             .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
 
-            DisclosureGroup("Physical response") {
-                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0)
-                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0)
-                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2, defaultValue: 0)
+            DisclosureGroup("Ink response") {
+                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "Master coupling from the paper's hidden material map into the ink simulation. 0 = paper is visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
+                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "Couples the routed moving image to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
+                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
+                          hint: "Strength of the routed optical-flow vector pushing wet ink. It can move only pixels that are wet.")
                 SliderRow(title: "Motion wetness", value: optionalLandmarkFloatBinding(\.inkMotionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
                           hint: "Continuously wets pixels where optical flow is detected, allowing that motion to carry pigment.")
-                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0)
-                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5)
-                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1)
-                Button("Wet canvas") { wetInkCanvas() }
-                    .help("Flood the persistent wetness field once. It then moves, creeps, and dries normally.")
+                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "How strongly the routed live-surface mask accelerates wetting and drying locally.")
+                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
+                          hint: "How strongly the routed live-surface mask brakes fluid and pigment movement locally.")
+                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1,
+                          hint: "How strongly the routed live-surface mask rejects newly deposited pigment. It does not erase existing ink.")
+                HStack(spacing: 6) {
+                    Button("Fix") { fixInk() }
+                        .help("Make all current pigment permanent and immune to wash. Shortcut: Control-Option-F.")
+                    Button("Unfix") { unfixInk() }
+                        .help("Return permanent pigment to the ordinary dried layer so wetting and wash can mobilize it. Shortcut: Shift-Option-F.")
+                    Button("Wet canvas") { wetInkCanvas() }
+                        .help("Flood the persistent wetness field once. It then moves and dries normally. Shortcut: Control-Option-W.")
+                    Button("Dry canvas") { dryInkCanvas() }
+                        .help("Remove all wetness and fluid momentum immediately without moving or fixing pigment. Shortcut: Shift-Option-W.")
+                }
+                .controlSize(.small)
             }
 
             SectionHeader("Editor")
@@ -809,12 +824,6 @@ struct ContentView: View {
                     Label("Clear", systemImage: "trash")
                 }
                 .help("Fade the canvas out (over Fade) then wipe it — committed paths, immediate marks, and fixed ink.")
-                Button {
-                    fixInk()
-                } label: {
-                    Label("Fix", systemImage: "lock")
-                }
-                .help("Bake the current ink into the paper permanently (also D). Fixed ink can't be pushed or washed any more; new strokes still can.")
                 Button {
                     model.exportCurrentFrame()
                 } label: {
@@ -946,8 +955,16 @@ struct ContentView: View {
         model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
     }
 
+    private func unfixInk() {
+        model.settings.landmarks.inkUnfixRevision = (model.settings.landmarks.inkUnfixRevision ?? 0) + 1
+    }
+
     private func wetInkCanvas() {
         model.settings.landmarks.inkWetCanvasRevision = (model.settings.landmarks.inkWetCanvasRevision ?? 0) + 1
+    }
+
+    private func dryInkCanvas() {
+        model.settings.landmarks.inkDryCanvasRevision = (model.settings.landmarks.inkDryCanvasRevision ?? 0) + 1
     }
 
     private func rerenderInk() {
@@ -1556,9 +1573,24 @@ struct ContentView: View {
             toggleInkKind()
         }
         r.register(id: "ink.fix", title: "Ink: Fix", category: "Ink",
-                   default: KeyBinding(key: "d", modifiers: [])) {
+                   default: KeyBinding(key: "f", modifiers: [.control, .option])) {
             guard tab == .ink else { return }
             fixInk()
+        }
+        r.register(id: "ink.unfix", title: "Ink: Unfix", category: "Ink",
+                   default: KeyBinding(key: "f", modifiers: [.shift, .option])) {
+            guard tab == .ink else { return }
+            unfixInk()
+        }
+        r.register(id: "ink.wetCanvas", title: "Ink: Wet Canvas", category: "Ink",
+                   default: KeyBinding(key: "w", modifiers: [.control, .option])) {
+            guard tab == .ink else { return }
+            wetInkCanvas()
+        }
+        r.register(id: "ink.dryCanvas", title: "Ink: Dry Canvas", category: "Ink",
+                   default: KeyBinding(key: "w", modifiers: [.shift, .option])) {
+            guard tab == .ink else { return }
+            dryInkCanvas()
         }
         r.register(id: "ink.clear", title: "Ink: Clear", category: "Ink",
                    default: KeyBinding(key: "c", modifiers: [])) {
@@ -2231,34 +2263,84 @@ private struct AcrylicNodeEditor: View {
     }
 }
 
+private struct FloatSliderRow: View {
+    let title: String
+    @Binding var value: Float
+    let range: ClosedRange<Float>
+    let precision: Int
+    let defaultValue: Float
+    let hint: String
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption2)
+                .frame(width: 76, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { value = defaultValue }
+            Slider(value: $value, in: range)
+                .controlSize(.small)
+            TextField("", value: $value,
+                      format: .number.precision(.fractionLength(precision)))
+                .textFieldStyle(.plain)
+                .font(.caption2)
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 42)
+                .focused($editing)
+                .onSubmit { editing = false }
+                .onExitCommand { editing = false }
+        }
+        .contentShape(Rectangle())
+        .help("\(hint) Double-click the label to restore the default; type an exact value in the number field and press Return.")
+    }
+}
+
 private struct PaperControls: View {
     @Binding var config: PaperConfig
     @State private var physicalExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            paperSlider("Response", value: optional(\.response, 1), range: 0...1, defaultValue: 1)
-            paperSlider("Variation", value: optional(\.variation, 1), range: 0...2, defaultValue: 1)
+            paperSlider("Material", value: optional(\.response, 1), range: 0...1, defaultValue: 1,
+                        hint: "Master strength of the hidden absorbency, drag, and resistance maps. It affects ink only when Paper influence is above 0.")
+            paperSlider("Variation", value: optional(\.variation, 1), range: 0...2, defaultValue: 1,
+                        hint: "Contrast of hidden material differences around neutral. 0 is uniform; 1 is natural; values above 1 exaggerate waxy and absorbent regions.")
             RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
-            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4, defaultValue: 1)
-            paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2, defaultValue: 1)
-            paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5, defaultValue: 0.16)
+                .help("Visual only: color and opacity of the rendered paper. It does not tint or strengthen the physical material map.")
+            paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4, defaultValue: 1,
+                        hint: "Visual only: contrast of the rendered substrate. It does not strengthen the physical response.")
+            paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2, defaultValue: 1,
+                        hint: "Visual only: color saturation of the rendered paper.")
+            paperSlider("Vignette", value: optional(\.vignetteStrength, 0.16), range: 0...0.5, defaultValue: 0.16,
+                        hint: "Visual only: darkens the paper toward the canvas edges.")
 
             paperHeading("Fiber")
-            paperSlider("Strength", value: optional(\.fiberStrength, 0.05), range: 0...0.15, defaultValue: 0.05)
-            paperSlider("X scale", value: optional(\.fiberScaleX, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3)
-            paperSlider("Y scale", value: optional(\.fiberScaleY, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3)
-            paperSlider("Angle", value: optional(\.fiberOrientation, 0), range: -Float.pi...Float.pi, defaultValue: 0)
+            paperSlider("Visual strength", value: optional(\.fiberStrength, 0.05), range: 0...0.15, defaultValue: 0.05,
+                        hint: "Darkness of the visible fiber pattern. The physical map currently uses fiber scale and angle, but not this visual strength.")
+            paperSlider("X scale", value: optional(\.fiberScaleX, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3,
+                        hint: "Fiber variation across X. Higher values make finer, more frequent variation. This also changes the hidden material map.")
+            paperSlider("Y scale", value: optional(\.fiberScaleY, 0.055), range: 0.005...0.5, defaultValue: 0.055, precision: 3,
+                        hint: "Fiber variation across Y. Unequal X and Y scales stretch the pattern into bands. This also changes the hidden material map.")
+            paperSlider("Angle", value: optional(\.fiberOrientation, 0), range: -Float.pi...Float.pi, defaultValue: 0,
+                        hint: "Rotation in radians of both the visible fibers and their hidden material pattern. Rotation alone does not make fluid flow along the fibers.")
 
             paperHeading("Tooth")
-            paperSlider("Strength", value: optional(\.toothStrength, 0.022), range: 0...0.1, defaultValue: 0.022, precision: 3)
-            paperSlider("X scale", value: optional(\.toothScaleX, 0.42), range: 0.01...1, defaultValue: 0.42)
-            paperSlider("Y scale", value: optional(\.toothScaleY, 0.42), range: 0.01...1, defaultValue: 0.42)
+            paperSlider("Visual strength", value: optional(\.toothStrength, 0.022), range: 0...0.1, defaultValue: 0.022, precision: 3,
+                        hint: "Amount of visible mid-scale paper tooth. The physical map currently uses tooth scale, but not this visual strength.")
+            paperSlider("X scale", value: optional(\.toothScaleX, 0.42), range: 0.01...1, defaultValue: 0.42,
+                        hint: "Tooth variation across X. Higher values make finer variation and also change the hidden material map.")
+            paperSlider("Y scale", value: optional(\.toothScaleY, 0.42), range: 0.01...1, defaultValue: 0.42,
+                        hint: "Tooth variation across Y. Unequal scales stretch the pattern and also change the hidden material map.")
 
             paperHeading("Grain")
-            paperSlider("Strength", value: $config.grain, range: 0...1, defaultValue: 0.45)
-            paperSlider("X scale", value: optional(\.grainScaleX, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3)
-            paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3)
+            paperSlider("Visual strength", value: $config.grain, range: 0...1, defaultValue: 0.45,
+                        hint: "Amount of visible fine grain. The physical map currently uses grain scale and seed, but not this visual strength.")
+            paperSlider("X scale", value: optional(\.grainScaleX, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3,
+                        hint: "Fine-grain variation across X. Higher values make finer variation and also change the hidden material map.")
+            paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3,
+                        hint: "Fine-grain variation across Y. Unequal scales stretch the pattern and also change the hidden material map.")
             HStack {
                 Stepper("Seed \(config.seed ?? 0)", value: seedBinding, in: 0...99_999)
                     .font(.caption2)
@@ -2268,12 +2350,17 @@ private struct PaperControls: View {
                     .font(.caption2)
             }
 
-            DisclosureGroup("Physical response", isExpanded: $physicalExpanded) {
-                paperSlider("Absorbency", value: optional(\.absorbency, 1), range: 0...1, defaultValue: 1)
-                paperSlider("Drag", value: optional(\.drag, 1), range: 0...1, defaultValue: 1)
-                paperSlider("Resist", value: optional(\.resist, 1), range: 0...1, defaultValue: 1)
-                paperSlider("Threshold", value: optional(\.resistThreshold, 0.5), range: 0...1, defaultValue: 0.5)
-                paperSlider("Softness", value: optional(\.resistSoftness, 0.1), range: 0...1, defaultValue: 0.1)
+            DisclosureGroup("Material map", isExpanded: $physicalExpanded) {
+                paperSlider("Absorb", value: optional(\.absorbency, 1), range: 0...1, defaultValue: 1,
+                            hint: "Strength of absorbent low-noise regions. These alter wetness and drying locally; they do not directly pull pigment into dark visible grooves.")
+                paperSlider("Flow drag", value: optional(\.drag, 1), range: 0...1, defaultValue: 1,
+                            hint: "Strength of high-noise regions that brake velocity and pigment advection. Drag is a scalar brake; it does not steer flow along fibers.")
+                paperSlider("Ink resist", value: optional(\.resist, 1), range: 0...1, defaultValue: 1,
+                            hint: "How strongly selected regions reject freshly deposited pigment, like wax. It does not erase or repel pigment already on the canvas.")
+                paperSlider("Resist cutoff", value: optional(\.resistThreshold, 0.5), range: 0...1, defaultValue: 0.5,
+                            hint: "Selects which high-noise regions resist fresh marks. Higher values leave fewer resistant regions.")
+                paperSlider("Edge softness", value: optional(\.resistSoftness, 0.1), range: 0...1, defaultValue: 0.1,
+                            hint: "Width of the resistance transition. Low gives a hard wax-mask edge; high gives a gradual transition.")
             }
         }
     }
@@ -2284,16 +2371,9 @@ private struct PaperControls: View {
             .padding(.top, 3)
     }
 
-    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float, precision: Int = 2) -> some View {
-        HStack(spacing: 6) {
-            Text(title).font(.caption2).frame(width: 56, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
-                .help("Double-click to reset")
-            Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.*f", precision, value.wrappedValue))
-                .font(.caption2).monospacedDigit().frame(width: 38, alignment: .trailing)
-        }
+    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float, precision: Int = 2, hint: String) -> some View {
+        FloatSliderRow(title: title, value: value, range: range, precision: precision,
+                       defaultValue: defaultValue, hint: hint)
     }
 
     private func optional(_ keyPath: WritableKeyPath<PaperConfig, Float?>, _ fallback: Float) -> Binding<Float> {
@@ -2726,7 +2806,6 @@ private struct SliderRow: View {
                 .contentShape(Rectangle())
                 // Double-click the label to reset this parameter to its default.
                 .onTapGesture(count: 2) { value = defaultValue }
-                .help(hint ?? title)
             Slider(value: $value, in: range)
                 .controlSize(.small)
             // Editable: click/double-click to type an exact value — and you can
@@ -2746,7 +2825,7 @@ private struct SliderRow: View {
                 .onExitCommand { editing = false }
         }
         .contentShape(Rectangle())
-        .help(hint ?? title)
+        .help("\(hint ?? title) Double-click the label to restore the default; type an exact value in the number field and press Return.")
     }
 }
 

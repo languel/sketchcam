@@ -4,6 +4,26 @@ import XCTest
 /// Phase 1: the layer/routing graph model, validation, scheduling, and the
 /// legacy→graph migration. No rendering yet.
 final class LayerGraphTests: XCTestCase {
+    func testInkCanvasStateCommandRevisionsRoundTrip() throws {
+        var settings = ProcessingSettings()
+        XCTAssertEqual(settings.landmarks.inkFixRevision, 0)
+        XCTAssertEqual(settings.landmarks.inkUnfixRevision, 0)
+        XCTAssertEqual(settings.landmarks.inkWetCanvasRevision, 0)
+        XCTAssertEqual(settings.landmarks.inkDryCanvasRevision, 0)
+
+        settings.landmarks.inkFixRevision = 1
+        settings.landmarks.inkUnfixRevision = 2
+        settings.landmarks.inkWetCanvasRevision = 3
+        settings.landmarks.inkDryCanvasRevision = 4
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(ProcessingSettings.self, from: data)
+        XCTAssertEqual(decoded.landmarks.inkFixRevision, 1)
+        XCTAssertEqual(decoded.landmarks.inkUnfixRevision, 2)
+        XCTAssertEqual(decoded.landmarks.inkWetCanvasRevision, 3)
+        XCTAssertEqual(decoded.landmarks.inkDryCanvasRevision, 4)
+    }
+
     func testFreshSettingsStartWithCameraThresholdOnly() throws {
         let settings = ProcessingSettings()
         XCTAssertTrue(settings.thresholdEnabled)

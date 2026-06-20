@@ -538,8 +538,13 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Incremented by the UI to ask the Metal ink engine to settle mobile
     /// pigment into the fixed paper layer without clearing the painting.
     public var inkFixRevision: Int?
+    /// Incremented to return permanently fixed pigment to the ordinary dried
+    /// layer, where wetting or washing can mobilize it again.
+    public var inkUnfixRevision: Int?
     /// Incremented to flood the current wet field once without changing pigment.
     public var inkWetCanvasRevision: Int?
+    /// Incremented to clear wetness and residual fluid motion without changing pigment.
+    public var inkDryCanvasRevision: Int?
     /// Show the live mouse path as a thin dashed guide while drawing (the
     /// rendered ink lags behind the cursor). Off by default.
     public var inkShowLivePath: Bool
@@ -693,7 +698,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkColorSeparation: Float? = 0.5,
         inkBrushInk: Float? = 0,
         inkFixRevision: Int? = 0,
+        inkUnfixRevision: Int? = 0,
         inkWetCanvasRevision: Int? = 0,
+        inkDryCanvasRevision: Int? = 0,
         inkShowLivePath: Bool = false,
         inkSmoothing: Float = 0.5,
         inkRebuildRevision: Int = 0,
@@ -822,7 +829,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkColorSeparation = inkColorSeparation
         self.inkBrushInk = inkBrushInk
         self.inkFixRevision = inkFixRevision
+        self.inkUnfixRevision = inkUnfixRevision
         self.inkWetCanvasRevision = inkWetCanvasRevision
+        self.inkDryCanvasRevision = inkDryCanvasRevision
         self.inkShowLivePath = inkShowLivePath
         self.inkSmoothing = inkSmoothing
         self.inkRebuildRevision = inkRebuildRevision

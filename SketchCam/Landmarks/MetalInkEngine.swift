@@ -167,7 +167,9 @@ final class MetalInkEngine {
     private var rebuildKey: RebuildKey?
     private var lastFrameIndex: Int?
     private var lastFixRevision = 0
+    private var lastUnfixRevision = 0
     private var lastWetCanvasRevision = 0
+    private var lastDryCanvasRevision = 0
     private var lastRebuildRevision = 0
     private var lastStepTime: CFAbsoluteTime = 0
     private var fixTimer: Float = 0
@@ -309,7 +311,9 @@ final class MetalInkEngine {
         rebuildKey = nil
         lastFrameIndex = nil
         lastFixRevision = 0
+        lastUnfixRevision = 0
         lastWetCanvasRevision = 0
+        lastDryCanvasRevision = 0
         lastRebuildRevision = 0
         lastStepTime = 0
         fixTimer = 0
@@ -342,8 +346,12 @@ final class MetalInkEngine {
         let pathsChanged = replayablePaths != replayedPaths
         let fixRevision = l.inkFixRevision ?? 0
         let fixRequested = fixRevision != lastFixRevision
+        let unfixRevision = l.inkUnfixRevision ?? 0
+        let unfixRequested = unfixRevision != lastUnfixRevision
         let wetCanvasRevision = l.inkWetCanvasRevision ?? 0
         let wetCanvasRequested = wetCanvasRevision != lastWetCanvasRevision
+        let dryCanvasRevision = l.inkDryCanvasRevision ?? 0
+        let dryCanvasRequested = dryCanvasRevision != lastDryCanvasRevision
         let fadeDuration = max(0.15, l.inkFadeDuration ?? 1.2)
         let clearFadeRev = l.inkClearFadeRevision ?? 0
         let clearFadeRequested = clearFadeRev != lastClearFadeRevision && !needRebuild
@@ -367,7 +375,7 @@ final class MetalInkEngine {
         // still moving.
         let motionDriven = l.resolvedInkMotionForce > 0 && controlFields.field(for: .ink, input: .motionVector) != nil
         let motionWetDriven = l.resolvedInkMotionWetness > 0 && controlFields.field(for: .ink, input: .wetness) != nil
-        let evolving = motionDriven || motionWetDriven || wetCanvasRequested || activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
+        let evolving = motionDriven || motionWetDriven || wetCanvasRequested || unfixRequested || dryCanvasRequested || activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
 
         // Nothing to draw at all → blank. Immediate strokes are not replayable
         // paths, but they leave pigment in the Metal textures; once the sim goes
@@ -441,10 +449,37 @@ final class MetalInkEngine {
             }
             activeFramesRemaining = max(activeFramesRemaining, 2)
         }
+        if unfixRequested {
+            lastUnfixRevision = unfixRevision
+            // Return the permanent pigment to the normal dried layer. Copying
+            // through the other ping-pong texture avoids reviving stale data.
+            if let fixed, let locked {
+                var copy = CopyParams(value: 1)
+                encode(copyPSO, textures: [fixed.read, fixed.write], bytes: &copy,
+                       length: MemoryLayout<CopyParams>.stride, grid: fixed.write,
+                       commandBuffer: commandBuffer)
+                encode(accumulatePSO, textures: [fixed.write, locked], bytes: nil,
+                       length: 0, grid: fixed.write, commandBuffer: commandBuffer)
+                fixed.swap()
+                encodeClear(locked, commandBuffer: commandBuffer)
+            }
+            activeFramesRemaining = max(activeFramesRemaining, 2)
+        }
         if wetCanvasRequested {
             lastWetCanvasRevision = wetCanvasRevision
             injectWet(mask: nil, amount: 1, commandBuffer: commandBuffer)
             activeFramesRemaining = max(activeFramesRemaining, 120)
+        }
+        if dryCanvasRequested {
+            lastDryCanvasRevision = dryCanvasRevision
+            // Evaporate the canvas immediately and discard fluid momentum, but
+            // leave mobile, dried, and fixed pigment exactly where they are.
+            ([wet?.read, wet?.write, velocity?.read, velocity?.write,
+              pressure?.read, pressure?.write, divergence, curl] as [MTLTexture?])
+                .compactMap { $0 }
+                .forEach { encodeClear($0, commandBuffer: commandBuffer) }
+            fixTimer = 0
+            activeFramesRemaining = max(activeFramesRemaining, 2)
         }
 
         if lastFrameIndex != frameIndex {

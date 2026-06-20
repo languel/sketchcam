@@ -12,6 +12,8 @@ The painting is stored as fields rather than display pixels:
 - `ink` (`RGBA16F`) holds mobile optical-density pigment; alpha carries white
   dissolve/gouache coverage.
 - `fixed` (`RGBA16F`) holds settled pigment that no longer advects.
+- `locked` (`RGBA16F`) holds pigment made permanent by **Fix**. Wash never
+  lifts this layer; **Unfix** returns it to `fixed`.
 - `wet` (`R16F`) is the persistent water mask and the permission field for
   motion and diffusion.
 - `velocity` (`RG16F`) is a deliberately lower-resolution fluid field.
@@ -67,8 +69,49 @@ area makes it wet rather than accumulating unbounded water.
 
 The wash adds water and directional velocity. Brush Ink controls fresh pigment
 loading; Smear controls how strongly the wash remobilizes existing pigment.
-Fix transfers mobile density into `fixed`, brakes velocity, and dries the area,
-allowing later glazes to move without reviving the settled layer.
+Fix transfers all mobile and settled density into `locked`; Unfix returns it to
+the ordinary settled layer. Wet Canvas fills the wetness field, while Dry Canvas
+clears wetness and residual fluid momentum without moving or fixing pigment.
+
+## Gesture-driven transition: dry smear to fluid swirl
+
+A wash is a fluid impulse rather than a geometric brush mark. Cursor movement
+is filtered, then each captured sample can wet, lift, and push pigment. This
+creates an expressive transition that can feel like a phase change:
+
+1. The wash always deposits water and remobilizes some settled pigment.
+2. If the filtered per-sample movement is below the Smear threshold, it pools
+   water but injects no velocity. The result is a dry-looking, paper-textured
+   pull.
+3. Above that threshold, cursor speed becomes a directional velocity impulse.
+4. Wetness gates velocity through `smoothstep(0.005, 0.2, wet)` and pigment
+   mobility through `smoothstep(0.02, 0.45, wet)`. Once these ranges are crossed,
+   advection and diffusion become visually dominant.
+5. Fast passes and repeated crossings inject stronger or opposing impulses.
+   Vorticity confinement turns their shear into soft eddies and swirls.
+
+At Smear `0.5`, the movement threshold is approximately `0.0058` of the canvas
+per processed sample. Because this is a distance threshold on filtered samples,
+not a pure speed threshold, the exact transition can vary slightly with input
+event and frame cadence. This is a source of both expressiveness and some
+unpredictability.
+
+The relevant performance controls have distinct roles:
+
+- **Smear** is the main onset control. Higher values lower the movement
+  threshold, lift more settled pigment, and amplify brush force; the fluid phase
+  begins sooner. Lower values preserve controlled, dry pulls longer.
+- **Flow** controls injected force, velocity persistence, and vorticity. Lower
+  values retain translation with less swirl; high values create energetic,
+  long-lived eddies.
+- **Dry** and **Wet decay** control how long the wet mobility gate remains open.
+- **Bleed** controls pigment diffusion after mobility is available; it does not
+  set the transition threshold.
+- **Wash size** controls the area wetted and lifted. A larger connected wet area
+  sustains fluid behavior more easily.
+
+Smear affects brush input while dragging. Flow, Dry, Wet decay, Bleed, and the
+paper response continue affecting an already-moving field after release.
 
 Color separation is diffusion at different rates per density channel. The
 red-absorbing component can travel fastest while the blue-absorbing component
@@ -93,6 +136,31 @@ the physical-response fields can independently modulate absorbency, drag, and
 resistance. A routed layer uses that layer's post-effect output, so Threshold or
 Levels can turn a camera/movie image into a deliberate material mask.
 
+The three material fields act at different stages:
+
+- **Ink resist** reduces fresh pigment deposition and creates broken, waxy gaps
+  in a stroke. It does not resist pigment that has already been lifted.
+- **Flow drag** damps velocity and mobile-pigment advection everywhere, including
+  fully wet flow.
+- **Absorb** increases local capillary spread and wetness decay.
+
+Paper therefore still affects wet flow, but a fast wash can visually overpower
+it: the brush repeatedly restores high wetness, its velocity impulse is much
+larger than one frame of paper drag, and projection/diffusion smooth fine-scale
+material differences. To retain more substrate character in a fluid passage,
+increase Material Variation and Flow drag, reduce Flow, or type a Paper influence
+above the slider range (roughly `2...4`). If stronger influence perforates fresh
+marks too much, reduce Ink resist while retaining Flow drag and Absorb.
+
+The current paper model does not modulate brush re-wetting or fixed-pigment
+lifting. A wash can always make its footprint wet and lift settled pigment. A
+future independent wet-grip/rewet-resistance control could reuse the cached
+paper maps without adding another renderer.
+
+**Live surface** is separate from procedural paper. It uses optical-flow
+magnitude from a changing routed Ink texture input. With **Internal paper** and
+no routed texture, it has no live signal and should be left at zero.
+
 ## Human motion and analysis effects
 
 The default motion provider computes forward optical flow from the routed Ink
@@ -108,5 +176,13 @@ useful motion or material regions.
 ## Controls and reset convention
 
 Double-click any numeric parameter label to restore its factory default. This
-includes the Ink paper controls, Paper Physical response, effect parameters,
-Acrylic controls, and the bottom Ink HUD.
+includes Paper settings, Material map, Ink response, effect parameters, Acrylic
+controls, and the bottom Ink HUD. Editable numeric fields can be typed beyond
+their slider range for experiments.
+
+Canvas-state shortcuts are:
+
+- `Control-Option-F`: Fix
+- `Shift-Option-F`: Unfix
+- `Control-Option-W`: Wet Canvas
+- `Shift-Option-W`: Dry Canvas
