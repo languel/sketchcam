@@ -67,4 +67,20 @@ final class InfiniteCanvasDocumentTests: XCTestCase {
         let decoded = try JSONDecoder().decode(SketchProjectManifest.self, from: data)
         XCTAssertEqual(decoded, manifest)
     }
+
+    func testVersionOneManifestDecodesWithNewCollectionsEmpty() throws {
+        let source = SketchProjectManifest()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) as? [String: Any])
+        object["version"] = 1
+        object.removeValue(forKey: "materialEvents")
+        let decoded = try JSONDecoder().decode(SketchProjectManifest.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded.version, 1)
+        XCTAssertTrue(decoded.materialEvents.isEmpty)
+    }
+
+    func testParameterRegistryUsesStableMachineAddresses() {
+        let descriptor = SketchParameterRegistry.descriptor(component: "ink.environment", parameter: "flow")
+        XCTAssertEqual(descriptor?.name, "Fluid Flow")
+        XCTAssertEqual(descriptor?.id, "ink.environment.flow")
+    }
 }

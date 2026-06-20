@@ -65,10 +65,10 @@ enum ControlTab: String, CaseIterable, Identifiable {
     }
 }
 
-private enum InkTool: String, CaseIterable, Identifiable {
+enum InkTool: String, CaseIterable, Identifiable {
     case draw = "Draw"
     case select = "Select"
-    case points = "Points"
+    case points = "Points" // legacy editor compatibility; hidden by the new UI
 
     var id: String { rawValue }
     var icon: String {
@@ -97,7 +97,8 @@ struct ContentView: View {
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
-    @State private var inkHUDVisible = false
+    @State private var selectedGestureIDs: Set<UUID> = []
+    @State private var selectedGestureAnchorID: UUID?
     @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var inkUndoStack: [[InkEditorPath]] = []
@@ -191,64 +192,44 @@ struct ContentView: View {
                     LivePreviewImage(live: model.live)
                 }
                 if tab == .ink, model.settings.landmarks.inkEnabled {
-                    InkPreviewDrawingLayer(
-                        paths: inkPathsBinding,
-                        showLivePath: model.settings.landmarks.inkShowLivePath,
-                        immediatePen: model.settings.landmarks.inkImmediatePen,
-                        immediateWash: model.settings.landmarks.inkImmediateWash,
-                        onLive: { model.updateInkLiveStroke($0) },
-                        onLiveEnd: { model.endInkLiveStroke() },
+                    InfiniteCanvasEditorOverlay(
+                        project: Binding(get: { model.project }, set: { model.project = $0 }),
+                        legacyPaths: inkPathsBinding,
+                        tool: $inkTool,
+                        selectedGestureIDs: $selectedGestureIDs,
+                        selectedAnchorID: $selectedGestureAnchorID,
                         outputSize: model.outputFormat.size,
-                        inkColor: rgbaColor(model.settings.landmarks.inkColor),
-                        inkRGBA: model.settings.landmarks.inkColor,
-                        tool: inkTool,
                         brushMode: currentInkMode,
                         inkKind: currentInkKind,
+                        inkColor: model.settings.landmarks.inkColor,
                         width: Float(inkSizeBinding.wrappedValue),
                         washWidth: Float(inkWashSizeBinding.wrappedValue),
                         flow: model.settings.landmarks.inkFlow,
                         bleed: model.settings.landmarks.inkBleed,
                         dry: model.settings.landmarks.inkDry,
-                        colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
                         brushInk: Float(inkBrushInkBinding.wrappedValue),
-                        selectedPathID: $selectedInkPathID,
-                        selectedPointIndex: $selectedInkPointIndex
+                        fitRecipe: CurveFitRecipe(model.settings.landmarks.inkCurveFit),
+                        onLive: { model.updateInkLiveStroke($0) },
+                        onLiveEnd: { model.endInkLiveStroke() },
+                        onProjectChanged: { model.markProjectDirty() }
                     )
                     .zIndex(20)
                 }
-                if tab == .ink, model.settings.landmarks.inkEnabled, inkHUDVisible {
-                    InkBottomHUD(
-                        mode: inkModeBinding,
-                        inkKind: inkKindBinding,
-                        inkColor: rgbaBinding(\.landmarks.inkColor),
-                        size: inkSizeBinding,
-                        flow: floatBinding(\.landmarks.inkFlow),
-                        bleed: floatBinding(\.landmarks.inkBleed),
-                        dry: floatBinding(\.landmarks.inkDry),
-                        colorSeparation: inkColorSeparationBinding,
-                        brushInk: inkBrushInkBinding,
-                        fix: fixInk,
-                        clear: clearInk,
-                        save: model.exportCurrentFrame
-                    )
-                    .padding(.bottom, 20)
-                    .transition(.opacity)
-                    .zIndex(30)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point):
-                    inkHUDVisible = tab == .ink && point.y > geo.size.height - 130
-                case .ended:
-                    inkHUDVisible = false
-                }
-            }
         }
         .frame(minWidth: 120, minHeight: 68)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if tab == .ink, model.settings.landmarks.inkEnabled {
+                PerformanceTimelineView(
+                    project: Binding(get: { model.project }, set: { model.project = $0 }),
+                    selectedGestureIDs: $selectedGestureIDs,
+                    onChanged: { model.markProjectDirty() },
+                    onPreview: applyTimeline
+                )
+            }
+        }
     }
 
     // MARK: - Controls
@@ -500,6 +481,15 @@ struct ContentView: View {
         Text(model.activationManager.statusText)
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Button("Copy") { copyCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Paste") { pasteCanvasObjects() }
+                Button("Refit") { refitCanvasSelection() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Render as Ink") { renderSelectionAsInk() }.disabled(selectedGestureIDs.isEmpty)
+                Button("Replay to New Canvas") { renderPerformanceToNewCanvas() }
+            }
+            .controlSize(.small)
     }
 
     // MARK: - Layers tab
@@ -729,6 +719,27 @@ struct ContentView: View {
             .font(.headline)
             .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
         Group {
+            SectionHeader("Project")
+            HStack(spacing: 6) {
+                Button("New") { model.newProject() }
+                Button("Open") { model.openProjectPanel() }
+                Button("Save") { model.saveProject() }
+                Button("Save As") { model.saveProjectAs() }
+            }
+            .controlSize(.small)
+            Toggle("Record performance", isOn: Binding(
+                get: { model.project.timeline.masterRecordEnabled },
+                set: { model.project.timeline.masterRecordEnabled = $0; model.markProjectDirty() }
+            ))
+            .help("Off: paint only into the persistent simulation artifact. On: also create editable timed gesture clips.")
+            HStack {
+                Text(model.projectURL?.lastPathComponent ?? model.project.title)
+                Spacer()
+                Text(model.projectIsDirty ? "Edited" : "Saved")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             SectionHeader("Paper")
             HStack(spacing: 6) {
                 Text("Input").font(.caption).foregroundStyle(.secondary)
@@ -794,28 +805,20 @@ struct ContentView: View {
 
             SectionHeader("Editor")
             Picker("Tool", selection: $inkTool) {
-                ForEach(InkTool.allCases) { tool in
+                ForEach([InkTool.draw, .select]) { tool in
                     Label(tool.rawValue, systemImage: tool.icon).tag(tool)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            InkEditorCanvas(
-                paths: inkPathsBinding,
-                paperColor: rgbaColor(model.settings.landmarks.inkPaperColor),
-                inkColor: rgbaColor(model.settings.landmarks.inkColor),
-                inkRGBA: model.settings.landmarks.inkColor,
-                brushMode: currentInkMode,
-                inkKind: currentInkKind,
-                width: Float(inkSizeBinding.wrappedValue),
-                flow: model.settings.landmarks.inkFlow,
-                bleed: model.settings.landmarks.inkBleed,
-                dry: model.settings.landmarks.inkDry,
-                colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
-                brushInk: Float(inkBrushInkBinding.wrappedValue)
-            )
-                .frame(height: 180)
-                .help("Scratchpad view of the same full-canvas strokes. You can also draw directly on the preview while this tab is selected.")
+            HStack {
+                Text("\(model.project.gestures.count) timed gestures")
+                Spacer()
+                Text(String(format: "view %.2fx  rot %.0f°", 1 / model.project.camera.viewHeight,
+                            model.project.camera.rotation * 180 / .pi))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             HStack {
                 Button {
@@ -830,6 +833,10 @@ struct ContentView: View {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
                 .help("Save the current frame as a PNG (also S).")
+                Button { model.exportHighResolutionStill() } label: {
+                    Label("NRT", systemImage: "photo.badge.arrow.down")
+                }
+                .help("Render the current world camera at an arbitrary still resolution.")
                 Button {
                     deleteSelectedInk()
                 } label: {
@@ -859,26 +866,15 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
-            // Ink + Wash colours on one row; the checkbox next to each toggles
-            // "save stroke" for that tool (off = immediate: paints straight onto
-            // the canvas without recording an editable path).
             HStack(spacing: 12) {
                 HStack(spacing: 6) {
                     RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
                     colorResetButton("Reset ink color") { model.settings.landmarks.inkColor = .ink }
-                    Toggle("", isOn: savePenStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 6) {
                     RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
                     colorResetButton("Reset wash color") { model.settings.landmarks.inkWashColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) }
-                    Toggle("", isOn: saveWashStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save wash stroke as an editable path. Off = immediate.")
                 }
             }
             Picker("Ink", selection: inkKindBinding) {
@@ -936,6 +932,78 @@ struct ContentView: View {
         }
     }
 
+    private func applyTimeline(at time: TimeInterval) {
+        for track in model.project.automationTracks where !track.muted {
+            guard let value = TimelineEvaluator.value(on: track, at: time), case .scalar(let scalar) = value else { continue }
+            let number = Float(scalar)
+            switch (track.address.component, track.address.parameter) {
+            case ("paper", "opacity"): inkPaperOpacityBinding.wrappedValue = scalar
+            case ("paper", "response"):
+                var config = inkPaperConfigBinding.wrappedValue; config.response = number; inkPaperConfigBinding.wrappedValue = config
+            case ("ink.environment", "flow"): model.settings.landmarks.inkFlow = number
+            case ("ink.environment", "bleed"): model.settings.landmarks.inkBleed = number
+            case ("ink.environment", "dry"): model.settings.landmarks.inkDry = number
+            case ("ink.environment", "wetDecay"): model.settings.landmarks.inkWetnessDecay = number
+            case ("ink.response", "paperInfluence"): model.settings.landmarks.inkPaperInfluence = number
+            case ("ink.response", "motionForce"): model.settings.landmarks.inkMotionForce = number
+            case ("ink.response", "motionWetness"): model.settings.landmarks.inkMotionWetness = number
+            default: break
+            }
+        }
+    }
+
+    private func copyCanvasSelection() {
+        do { try CanvasClipboard.copy(model.project.gestures.filter { selectedGestureIDs.contains($0.id) }) }
+        catch { model.errorText = "Copy failed: \(error.localizedDescription)" }
+    }
+
+    private func pasteCanvasObjects() {
+        do {
+            let values = try CanvasClipboard.paste(center: model.project.camera.center, viewHeight: model.project.camera.viewHeight)
+            guard !values.isEmpty else { return }
+            model.project.gestures.append(contentsOf: values)
+            model.project.sceneObjects.append(contentsOf: values.map { SceneObject(id: $0.id, name: $0.name, payload: .gesture($0.id)) })
+            selectedGestureIDs = Set(values.map(\.id)); model.markProjectDirty()
+        } catch { model.errorText = "Paste failed: \(error.localizedDescription)" }
+    }
+
+    private func refitCanvasSelection() {
+        for index in model.project.gestures.indices where selectedGestureIDs.contains(model.project.gestures[index].id) {
+            model.project.gestures[index].curve = CurveFitter.fit(
+                samples: model.project.gestures[index].samples,
+                recipe: CurveFitRecipe(model.settings.landmarks.inkCurveFit),
+                tolerance: model.project.camera.viewHeight * 0.002)
+        }
+        model.markProjectDirty()
+    }
+
+    private func renderSelectionAsInk() {
+        let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
+        let paths = model.project.gestures.filter { selectedGestureIDs.contains($0.id) }.map { gesture in
+            InkEditorPath(id: UUID(), points: gesture.curve.sampled().map { model.project.camera.viewportUV(fromWorldPoint: $0, aspect: aspect) },
+                          brushMode: gesture.kind == .pen ? .pen : .brush, inkKind: InkKind.black,
+                          width: gesture.strokeProfile.size, flow: gesture.flow, bleed: gesture.bleed,
+                          dry: gesture.dry, brushInk: gesture.brushInk, color: gesture.color)
+        }
+        setInkPaths(model.settings.landmarks.inkPaths + paths)
+        model.settings.landmarks.inkRebuildRevision += 1
+    }
+
+    private func renderPerformanceToNewCanvas() {
+        model.cancelInkLiveStroke()
+        model.settings.landmarks.inkClearFadeRevision = (model.settings.landmarks.inkClearFadeRevision ?? 0) + 1
+        let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
+        let ordered = model.project.gestures.filter { !$0.muted && ($0.kind == .pen || $0.kind == .wash) }.sorted { $0.startTime < $1.startTime }
+        model.settings.landmarks.inkPaths = ordered.map { gesture in
+            InkEditorPath(id: gesture.id, points: gesture.samples.map { model.project.camera.viewportUV(fromWorldPoint: $0.position, aspect: aspect) },
+                          brushMode: gesture.kind == .pen ? .pen : .brush, inkKind: InkKind.black,
+                          width: gesture.strokeProfile.size, flow: gesture.flow, bleed: gesture.bleed,
+                          dry: gesture.dry, brushInk: gesture.brushInk,
+                          color: gesture.color)
+        }
+        model.settings.landmarks.inkRebuildRevision += 1
+    }
+
     private func clearInkSelection() {
         selectedInkPathID = nil
         selectedInkPointIndex = nil
@@ -953,18 +1021,30 @@ struct ContentView: View {
 
     private func fixInk() {
         model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+        recordFrameCommand(.fix)
     }
 
     private func unfixInk() {
         model.settings.landmarks.inkUnfixRevision = (model.settings.landmarks.inkUnfixRevision ?? 0) + 1
+        recordFrameCommand(.unfix)
     }
 
     private func wetInkCanvas() {
         model.settings.landmarks.inkWetCanvasRevision = (model.settings.landmarks.inkWetCanvasRevision ?? 0) + 1
+        recordFrameCommand(.wet)
     }
 
     private func dryInkCanvas() {
         model.settings.landmarks.inkDryCanvasRevision = (model.settings.landmarks.inkDryCanvasRevision ?? 0) + 1
+        recordFrameCommand(.dry)
+    }
+
+    private func recordFrameCommand(_ command: FrameMaterialCommand) {
+        guard model.project.timeline.masterRecordEnabled else { return }
+        let aspect = max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
+        model.project.materialEvents.append(FrameMaterialEvent(time: model.project.timeline.playhead, command: command,
+                                                               worldRegion: model.project.camera.worldBounds(aspect: aspect)))
+        model.markProjectDirty()
     }
 
     private func rerenderInk() {
@@ -3426,6 +3506,7 @@ private struct InkPreviewDrawingLayer: View {
             smoothBoost: shift,
             destructive: strokeMode == .brush && immediateWash && !currentWetOnly,
             wetOnly: currentWetOnly,
+            fixOnly: false,
             charge: charge
         )
     }

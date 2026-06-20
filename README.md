@@ -1,5 +1,9 @@
 # SketchCam
 
+See [Infinite canvas and recorded performance](notes/infinite-canvas-performance.md)
+for the world-coordinate editor, `.sketchcam` packages, sparse ink artifacts,
+timed gestures, timeline semantics, clipboard interchange, and NRT still export.
+
 SketchCam is an open programmable virtual camera host for interactive art teaching, live performance, and local computer-vision experiments.
 
 A macOS app captures a webcam, runs a GPU compositing pipeline, previews it, and publishes the result as a Core Media I/O virtual camera named **SketchCam** that any camera consumer (QuickTime, Zoom, OBS, TouchDesigner, browsers) can select.

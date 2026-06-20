@@ -39,6 +39,16 @@ struct InkWetInjectParams {
     uint fullCanvas;
 };
 
+struct InkFixBrushParams {
+    float2 targetSize;
+    uint2 origin;
+    float aspect;
+    float strength;
+    float2 point;
+    float radiusSq;
+    float pad0;
+};
+
 struct InkAdvectVelocityParams {
     float2 texel;
     float dt;
@@ -245,6 +255,26 @@ kernel void ink_inject_wet(texture2d<float, access::read_write> wet [[texture(0)
     float injected = clamp(value * p.amount, 0.0, 1.0);
     float old = wet.read(gid).x;
     wet.write(float4(max(old, injected), 0.0, 0.0, 1.0), gid);
+}
+
+kernel void ink_fix_brush(texture2d<float, access::read_write> mobile [[texture(0)]],
+                          texture2d<float, access::read_write> dried [[texture(1)]],
+                          texture2d<float, access::read_write> locked [[texture(2)]],
+                          texture2d<float, access::read_write> wet [[texture(3)]],
+                          constant InkFixBrushParams &p [[buffer(0)]],
+                          uint2 gid [[thread_position_in_grid]]) {
+    uint2 px = p.origin + gid;
+    if (px.x >= mobile.get_width() || px.y >= mobile.get_height()) return;
+    float2 uv = (float2(px) + 0.5) / p.targetSize;
+    float2 d = uv - p.point;
+    d.x *= p.aspect;
+    float amount = clamp(exp(-dot(d, d) / max(p.radiusSq, 1e-7)) * p.strength, 0.0, 1.0);
+    float4 fromMobile = mobile.read(px);
+    float4 fromDried = dried.read(px);
+    locked.write(locked.read(px) + (fromMobile + fromDried) * amount, px);
+    mobile.write(fromMobile * (1.0 - amount), px);
+    dried.write(fromDried * (1.0 - amount), px);
+    wet.write(wet.read(px) * (1.0 - amount), px);
 }
 
 kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]],

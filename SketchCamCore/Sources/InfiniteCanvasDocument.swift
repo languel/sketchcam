@@ -352,6 +352,18 @@ public struct ArtifactTileReference: Codable, Equatable, Hashable, Sendable, Ide
     }
 }
 
+public enum FrameMaterialCommand: String, Codable, Sendable { case fix, unfix, wet, dry }
+
+public struct FrameMaterialEvent: Codable, Equatable, Sendable, Identifiable {
+    public var id: UUID
+    public var time: TimeInterval
+    public var command: FrameMaterialCommand
+    public var worldRegion: CGRect
+    public init(id: UUID = UUID(), time: TimeInterval, command: FrameMaterialCommand, worldRegion: CGRect) {
+        self.id = id; self.time = time; self.command = command; self.worldRegion = worldRegion
+    }
+}
+
 public struct TimelineState: Codable, Equatable, Sendable {
     public var playhead: TimeInterval
     public var duration: TimeInterval
@@ -371,7 +383,7 @@ public struct TimelineState: Codable, Equatable, Sendable {
 }
 
 public struct SketchProjectManifest: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var id: UUID
@@ -384,6 +396,7 @@ public struct SketchProjectManifest: Codable, Equatable, Sendable {
     public var cameraTracks: [CameraTrack]
     public var automationTracks: [AutomationTrack]
     public var artifactTiles: [ArtifactTileReference]
+    public var materialEvents: [FrameMaterialEvent]
     public var timeline: TimelineState
 
     public init(
@@ -391,7 +404,7 @@ public struct SketchProjectManifest: Codable, Equatable, Sendable {
         createdAt: Date = Date(), modifiedAt: Date = Date(), camera: CanvasCamera = CanvasCamera(),
         sceneObjects: [SceneObject] = [], gestures: [GestureClip] = [],
         cameraTracks: [CameraTrack] = [CameraTrack()], automationTracks: [AutomationTrack] = [],
-        artifactTiles: [ArtifactTileReference] = [], timeline: TimelineState = TimelineState()
+        artifactTiles: [ArtifactTileReference] = [], materialEvents: [FrameMaterialEvent] = [], timeline: TimelineState = TimelineState()
     ) {
         self.version = version
         self.id = id
@@ -404,7 +417,26 @@ public struct SketchProjectManifest: Codable, Equatable, Sendable {
         self.cameraTracks = cameraTracks
         self.automationTracks = automationTracks
         self.artifactTiles = artifactTiles
+        self.materialEvents = materialEvents
         self.timeline = timeline
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, id, title, createdAt, modifiedAt, camera, sceneObjects, gestures, cameraTracks, automationTracks, artifactTiles, materialEvents, timeline }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "Untitled"
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
+        camera = try c.decodeIfPresent(CanvasCamera.self, forKey: .camera) ?? CanvasCamera()
+        sceneObjects = try c.decodeIfPresent([SceneObject].self, forKey: .sceneObjects) ?? []
+        gestures = try c.decodeIfPresent([GestureClip].self, forKey: .gestures) ?? []
+        cameraTracks = try c.decodeIfPresent([CameraTrack].self, forKey: .cameraTracks) ?? [CameraTrack()]
+        automationTracks = try c.decodeIfPresent([AutomationTrack].self, forKey: .automationTracks) ?? []
+        artifactTiles = try c.decodeIfPresent([ArtifactTileReference].self, forKey: .artifactTiles) ?? []
+        materialEvents = try c.decodeIfPresent([FrameMaterialEvent].self, forKey: .materialEvents) ?? []
+        timeline = try c.decodeIfPresent(TimelineState.self, forKey: .timeline) ?? TimelineState()
     }
 }
 

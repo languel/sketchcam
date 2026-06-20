@@ -14,6 +14,7 @@ final class PipelineStateStore: @unchecked Sendable {
     private var _settings = ProcessingSettings()
     private var _outputFormat = SketchCamFormats.defaultFormat
     private var _permission = CameraPermissionManager.state
+    private var _canvasCamera = CanvasCamera()
 
     var settings: ProcessingSettings {
         get { lock.withLock { _settings } }
@@ -28,5 +29,10 @@ final class PipelineStateStore: @unchecked Sendable {
     var permission: CameraPermissionState {
         get { lock.withLock { _permission } }
         set { lock.withLock { _permission = newValue } }
+    }
+
+    var canvasCamera: CanvasCamera {
+        get { lock.withLock { _canvasCamera } }
+        set { lock.withLock { _canvasCamera = newValue } }
     }
 }

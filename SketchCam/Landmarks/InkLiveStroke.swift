@@ -20,6 +20,9 @@ struct InkLiveStrokeSample: Equatable {
     var destructive: Bool
     /// Water-only spray: deposits wetness but no velocity, pigment, or lift.
     var wetOnly: Bool
+    /// Fix-only brush: transfers local mobile/dried pigment into the permanent
+    /// locked layer without velocity or new pigment.
+    var fixOnly: Bool
     /// 0…1 "charge" from holding before dragging — multiplies destructive force.
     var charge: Float
 }

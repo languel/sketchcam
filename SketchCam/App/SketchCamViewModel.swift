@@ -79,7 +79,9 @@ final class SketchCamViewModel: ObservableObject {
         didSet { store.permission = cameraPermissionState }
     }
     @Published var errorText: String?
-    @Published var project = SketchProjectManifest()
+    @Published var project = SketchProjectManifest() {
+        didSet { store.canvasCamera = project.camera }
+    }
     @Published private(set) var projectURL: URL?
     @Published private(set) var projectIsDirty = false
 
@@ -186,6 +188,7 @@ final class SketchCamViewModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             project = try projectStore.read(from: url)
+            try inkCompositor.loadArtifacts(from: url, references: project.artifactTiles)
             projectURL = url
             projectIsDirty = false
         } catch {
@@ -209,7 +212,9 @@ final class SketchCamViewModel: ObservableObject {
 
     private func saveProject(to url: URL) {
         do {
+            project.artifactTiles = inkCompositor.artifactReferences()
             try projectStore.write(project, to: url)
+            try inkCompositor.writeArtifacts(to: url)
             projectURL = url
             projectIsDirty = false
         } catch {
@@ -316,6 +321,58 @@ final class SketchCamViewModel: ObservableObject {
         } catch {
             errorText = "Export failed: \(error.localizedDescription)"
         }
+    }
+
+    func exportHighResolutionStill() {
+        let alert = NSAlert()
+        alert.messageText = "High-resolution world render"
+        alert.informativeText = "Render the current camera frame. Large dimensions are tiled from the sparse artifact; recorded vectors stay resolution-independent."
+        alert.addButton(withTitle: "Render")
+        alert.addButton(withTitle: "Cancel")
+        let fields = NSStackView()
+        fields.orientation = .horizontal
+        let width = NSTextField(string: String(Int(outputFormat.size.width * 2)))
+        let height = NSTextField(string: String(Int(outputFormat.size.height * 2)))
+        width.placeholderString = "Width"; height.placeholderString = "Height"
+        fields.addArrangedSubview(width); fields.addArrangedSubview(height)
+        fields.frame = CGRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = fields
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let w = Int(width.stringValue), let h = Int(height.stringValue), w > 0, h > 0 else { return }
+        let size = CGSize(width: w, height: h)
+        let rect = CGRect(origin: .zero, size: size)
+        let base = inkCompositor.artifactImage(camera: project.camera, outputSize: size)
+            ?? CIImage(color: .clear).cropped(to: rect)
+        guard let raster = Self.sharedCIContext.createCGImage(base, from: rect, format: .BGRA8,
+                                                               colorSpace: CGColorSpaceCreateDeviceRGB()) else { return }
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        guard let graphics = rep.flatMap({ NSGraphicsContext(bitmapImageRep: $0) }) else { return }
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = graphics
+        NSImage(cgImage: raster, size: size).draw(in: rect)
+        let context = graphics.cgContext
+        context.setLineCap(.round); context.setLineJoin(.round)
+        let aspect = CGFloat(w) / CGFloat(h)
+        for gesture in project.gestures where !gesture.muted {
+            let points = gesture.curve.sampled()
+            guard let first = points.first else { continue }
+            let uv = project.camera.viewportUV(fromWorldPoint: first, aspect: aspect)
+            context.beginPath(); context.move(to: CGPoint(x: uv.x * CGFloat(w), y: (1 - uv.y) * CGFloat(h)))
+            for point in points.dropFirst() {
+                let value = project.camera.viewportUV(fromWorldPoint: point, aspect: aspect)
+                context.addLine(to: CGPoint(x: value.x * CGFloat(w), y: (1 - value.y) * CGFloat(h)))
+            }
+            context.setStrokeColor(CGColor(red: CGFloat(gesture.color.red), green: CGFloat(gesture.color.green),
+                                           blue: CGFloat(gesture.color.blue), alpha: CGFloat(gesture.color.alpha)))
+            context.setLineWidth(CGFloat(gesture.strokeProfile.size) * CGFloat(h) / 200)
+            context.strokePath()
+        }
+        graphics.flushGraphics(); NSGraphicsContext.restoreGraphicsState()
+        guard let data = rep?.representation(using: .png, properties: [:]) else { return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.png]; panel.nameFieldStringValue = "sketchcam-world-\(w)x\(h).png"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try data.write(to: url) } catch { errorText = "Export failed: \(error.localizedDescription)" }
     }
 
     private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
@@ -547,8 +604,8 @@ final class SketchCamViewModel: ObservableObject {
             guard let self else { return }
             defer { self.endCameraFrame() }
             let frameStart = CFAbsoluteTimeGetCurrent()
-            let (settings, outputFormat) = self.timings.measure(.snapshot) {
-                (self.store.settings, self.store.outputFormat)
+            let (settings, outputFormat, canvasCamera) = self.timings.measure(.snapshot) {
+                (self.store.settings, self.store.outputFormat, self.store.canvasCamera)
             }
             // Web layer: push config changes to the (main-thread) web view only
             // when they change; the snapshot is read back below thread-safely.
@@ -661,6 +718,7 @@ final class SketchCamViewModel: ObservableObject {
                         livePoints: liveInk.points,
                         endedLiveID: liveInk.ended,
                         outputSize: outputFormat.size,
+                        camera: canvasCamera,
                         frameIndex: frameIndex,
                         textureInput: inkTexture,
                         controlFields: controlFields

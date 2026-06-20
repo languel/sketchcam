@@ -69,6 +69,15 @@ final class MetalInkEngine {
         var invert: UInt32
         var fullCanvas: UInt32
     }
+    private struct FixBrushParams {
+        var targetSize: SIMD2<Float>
+        var origin: SIMD2<UInt32>
+        var aspect: Float
+        var strength: Float
+        var point: SIMD2<Float>
+        var radiusSq: Float
+        var pad0: Float = 0
+    }
     private struct AdvectVelocityParams { var texel: SIMD2<Float>; var dt: Float; var dissipation: Float; var control: SIMD4<Float> }
     private struct ControlForceParams { var dt: Float; var force: Float; var maximumForce: Float; var pad0: Float = 0 }
     private struct VorticityParams { var texel: SIMD2<Float>; var curlAmount: Float; var dt: Float }
@@ -133,6 +142,7 @@ final class MetalInkEngine {
     private let clearPSO: MTLComputePipelineState
     private let copyPSO: MTLComputePipelineState
     private let injectWetPSO: MTLComputePipelineState
+    private let fixBrushPSO: MTLComputePipelineState
     private let splatPSO: MTLComputePipelineState
     private let capsulePSO: MTLComputePipelineState
     private let accumulatePSO: MTLComputePipelineState
@@ -250,6 +260,7 @@ final class MetalInkEngine {
         guard let clear = pso("ink_clear"),
               let copy = pso("ink_copy"),
               let injectWet = pso("ink_inject_wet"),
+              let fixBrush = pso("ink_fix_brush"),
               let splat = pso("ink_splat"),
               let capsule = pso("ink_splat_capsule"),
               let accumulate = pso("ink_accumulate"),
@@ -274,6 +285,7 @@ final class MetalInkEngine {
         self.clearPSO = clear
         self.copyPSO = copy
         self.injectWetPSO = injectWet
+        self.fixBrushPSO = fixBrush
         self.splatPSO = splat
         self.capsulePSO = capsule
         self.accumulatePSO = accumulate
@@ -721,7 +733,7 @@ final class MetalInkEngine {
         // additive (lift 0) so its accumulative smear is unchanged. Strength
         // (slider) + charge (hold-before-drag) scale how much lifts per frame and
         // how hard it's pushed.
-        let destructiveWash = mode == .brush && !sample.wetOnly && (sample.destructive || kind == .white)
+        let destructiveWash = mode == .brush && !sample.wetOnly && !sample.fixOnly && (sample.destructive || kind == .white)
         let smear = clamp01(settings.landmarks.inkSmearStrength)
         // Every wash re-mobilizes a little dried pigment so smearing EXISTING
         // (dried) strokes is consistent — previously a wash only moved still-wet
@@ -730,7 +742,7 @@ final class MetalInkEngine {
         // scales it. (Hold-to-charge removed: it multiplied force up to 3x by
         // pre-drag hold time, which you don't consciously control → wildly
         // variable. Strength + actual movement now drive the smear predictably.)
-        brushLift = mode == .brush && !sample.wetOnly ? (destructiveWash ? min(1.0, 0.5 + 0.5 * smear) : 0.05 + 0.65 * smear) : 0
+        brushLift = mode == .brush && !sample.wetOnly && !sample.fixOnly ? (destructiveWash ? min(1.0, 0.5 + 0.5 * smear) : 0.05 + 0.65 * smear) : 0
         let forceBoost: Float = mode == .brush ? (0.15 + 1.9 * smear) * (destructiveWash ? 1.4 : 1.0) : 1
         // The Smear slider also sets the movement SENSITIVITY: low Smear needs a
         // deliberate move before it smears (fine control), high Smear smears on
@@ -784,11 +796,20 @@ final class MetalInkEngine {
                 let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
-                let loadedDensity = sample.wetOnly ? 0 : brushInk * 0.10 * (0.4 + 0.6 * pressure)
+                let loadedDensity = (sample.wetOnly || sample.fixOnly) ? 0 : brushInk * 0.10 * (0.4 + 0.6 * pressure)
                 var vel = delta / max(subDtW, 0.0001) * force
                 let vm = simd_length(vel)
                 if vm > velCap { vel *= velCap / vm }
-                if sample.wetOnly {
+                if sample.fixOnly {
+                    let spacing = radius * 0.7
+                    let steps = min(max(1, Int(ceil(dist / max(spacing, 0.001)))), 12)
+                    for i in 1...steps {
+                        let t = Float(i) / Float(steps)
+                        fixBrush(point: previous + delta * t, radius: radius,
+                                 strength: max(0.05, clamp01(settings.landmarks.inkDry)),
+                                 commandBuffer: commandBuffer)
+                    }
+                } else if sample.wetOnly {
                     // Option-drag is a water-only spray. Connect its samples
                     // into a continuous wet ribbon, but never inject velocity,
                     // pigment, or fixed-pigment lift.
@@ -895,6 +916,28 @@ final class MetalInkEngine {
     }
 
     private enum BlendMode: UInt32 { case add = 0, max = 1 }
+
+    private func fixBrush(point: SIMD2<Float>, radius: Float, strength: Float, commandBuffer: MTLCommandBuffer) {
+        guard let ink, let fixed, let locked, let wet else { return }
+        let r = max(radius, 0.0005)
+        let extent = Int(ceil(r * 4.5 * Float(ink.read.height))) + 2
+        let cx = Int(round(point.x * Float(ink.read.width)))
+        let cy = Int(round(point.y * Float(ink.read.height)))
+        let ox = max(cx - extent, 0), oy = max(cy - extent, 0)
+        let maxX = min(cx + extent, ink.read.width - 1), maxY = min(cy + extent, ink.read.height - 1)
+        guard maxX >= ox, maxY >= oy else { return }
+        var params = FixBrushParams(
+            targetSize: SIMD2(Float(ink.read.width), Float(ink.read.height)),
+            origin: SIMD2(UInt32(ox), UInt32(oy)),
+            aspect: aspect,
+            strength: strength,
+            point: point,
+            radiusSq: r * r
+        )
+        encode(fixBrushPSO, textures: [ink.read, fixed.read, locked, wet.read], bytes: &params,
+               length: MemoryLayout<FixBrushParams>.stride,
+               width: maxX - ox + 1, height: maxY - oy + 1, commandBuffer: commandBuffer)
+    }
 
     private func splat(texture: MTLTexture, point: SIMD2<Float>, radius: Float, color: SIMD4<Float>, blend: BlendMode, commandBuffer: MTLCommandBuffer) {
         let r = max(radius, 0.0005)
