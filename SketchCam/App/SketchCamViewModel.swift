@@ -79,10 +79,14 @@ final class SketchCamViewModel: ObservableObject {
         didSet { store.permission = cameraPermissionState }
     }
     @Published var errorText: String?
+    @Published var project = SketchProjectManifest()
+    @Published private(set) var projectURL: URL?
+    @Published private(set) var projectIsDirty = false
 
     let activationManager = ExtensionActivationManager()
 
     private let store = PipelineStateStore()
+    private let projectStore = SketchProjectStore()
     private let captureService = CameraCaptureService()
     private let movieSource = MoviePlaybackSource()
     // One CIContext for the whole pipeline (processor + preview): separate
@@ -152,6 +156,64 @@ final class SketchCamViewModel: ObservableObject {
         }
         movieSource.onPixelBuffer = { [weak self] pixelBuffer in
             self?.handleMovieFrame(pixelBuffer)
+        }
+    }
+
+    // MARK: - Infinite canvas project
+
+    func newProject() {
+        let aspect = max(0.000_001, outputFormat.size.width / max(1, outputFormat.size.height))
+        let migrated = settings.landmarks.inkPaths.enumerated().map { index, path in
+            GestureClip(legacy: path, aspect: aspect, startTime: TimeInterval(index) * 0.25, fit: settings.landmarks.inkCurveFit)
+        }
+        project = SketchProjectManifest(
+            title: "Untitled",
+            camera: CanvasCamera(),
+            sceneObjects: migrated.map { SceneObject(id: $0.id, name: $0.name, payload: .gesture($0.id)) },
+            gestures: migrated
+        )
+        projectURL = nil
+        projectIsDirty = !migrated.isEmpty
+    }
+
+    func markProjectDirty() {
+        project.modifiedAt = Date()
+        projectIsDirty = true
+    }
+
+    func openProjectPanel() {
+        let panel = projectStore.makeOpenPanel()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            project = try projectStore.read(from: url)
+            projectURL = url
+            projectIsDirty = false
+        } catch {
+            errorText = "Open project failed: \(error.localizedDescription)"
+        }
+    }
+
+    func saveProject() {
+        if let projectURL {
+            saveProject(to: projectURL)
+        } else {
+            saveProjectAs()
+        }
+    }
+
+    func saveProjectAs() {
+        let panel = projectStore.makeSavePanel(title: project.title)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        saveProject(to: url.pathExtension.lowercased() == "sketchcam" ? url : url.appendingPathExtension("sketchcam"))
+    }
+
+    private func saveProject(to url: URL) {
+        do {
+            try projectStore.write(project, to: url)
+            projectURL = url
+            projectIsDirty = false
+        } catch {
+            errorText = "Save project failed: \(error.localizedDescription)"
         }
     }
 
