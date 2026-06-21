@@ -4007,35 +4007,35 @@ private struct ExportPanel: View {
                     ForEach(CaptureTrigger.allCases) { Text(triggerLabel($0)).tag($0) }
                 }
                 RateField("Debounce", value: config.minimumEventInterval, range: 0...60, suffix: "s")
-                ForEach(Array(exporter.configuration.gates.enumerated()), id: \.element.id) { index, gate in
+                ForEach(exporter.configuration.gates) { gate in
                     VStack(spacing: 4) {
                         HStack {
-                            Toggle("", isOn: gateBinding(index, \.enabled)).labelsHidden()
-                            Picker("", selection: gateBinding(index, \.kind)) {
+                            Toggle("", isOn: gateBinding(gate, \.enabled)).labelsHidden()
+                            Picker("", selection: gateBinding(gate, \.kind)) {
                                 ForEach(CaptureGateKind.allCases) { Text(gateLabel($0)).tag($0) }
                             }.labelsHidden()
-                            Picker("", selection: gateBinding(index, \.comparison)) {
+                            Picker("", selection: gateBinding(gate, \.comparison)) {
                                 ForEach(CaptureComparator.allCases) { Text($0.rawValue).tag($0) }
                             }.labelsHidden().frame(width: 76)
-                            Button(role: .destructive) { exporter.configuration.gates.remove(at: index) } label: {
+                            Button(role: .destructive) { exporter.configuration.removeGate(id: gate.id) } label: {
                                 Image(systemName: "minus.circle")
                             }.buttonStyle(.plain)
                         }
                         HStack {
                             if gate.kind == .streamMetric {
-                                Picker("Layer", selection: gateBinding(index, \.layerID)) {
+                                Picker("Layer", selection: gateBinding(gate, \.layerID)) {
                                     Text("Final output").tag(UUID?.none)
                                     ForEach(metricLayers, id: \.id) { layer in
                                         Text(layer.name).tag(Optional(layer.id))
                                     }
                                 }.labelsHidden()
-                                Picker("Metric", selection: gateBinding(index, \.metric)) {
+                                Picker("Metric", selection: gateBinding(gate, \.metric)) {
                                     ForEach(ExportMetric.allCases) { Text(camelLabel($0.rawValue)).tag($0) }
                                 }.labelsHidden()
                             }
-                            TextField("lower", value: gateBinding(index, \.lowerBound), format: .number)
+                            TextField("lower", value: gateBinding(gate, \.lowerBound), format: .number)
                             if gate.comparison == .inside || gate.comparison == .outside {
-                                TextField("upper", value: gateBinding(index, \.upperBound), format: .number)
+                                TextField("upper", value: gateBinding(gate, \.upperBound), format: .number)
                             }
                         }
                         .textFieldStyle(.roundedBorder)
@@ -4091,12 +4091,11 @@ private struct ExportPanel: View {
         }
     }
 
-    private func gateBinding<T>(_ index: Int, _ keyPath: WritableKeyPath<CaptureGate, T>) -> Binding<T> {
+    private func gateBinding<T>(_ gate: CaptureGate, _ keyPath: WritableKeyPath<CaptureGate, T>) -> Binding<T> {
         Binding {
-            exporter.configuration.gates[index][keyPath: keyPath]
+            exporter.configuration.gate(id: gate.id)?[keyPath: keyPath] ?? gate[keyPath: keyPath]
         } set: { value in
-            guard exporter.configuration.gates.indices.contains(index) else { return }
-            exporter.configuration.gates[index][keyPath: keyPath] = value
+            exporter.configuration.updateGate(id: gate.id, keyPath: keyPath, value: value)
         }
     }
 

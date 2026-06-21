@@ -182,6 +182,26 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
         if !movieCodec.supportsAlpha { includeAlpha = false }
         if container == .mp4 && movieCodec != .h264 && movieCodec != .hevc { container = .mov }
     }
+
+    /// Resolves capture gates by stable identity so UI bindings remain safe when
+    /// SwiftUI briefly evaluates a row after that row has been removed.
+    public func gate(id: UUID) -> CaptureGate? {
+        gates.first { $0.id == id }
+    }
+
+    @discardableResult
+    public mutating func updateGate<T>(id: UUID, keyPath: WritableKeyPath<CaptureGate, T>, value: T) -> Bool {
+        guard let index = gates.firstIndex(where: { $0.id == id }) else { return false }
+        gates[index][keyPath: keyPath] = value
+        return true
+    }
+
+    @discardableResult
+    public mutating func removeGate(id: UUID) -> Bool {
+        guard let index = gates.firstIndex(where: { $0.id == id }) else { return false }
+        gates.remove(at: index)
+        return true
+    }
 }
 
 public struct ExportPreset: Codable, Sendable, Equatable, Identifiable {

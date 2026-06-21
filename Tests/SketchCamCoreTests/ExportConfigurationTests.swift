@@ -2,6 +2,20 @@ import XCTest
 @testable import SketchCamCore
 
 final class ExportConfigurationTests: XCTestCase {
+    func testGateIdentityOperationsRemainSafeAfterRemoval() {
+        let first = CaptureGate(kind: .inkPixelsChanging)
+        let second = CaptureGate(kind: .streamMetric)
+        var configuration = ExportConfiguration(gates: [first, second])
+
+        XCTAssertTrue(configuration.removeGate(id: first.id))
+        XCTAssertNil(configuration.gate(id: first.id))
+        XCTAssertFalse(configuration.updateGate(id: first.id, keyPath: \.enabled, value: false))
+
+        XCTAssertTrue(configuration.updateGate(id: second.id, keyPath: \.lowerBound, value: 0.75))
+        XCTAssertEqual(configuration.gate(id: second.id)?.lowerBound, 0.75)
+        XCTAssertEqual(configuration.gates.count, 1)
+    }
+
     func testRatesClampToSupportedRange() {
         var value = ExportConfiguration(captureFPS: 0, playbackFPS: 900, simulationFPS: 0)
         value.clamp()
