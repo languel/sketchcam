@@ -13,6 +13,7 @@ final class InkLayerCompositor {
 
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
+               actionPaths: [InkEditorPath]? = nil,
                controlFields: ResolvedControlFields = .empty) -> CIImage? {
         let l = settings.landmarks
         guard l.inkEnabled else {
@@ -24,6 +25,9 @@ final class InkLayerCompositor {
         return lock.withLock {
             if engine == nil { engine = MetalInkEngine() }
             var renderSettings = settings
+            if let actionPaths {
+                renderSettings.landmarks.inkPaths = actionPaths
+            }
             let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
             let hasRoutedTexture = textureInput != nil
             renderSettings.landmarks.inkPaperEnabled = paperOpacity > 0.001
