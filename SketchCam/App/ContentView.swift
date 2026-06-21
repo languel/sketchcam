@@ -195,6 +195,7 @@ struct ContentView: View {
                         showLivePath: model.settings.landmarks.inkShowLivePath,
                         immediatePen: model.settings.landmarks.inkImmediatePen,
                         immediateWash: model.settings.landmarks.inkImmediateWash,
+                        smoothing: model.settings.landmarks.inkSmoothing,
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
                         onImmediateCommitted: { model.commitImmediateCanvasStroke($0) },
@@ -3230,6 +3231,7 @@ private struct InkPreviewDrawingLayer: View {
     let showLivePath: Bool
     let immediatePen: Bool
     let immediateWash: Bool
+    let smoothing: Float
     let onLive: (InkLiveStrokeSample) -> Void
     let onLiveEnd: () -> Void
     let onImmediateCommitted: (InkEditorPath) -> Void
@@ -3249,6 +3251,7 @@ private struct InkPreviewDrawingLayer: View {
     @Binding var selectedPathID: UUID?
     @Binding var selectedPointIndex: Int?
     @State private var current: [CGPoint] = []
+    @State private var rawCurrent: [CGPoint] = []
     @State private var currentSampleTimes: [TimeInterval] = []
     @State private var currentStrokeStartTime: TimeInterval?
     @State private var currentStrokeSeed: UInt64?
@@ -3284,8 +3287,8 @@ private struct InkPreviewDrawingLayer: View {
                 }
                 // Thin dashed guide for the live cursor path (the rendered ink
                 // lags behind). Off by default — the engine's mark is the truth.
-                if showLivePath, !current.isEmpty {
-                    strokedPath(current, in: rect)
+                if showLivePath, !rawCurrent.isEmpty {
+                    strokedPath(rawCurrent, in: rect)
                         .stroke(inkColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round, dash: [4, 4]))
                 }
                 InkCanvasEventOverlay(
@@ -3381,6 +3384,7 @@ private struct InkPreviewDrawingLayer: View {
         }
         onLiveEnd()
         current = []
+        rawCurrent = []
         currentSampleTimes = []
         currentStrokeStartTime = nil
         currentStrokeSeed = nil
@@ -3407,25 +3411,54 @@ private struct InkPreviewDrawingLayer: View {
             currentWetOnly = combined && !dissolveWash
             currentDissolveWash = dissolveWash
             current = [point]
+            rawCurrent = [point]
             currentSampleTimes = [0]
-            emitLiveSamples(point: point, shift: shift, charge: charge)
+            emitLiveSamples(point: point, time: 0, shift: shift, charge: charge)
             return
         }
-        if current.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0015 }) ?? true {
-            current.append(point)
+        if rawCurrent.last.map({ hypot($0.x - point.x, $0.y - point.y) > 0.0015 }) ?? true {
             let now = ProcessInfo.processInfo.systemUptime
-            currentSampleTimes.append(max(0, now - (currentStrokeStartTime ?? now)))
+            let eventTime = max(0, now - (currentStrokeStartTime ?? now))
+            rawCurrent.append(point)
+            let mode = currentStrokeMode ?? brushMode
+            let canonicalPoint: CGPoint
+            if mode == .pen {
+                let amount = min(1, max(0, max(smoothing, shift ? 0.85 : 0)))
+                if amount < 0.001 {
+                    canonicalPoint = point
+                } else {
+                    let dt = max(eventTime - (currentSampleTimes.last ?? 0), 1.0 / 240.0)
+                    // Responsive streaming streamline: smooth event noise while
+                    // keeping the brush close enough to the hand for action
+                    // drawing. This is applied once and stored as geometry.
+                    let followRate = 14.0 + (1.0 - Double(amount)) * 76.0
+                    let alpha = 1.0 - exp(-dt * followRate)
+                    let previous = current.last ?? point
+                    canonicalPoint = CGPoint(
+                        x: previous.x + (point.x - previous.x) * alpha,
+                        y: previous.y + (point.y - previous.y) * alpha
+                    )
+                }
+            } else {
+                canonicalPoint = point
+            }
+            current.append(canonicalPoint)
+            currentSampleTimes.append(eventTime)
+            emitLiveSamples(point: canonicalPoint, time: eventTime, shift: shift, charge: charge)
+        } else if (currentStrokeMode ?? brushMode) == .brush {
+            let now = ProcessInfo.processInfo.systemUptime
+            emitLiveSamples(point: point, time: max(0, now - (currentStrokeStartTime ?? now)), shift: shift, charge: charge)
         }
-        emitLiveSamples(point: point, shift: shift, charge: charge)
     }
 
-    private func emitLiveSamples(point: CGPoint, shift: Bool, charge: Float) {
-        onLive(makeSample(id: currentPathID ?? UUID(), point: point, mode: currentStrokeMode ?? brushMode, shift: shift, charge: charge))
+    private func emitLiveSamples(point: CGPoint, time: TimeInterval, shift: Bool, charge: Float) {
+        onLive(makeSample(id: currentPathID ?? UUID(), point: point, time: time, mode: currentStrokeMode ?? brushMode, shift: shift, charge: charge))
     }
 
     private func makeSample(
         id: UUID,
         point: CGPoint,
+        time: TimeInterval,
         mode strokeMode: InkBrushMode,
         widthScale: Float = 1,
         flowScale: Float = 1,
@@ -3436,6 +3469,7 @@ private struct InkPreviewDrawingLayer: View {
             id: id,
             seed: currentStrokeSeed ?? 0,
             point: point,
+            time: time,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
             width: (strokeMode == .brush ? washWidth : width) * widthScale,

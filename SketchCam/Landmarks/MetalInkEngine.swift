@@ -33,6 +33,8 @@ final class MetalInkEngine {
         var speed: Float
         var simPressure: Float
         var stirPhase: Float
+        var eventTime: Float
+        var penRadius: Float
     }
 
     private struct SplatParams {
@@ -330,7 +332,7 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
         let l = settings.landmarks
@@ -392,16 +394,12 @@ final class MetalInkEngine {
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return cachedImage }
 
-        // A completed stroke becomes a canonical action.  Live drawing is only
-        // a low-latency preview: its frame-grouping and pressure integrator are
-        // deliberately responsive to the event stream, and therefore cannot be
-        // reconstructed byte-for-byte later.  As soon as the complete path is
-        // available, rebuild it with the deterministic replay tessellator.  Undo
-        // and redo then show exactly the same committed silhouette instead of a
-        // second, thicker series of circular stamps.
-        let canonicalizeEndedStroke = endedLiveID.map { id in
-            replayablePaths.contains(where: { $0.id == id })
-        } ?? false
+        // The live renderer and replay now consume the same canonical timed
+        // centerline. Keep the live pixels on mouse-up and merely adopt the
+        // matching action; rebuilding here caused the visible release jump.
+        if let endedLiveID, !needRebuild {
+            bakedLiveIDs.insert(endedLiveID)
+        }
 
         if needRebuild {
             guard configure(width: width, height: height) else { return cachedImage }
@@ -412,13 +410,6 @@ final class MetalInkEngine {
             livePointerStates = [:]
             rebuildKey = key
             lastFrameIndex = nil
-            activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
-        } else if canonicalizeEndedStroke && !clearFadeRequested && !clearFadeActive {
-            clearAll(commandBuffer)
-            bakedLiveIDs = []
-            replay(paths: replayablePaths, settings: settings, commandBuffer: commandBuffer)
-            replayedPaths = replayablePaths
-            livePointerStates = [:]
             activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
         } else if pathsChanged && !clearFadeRequested && !clearFadeActive {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
@@ -649,6 +640,7 @@ final class MetalInkEngine {
 
         var previous = samples[0].point
         var previousTime = samples[0].time
+        var replaySpeed: Float = 0
         var replayPressure: Float = 0.35
         var previousPenRadius: Float?
         var brushStepCounter = 0
@@ -662,8 +654,10 @@ final class MetalInkEngine {
                 continue
             }
             let sampleDT = max(sample.time - previousTime, 1.0 / 240.0)
-            let speed = min(dist / sampleDT, 3.0)
-            let targetPressure = min(max(1.18 - speed * 0.95, 0.12), 1.0)
+            let instantaneousSpeed = dist / sampleDT
+            replaySpeed += (instantaneousSpeed - replaySpeed) * (1 - exp(-sampleDT * 10))
+            let speed = min(replaySpeed, 3.0)
+            let targetPressure = min(max(1.18 - replaySpeed * 0.95, 0.12), 1.0)
             replayPressure += (targetPressure - replayPressure) * (1 - exp(-sampleDT * 6))
             let pressure = replayPressure
             if mode == .pen {
@@ -724,7 +718,7 @@ final class MetalInkEngine {
     }
 
     @discardableResult
-    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, points: [CGPoint], settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
+    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, points: [InkLiveStrokePoint], settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
         guard let sample else {
             livePointerStates = [:]
             brushNow = SIMD3(0, 0, 0)
@@ -771,7 +765,7 @@ final class MetalInkEngine {
         let smearThreshold: Float = 0.0008 + (1 - smear) * 0.010
         let velCap: Float = 240
 
-        let rawPoints = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
+        let rawPoints = points.map { SIMD2<Float>(Float($0.point.x), Float($0.point.y)) }
         let fallback = SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))
 
         var state = livePointerStates[sample.id] ?? LivePointerState(
@@ -779,7 +773,9 @@ final class MetalInkEngine {
             by: rawPoints.first?.y ?? fallback.y,
             speed: 0,
             simPressure: 0.35,
-            stirPhase: Float(sample.seed & 0x3ff) * 0.0061359
+            stirPhase: Float(sample.seed & 0x3ff) * 0.0061359,
+            eventTime: Float(points.first?.time ?? sample.time),
+            penRadius: -1
         )
 
         let smoothing = clamp01(max(settings.landmarks.inkSmoothing, sample.smoothBoost ? 0.85 : 0))
@@ -862,53 +858,33 @@ final class MetalInkEngine {
         }
 
         // --- PEN ---
-        // Build the trajectory to follow this frame: start at the brush's current
-        // (smoothed) position, then pass through every cursor sample. Seeding from
-        // the previous position is what keeps strokes smooth when frames are slow
-        // or irregular (over a session, or right after tab-in): a large gap
-        // between where the brush is and the new samples gets densely subdivided
-        // and smoothly followed, instead of collapsing to one long straight chord
-        // → polygonal, "choppy" strokes.
-        var anchors: [SIMD2<Float>] = [SIMD2<Float>(state.bx, state.by)]
-        anchors.append(contentsOf: rawPoints.isEmpty ? [fallback] : rawPoints)
-
-        let maxGap: Float = 0.01
-        var targets: [SIMD2<Float>] = []
-        targets.reserveCapacity(anchors.count * 2)
-        for i in 1..<anchors.count {
-            let a = anchors[i - 1], b = anchors[i]
-            let seg = simd_length(b - a)
-            let n = max(1, min(64, Int(ceil(seg / maxGap))))
-            for j in 1...n { targets.append(a + (b - a) * (Float(j) / Float(n))) }
+        // The UI supplies the one canonical, timestamped centerline. Draw those
+        // samples directly: frame batching must not add a second positional
+        // filter, otherwise the live brush lags/cuts corners and mouse-up jumps
+        // to a differently fitted path. Capsules cover long event gaps without
+        // needing frame-dependent subdivision.
+        guard !points.isEmpty else {
+            livePointerStates = [sample.id: state]
+            return true
         }
-        if targets.isEmpty { targets = [anchors[0]] }
-
-        let subDt = dt / Float(targets.count)
-        let k = 1 - exp(-subDt * followRate)
-
-        // Width / pressure are updated PER SUBSTEP along the (densely subdivided,
-        // seeded-from-the-brush) smoothed trajectory. Because the substeps span the
-        // whole frame's motion, per-substep speed equals the true cursor speed
-        // regardless of substep count or frame rate — and updating per substep
-        // keeps the stroke width CONTINUOUS. (Computing it once per frame makes the
-        // width step in visible lumps where the value jumps between frames.)
-        let speedAlpha = 1 - exp(-subDt * 10)
-        let pressureAlpha = 1 - exp(-subDt * 6)
         brushNow = SIMD3(0, 0, 0)
-        var prevInkRadius: Float = -1
-
-        for target in targets {
+        for event in points {
+            let target = SIMD2<Float>(Float(event.point.x), Float(event.point.y))
             let previous = SIMD2<Float>(state.bx, state.by)
-            state.bx += (target.x - state.bx) * k
-            state.by += (target.y - state.by) * k
+            state.bx = target.x
+            state.by = target.y
             let current = SIMD2<Float>(state.bx, state.by)
             let delta = current - previous
             let dist = simd_length(delta)
+            let eventTime = Float(event.time)
+            let eventDT = max(eventTime - state.eventTime, 1.0 / 240.0)
+            state.eventTime = eventTime
+            guard dist > 0.000_001 else { continue }
 
-            let inst = dist / max(subDt, 0.0001)
-            state.speed += (inst - state.speed) * speedAlpha
+            let inst = dist / eventDT
+            state.speed += (inst - state.speed) * (1 - exp(-eventDT * 10))
             let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
-            state.simPressure += (targetPressure - state.simPressure) * pressureAlpha
+            state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-eventDT * 6))
             let pressure = state.simPressure
             let speed = state.speed
             let radius = penRadius(pressure: pressure, speed: speed, size: size)
@@ -917,10 +893,10 @@ final class MetalInkEngine {
             // Lay the stroke as a ribbon: one variable-width capsule per centerline
             // step, max-blended so the union is smooth (no bead/"salami" from
             // overlapping additive discs). The first step has no prior radius.
-            let rPrev = prevInkRadius < 0 ? radius : prevInkRadius
+            let rPrev = state.penRadius < 0 ? radius : state.penRadius
             splatCapsule(texture: ink.read, a: previous, b: current, ra: rPrev, rb: radius, color: inkColor(kind: kind, base: color, density: penDensity), blend: .max, commandBuffer: commandBuffer)
             splatCapsule(texture: wet.read, a: previous, b: current, ra: rPrev * 2.8, rb: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-            prevInkRadius = radius
+            state.penRadius = radius
         }
 
         livePointerStates = [sample.id: state]
@@ -1150,8 +1126,10 @@ final class MetalInkEngine {
     private func deterministicReplaySamples(for path: InkEditorPath, fit: CurveFit) -> [(point: SIMD2<Float>, time: Float)] {
         let raw = path.points
         guard raw.count > 1 else { return raw.map { (SIMD2(Float($0.x), Float($0.y)), 0) } }
-        let fitted = smoothed(points: raw, fit: fit)
         let recorded = path.sampleTimes
+        // New gestures already contain the exact deterministic centerline drawn
+        // live. Legacy geometry-only paths retain their historical curve fit.
+        let fitted = recorded?.count == raw.count ? raw : smoothed(points: raw, fit: fit)
         let times: [Double]
         if let recorded, recorded.count == raw.count,
            zip(recorded, recorded.dropFirst()).allSatisfy({ $0.0 <= $0.1 }) {
