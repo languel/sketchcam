@@ -94,6 +94,8 @@ struct ContentView: View {
     @State private var tab = ControlTab.layers
     /// Comma-separated ids of the tabs shown in the tab bar. Empty = default visible tabs.
     @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
+    @AppStorage(InkUndoPreferences.gpuStateCountKey)
+    private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
@@ -492,6 +494,24 @@ struct ContentView: View {
         Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
             .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
+        SectionHeader("Ink Undo")
+        HStack {
+            Text("GPU states")
+            Spacer()
+            TextField("", value: inkUndoGPUStateCountBinding, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 72)
+                .help("Click or double-click to type an exact state count.")
+            Stepper("", value: inkUndoGPUStateCountBinding, in: 0...inkUndoMaximumStateCount)
+                .labelsHidden()
+        }
+        .help("Exact physical ink states retained in GPU memory. 0 uses replay only. Changes apply as new gestures are captured.")
+        Text(inkUndoMemoryEstimate)
+            .font(.caption)
+            .foregroundStyle(inkUndoUsesLargeMemoryShare ? .orange : .secondary)
+
         SectionHeader("Camera Extension")
         HStack {
             Button("Activate") { model.activateExtension() }
@@ -501,6 +521,47 @@ struct ContentView: View {
         Text(model.activationManager.statusText)
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+
+    private var inkUndoStateBytes: Double {
+        let size = model.outputFormat.size
+        let width = max(1, Int(size.width.rounded()))
+        let height = max(1, Int(size.height.rounded()))
+        let shortSide = max(1, min(width, height))
+        let dyeScale = Double(min(2048, shortSide)) / Double(shortSide)
+        let simScale = 256.0 / Double(shortSide)
+        let dyeWidth = max(1, Int((Double(width) * dyeScale).rounded()))
+        let dyeHeight = max(1, Int((Double(height) * dyeScale).rounded()))
+        let simWidth = max(1, Int((Double(width) * simScale).rounded()))
+        let simHeight = max(1, Int((Double(height) * simScale).rounded()))
+        // Dye fields use 26 bytes/pixel; solver fields use 6 bytes/pixel.
+        return Double(dyeWidth * dyeHeight * 26 + simWidth * simHeight * 6)
+    }
+
+    private var inkUndoMaximumStateCount: Int {
+        let halfMemory = Double(ProcessInfo.processInfo.physicalMemory) * 0.5
+        return min(
+            InkUndoPreferences.absoluteMaximumGPUStateCount,
+            max(1, Int(halfMemory / max(1, inkUndoStateBytes)))
+        )
+    }
+
+    private var inkUndoGPUStateCountBinding: Binding<Int> {
+        Binding(
+            get: { min(inkUndoGPUStateCount, inkUndoMaximumStateCount) },
+            set: { inkUndoGPUStateCount = min(inkUndoMaximumStateCount, max(0, $0)) }
+        )
+    }
+
+    private var inkUndoUsesLargeMemoryShare: Bool {
+        inkUndoStateBytes * Double(inkUndoGPUStateCount) >= Double(ProcessInfo.processInfo.physicalMemory) * 0.25
+    }
+
+    private var inkUndoMemoryEstimate: String {
+        let eachMB = inkUndoStateBytes / 1_000_000
+        let totalGB = inkUndoStateBytes * Double(inkUndoGPUStateCount) / 1_000_000_000
+        let warning = inkUndoUsesLargeMemoryShare ? " · Warning: large shared-memory allocation" : ""
+        return String(format: "About %.0f MB per state · %.2f GB maximum%@", eachMB, totalGB, warning)
     }
 
     // MARK: - Layers tab
@@ -1614,6 +1675,10 @@ struct ContentView: View {
         r.register(id: "ink.redo", title: "Ink: Redo", category: "Ink",
                    default: KeyBinding(key: "z", modifiers: [.command, .shift])) {
             guard tab == .ink else { return }
+            redoInk()
+        }
+        r.register(id: "ink.redoAction", title: "Ink: Redo Last Action", category: "Ink",
+                   default: KeyBinding(key: "r", modifiers: [.command, .shift])) {
             redoInk()
         }
         r.register(id: "ink.immediate.pen", title: "Ink: Toggle Immediate Pen", category: "Ink",
