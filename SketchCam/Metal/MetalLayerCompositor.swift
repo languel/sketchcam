@@ -14,6 +14,7 @@ import SketchCamShared
 /// This is the experimental path behind `ProcessingSettings.useGPUCompositor`;
 /// the CoreImage `process(...)` stays the default until this reaches parity.
 final class MetalLayerCompositor {
+    var metricTap: ((UUID, CVPixelBuffer) -> Void)?
     /// Resolves a graph node (or the built-in person-matte source) to its
     /// output-sized stream pixels. Returns nil for a node with no pixels yet.
     struct Streams {
@@ -104,6 +105,7 @@ final class MetalLayerCompositor {
             // Per-layer effect chain after source masking.
             guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
                                      effects: layer.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
+            metricTap?(node.id, chainOutput)
 
             // Composite onto the accumulator with the layer opacity/blend mode.
             guard effects.composite(base: cur, overlay: chainOutput, output: other,

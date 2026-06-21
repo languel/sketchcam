@@ -79,6 +79,20 @@ Future process-timelapse capture and disk-backed undo should share these action
 boundaries. A timelapse image is presentation output only; restoring a canvas
 requires the corresponding pigment, wetness, velocity, and lock fields.
 
+## Output Stream Export
+
+The final `publish(...)` seam offers immutable composed frames to an
+`OutputStreamExporter`. The exporter is isolated from virtual-camera and preview
+delivery, evaluates versioned trigger/gate rules, and writes accepted frames on
+its own bounded queue. Post-effect layer conditions address graph nodes by UUID;
+the Metal compositor exposes a dormant metric tap at the point immediately
+after a layer's effect chain.
+
+Offline rendering snapshots settings, source pixels, and the append-only
+performance event log, then uses a separate `InkLayerCompositor`,
+`CoreImageFrameProcessor`, and deterministic clock. Capture, simulation, and
+presentation timestamps are separate. See `notes/output-stream-exporter.md`.
+
 ## Future Boundaries
 
 The stable long-term shape is:

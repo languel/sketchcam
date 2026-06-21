@@ -56,6 +56,26 @@ final class MoviePlaybackSource {
         player.rate = rate
     }
 
+    /// Advances the current movie deterministically for stop-motion capture.
+    func step(seconds: Double, loop: Bool) {
+        guard seconds != 0, let item = player.currentItem else { return }
+        let duration = item.duration.seconds
+        var target = player.currentTime().seconds + seconds
+        if duration.isFinite, duration > 0 {
+            if loop {
+                target = target.truncatingRemainder(dividingBy: duration)
+                if target < 0 { target += duration }
+            } else {
+                target = min(max(0, target), duration)
+            }
+        }
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600_000),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+
     func stop() {
         timer?.cancel()
         timer = nil

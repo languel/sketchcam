@@ -11,6 +11,10 @@ final class InkLayerCompositor {
     private var engine: MetalInkEngine? = MetalInkEngine()
     private let paperRenderer = MetalPaperRenderer.shared
 
+    var activitySnapshot: InkActivitySnapshot {
+        lock.withLock { engine?.activitySnapshot ?? InkActivitySnapshot() }
+    }
+
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
                actionPaths: [InkEditorPath]? = nil,

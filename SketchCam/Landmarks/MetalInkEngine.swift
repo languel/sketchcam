@@ -211,6 +211,7 @@ final class MetalInkEngine {
     /// 0 = additive wash. Rides in the exchange brush.w.
     private var brushLift: Float = 0
     private var activeFramesRemaining = 0
+    private(set) var activitySnapshot = InkActivitySnapshot()
     // Clear fade-out: when triggered, the layer fades to transparent over the
     // fade duration, then the textures are wiped (instead of an instant clear).
     private var clearFade: Float = 1
@@ -413,6 +414,10 @@ final class MetalInkEngine {
         let motionDriven = l.resolvedInkMotionForce > 0 && controlFields.field(for: .ink, input: .motionVector) != nil
         let motionWetDriven = l.resolvedInkMotionWetness > 0 && controlFields.field(for: .ink, input: .wetness) != nil
         let evolving = motionDriven || motionWetDriven || wetCanvasRequested || unfixRequested || dryCanvasRequested || activeFramesRemaining > 0 || fixTimer > 0 || live != nil || endedLiveID != nil || clearFadeActive || clearFadeRequested
+        activitySnapshot = InkActivitySnapshot(
+            solverActive: evolving,
+            physicalChange: evolving ? min(1, max(live == nil ? 0.01 : 1, Double(activeFramesRemaining) / 180)) : 0
+        )
 
         // Nothing to draw at all → blank. Immediate strokes are not replayable
         // paths, but they leave pigment in the Metal textures; once the sim goes

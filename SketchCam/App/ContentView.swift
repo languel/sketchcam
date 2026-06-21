@@ -24,11 +24,12 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case presets = "Presets"
     case keys = "Keys"
     case debug = "Debug"
+    case export = "Export"
     case input = "Settings"
 
     var id: String { rawValue }
 
-    static let defaultVisible: Set<ControlTab> = [.layers, .camera, .input]
+    static let defaultVisible: Set<ControlTab> = [.layers, .camera, .export, .input]
 
     static func visibleTabs(from rawValue: String) -> [ControlTab] {
         guard !rawValue.isEmpty else {
@@ -36,7 +37,11 @@ enum ControlTab: String, CaseIterable, Identifiable {
         }
         let ids = Set(rawValue.split(separator: ",").map(String.init))
         let shown = allCases.filter { ids.contains($0.id) }
-        return shown.isEmpty ? allCases.filter { defaultVisible.contains($0) } : shown
+        var result = shown.isEmpty ? allCases.filter { defaultVisible.contains($0) } : shown
+        if !result.contains(.export), let index = allCases.firstIndex(of: .export) {
+            result.insert(.export, at: min(index, result.count))
+        }
+        return result
     }
 
     static func storageValue(for tabs: Set<ControlTab>) -> String {
@@ -61,6 +66,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .presets: "bookmark"
         case .keys: "keyboard"
         case .debug: "ladybug"
+        case .export: "square.and.arrow.down"
         }
     }
 }
@@ -102,6 +108,8 @@ struct ContentView: View {
     @State private var inkHUDVisible = false
     @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
+    @State private var exportPointerDown = false
+    @State private var exportPointerDragging = false
 
     var body: some View {
         Group {
@@ -201,6 +209,7 @@ struct ContentView: View {
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
                         onImmediateCommitted: { model.commitImmediateCanvasStroke($0) },
+                        onCanvasAction: { model.signalCanvasAction(path: $0) },
                         outputSize: model.outputFormat.size,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -231,8 +240,7 @@ struct ContentView: View {
                         colorSeparation: inkColorSeparationBinding,
                         brushInk: inkBrushInkBinding,
                         fix: fixInk,
-                        clear: clearInk,
-                        save: model.exportCurrentFrame
+                        clear: clearInk
                     )
                     .padding(.bottom, 20)
                     .transition(.opacity)
@@ -252,6 +260,29 @@ struct ContentView: View {
         }
         .frame(minWidth: 120, minHeight: 68)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if !exportPointerDown {
+                        exportPointerDown = true
+                        model.exporter.signal(.mouseDown)
+                    }
+                    if !exportPointerDragging,
+                       hypot(value.translation.width, value.translation.height) >= 2 {
+                        exportPointerDragging = true
+                        model.exporter.signal(.dragBegin)
+                    }
+                }
+                .onEnded { value in
+                    if exportPointerDragging { model.exporter.signal(.dragEnd) }
+                    model.exporter.signal(.mouseUp)
+                    if hypot(value.translation.width, value.translation.height) < 2 {
+                        model.exporter.signal(.click)
+                    }
+                    exportPointerDown = false
+                    exportPointerDragging = false
+                }
+        )
     }
 
     // MARK: - Controls
@@ -266,6 +297,7 @@ struct ContentView: View {
     }
 
     private func toggleTabVisible(_ t: ControlTab) {
+        guard t != .export else { return }
         var ids = Set(visibleTabs.map { $0.id })
         if ids.contains(t.id) { ids.remove(t.id) } else { ids.insert(t.id) }
         guard !ids.isEmpty else { return }
@@ -328,6 +360,7 @@ struct ContentView: View {
                     case .presets: presetsTab
                     case .keys: keysTab
                     case .debug: debugTab
+                    case .export: exportTab
                     }
                 }
                 .padding(16)
@@ -337,38 +370,8 @@ struct ContentView: View {
         .frame(width: 360)
     }
 
-    /// Always-visible actions with their shortcuts.
     private var actionBar: some View {
-        HStack(spacing: 8) {
-            Text("SketchCam")
-                .font(.headline)
-            Spacer()
-            Button {
-                model.toggleFreezeOrPause()
-            } label: {
-                Label(
-                    freezeButtonTitle,
-                    systemImage: isHeld ? "play.fill" : "pause.fill"
-                )
-            }
-            .help("Freeze live input / pause movie")
-            Button {
-                model.exportCurrentFrame()
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-            }
-            .help("Export current frame as PNG")
-            Button {
-                appUI.toggleDebugOverlay()
-            } label: {
-                Label(
-                    "Performance",
-                    systemImage: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle"
-                )
-            }
-            .help("Toggle performance overlay (Control-Option-P)")
-        }
-        .controlSize(.small)
+        Text("SketchCam").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var isHeld: Bool {
@@ -382,11 +385,34 @@ struct ContentView: View {
         return model.inputFrozen ? "Unfreeze" : "Freeze"
     }
 
+    @ViewBuilder private var exportTab: some View {
+        ExportPanel(
+            exporter: model.exporter,
+            currentSize: model.outputFormat.size,
+            metricLayers: exportMetricLayers,
+            chooseDestination: model.chooseExportDestination,
+            exportCurrent: model.exportCurrentFrame
+        )
+    }
+
+    private var exportMetricLayers: [(id: UUID, name: String)] {
+        let graph = (model.settings.layerGraph ?? .defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        return graph.layers.compactMap { layer in
+            graph.node(layer.node).map { ($0.id, $0.name) }
+        }
+    }
+
 
     // MARK: - Camera tab
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
+        Button {
+            model.toggleFreezeOrPause()
+        } label: {
+            Label(freezeButtonTitle, systemImage: isHeld ? "play.fill" : "pause.fill")
+        }
+        .help("Freeze/unfreeze the camera input. For Movie input this becomes Pause/Play.")
         Picker("Camera", selection: Binding(
             get: { model.selectedDeviceID ?? "" },
             set: {
@@ -464,6 +490,14 @@ struct ContentView: View {
             get: { model.settings.previewFPS },
             set: { model.settings.previewFPS = $0.rounded() }
         ), range: 0...60, precision: 0, defaultValue: 0, hint: "0 = full-tilt (every published frame)")
+
+        Button {
+            appUI.toggleDebugOverlay()
+        } label: {
+            Label("Performance overlay", systemImage: appUI.debugOverlayVisible
+                  ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle")
+        }
+        .help("Toggle the performance overlay (Control-Option-P).")
 
         SectionHeader("Window")
         HStack {
@@ -887,12 +921,6 @@ struct ContentView: View {
                 }
                 .help("Fade the canvas out (over Fade) then wipe it — committed paths, immediate marks, and fixed ink.")
                 Button {
-                    model.exportCurrentFrame()
-                } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                }
-                .help("Save the current frame as a PNG (also S).")
-                Button {
                     deleteSelectedInk()
                 } label: {
                     Label("Delete", systemImage: "delete.left")
@@ -1016,18 +1044,22 @@ struct ContentView: View {
 
     private func fixInk() {
         model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+        model.recordPerformanceCommand(.fix)
     }
 
     private func unfixInk() {
         model.settings.landmarks.inkUnfixRevision = (model.settings.landmarks.inkUnfixRevision ?? 0) + 1
+        model.recordPerformanceCommand(.unfix)
     }
 
     private func wetInkCanvas() {
         model.settings.landmarks.inkWetCanvasRevision = (model.settings.landmarks.inkWetCanvasRevision ?? 0) + 1
+        model.recordPerformanceCommand(.wetCanvas)
     }
 
     private func dryInkCanvas() {
         model.settings.landmarks.inkDryCanvasRevision = (model.settings.landmarks.inkDryCanvasRevision ?? 0) + 1
+        model.recordPerformanceCommand(.dryCanvas)
     }
 
     private func rerenderInk() {
@@ -1574,6 +1606,10 @@ struct ContentView: View {
                    default: KeyBinding(key: "f", modifiers: .command)) { [weak model] in model?.toggleFreezeOrPause() }
         r.register(id: "transport.export", title: "Export Frame", category: "Transport",
                    default: KeyBinding(key: "e", modifiers: .command)) { [weak model] in model?.exportCurrentFrame() }
+        r.register(id: "export.captureNext", title: "Capture Next Frame", category: "Export",
+                   default: KeyBinding(key: "e", modifiers: [.command, .shift])) { [weak model] in
+            model?.exporter.captureNext()
+        }
         r.register(id: "window.panel", title: "Toggle Side Panel (fit canvas)", category: "Window",
                    default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.togglePanelFit() }
         r.register(id: "window.panelOverlay", title: "Toggle Side Panel (overlay)", category: "Window",
@@ -1656,11 +1692,6 @@ struct ContentView: View {
                    default: KeyBinding(key: "c", modifiers: [])) {
             guard tab == .ink else { return }
             clearInk()
-        }
-        r.register(id: "ink.save", title: "Ink: Save PNG", category: "Ink",
-                   default: KeyBinding(key: "s", modifiers: [])) { [weak model] in
-            guard tab == .ink else { return }
-            model?.exportCurrentFrame()
         }
         r.register(id: "ink.fullscreen", title: "Ink: Fullscreen", category: "Ink",
                    default: KeyBinding(key: "f", modifiers: [])) { [weak windowMode] in
@@ -2905,7 +2936,6 @@ private struct InkBottomHUD: View {
     @Binding var brushInk: Double
     let fix: () -> Void
     let clear: () -> Void
-    let save: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -2927,7 +2957,6 @@ private struct InkBottomHUD: View {
                 hudSlider("brush ink", value: $brushInk, defaultValue: 0)
                 command("fix", action: fix)
                 command("clear", action: clear)
-                command("save", action: save)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
@@ -3300,6 +3329,7 @@ private struct InkPreviewDrawingLayer: View {
     let onLive: (InkLiveStrokeSample) -> Void
     let onLiveEnd: () -> Void
     let onImmediateCommitted: (InkEditorPath) -> Void
+    let onCanvasAction: (InkEditorPath?) -> Void
     let outputSize: CGSize
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -3445,7 +3475,10 @@ private struct InkPreviewDrawingLayer: View {
                 onImmediateCommitted(completedPath)
             } else {
                 paths.append(completedPath)
+                onCanvasAction(completedPath)
             }
+        } else if committed, tool != .draw, !dragStartPaths.isEmpty {
+            onCanvasAction(nil)
         }
         onLiveEnd()
         current = []
@@ -3843,6 +3876,265 @@ private struct CheckerboardBackground: View {
                 row += 1
             }
             context.fill(path, with: .color(Color(white: 0.16)))
+        }
+    }
+}
+
+private struct ExportPanel: View {
+    @ObservedObject var exporter: OutputStreamExporter
+    let currentSize: CGSize
+    let metricLayers: [(id: UUID, name: String)]
+    let chooseDestination: () -> Void
+    let exportCurrent: () -> Void
+
+    private var config: Binding<ExportConfiguration> { $exporter.configuration }
+
+    var body: some View {
+        SectionHeader("Export")
+
+        GroupBox("Presets") {
+            VStack(spacing: 6) {
+                HStack {
+                    Button("Live") { exporter.applyPreset(.liveMovie) }
+                    Button("Stop motion") { exporter.applyPreset(.stopMotion) }
+                    Button("Actions") { exporter.applyPreset(.actionCapture) }
+                }
+                HStack {
+                    TextField("Preset name", text: $exporter.presetName)
+                    Button("Save") { exporter.saveNamedPreset() }.disabled(exporter.presetName.isEmpty)
+                    Menu("Load") {
+                        ForEach(exporter.presets) { preset in
+                            Button(preset.name) { exporter.applyPreset(preset) }
+                        }
+                        if !exporter.presets.isEmpty {
+                            Divider()
+                            Menu("Delete") {
+                                ForEach(exporter.presets) { preset in
+                                    Button(preset.name, role: .destructive) { exporter.deletePreset(preset) }
+                                }
+                            }
+                        }
+                    }.disabled(exporter.presets.isEmpty)
+                }
+            }
+            .controlSize(.small)
+        }
+
+        GroupBox("Destination") {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Take name", text: config.takeName)
+                HStack {
+                    Button("Choose…", action: chooseDestination)
+                    Text(exporter.destinationURL?.path(percentEncoded: false) ?? "No destination")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+
+        GroupBox("Output") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Type", selection: config.outputKind) {
+                    ForEach(ExportOutputKind.allCases) { Text(exportLabel($0)).tag($0) }
+                }
+                Picker("Render", selection: config.renderMode) {
+                    Text("Live").tag(ExportRenderMode.live)
+                    Text("NRT · replay").tag(ExportRenderMode.nrtReplay)
+                    Text("NRT · continue").tag(ExportRenderMode.nrtContinue)
+                }
+                if exporter.configuration.renderMode == .nrtContinue {
+                    Text("Continue clones the current published artifact into an isolated export; cross-resolution fluid-field continuation awaits sparse canvas checkpoints.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                if exporter.configuration.outputKind == .still || exporter.configuration.outputKind == .imageSequence {
+                    Picker("Format", selection: config.imageFormat) {
+                        ForEach(ExportImageFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) }
+                    }
+                } else if exporter.configuration.outputKind == .movie {
+                    Picker("Codec", selection: config.movieCodec) {
+                        ForEach(ExportMovieCodec.allCases) { Text(codecLabel($0)).tag($0) }
+                    }
+                    Picker("Container", selection: config.container) {
+                        ForEach(ExportContainer.allCases) { Text($0.rawValue.uppercased()).tag($0) }
+                    }
+                }
+                HStack {
+                    Text("Size")
+                    TextField("Width", value: config.width, format: .number).frame(width: 70)
+                    Text("×")
+                    TextField("Height", value: config.height, format: .number).frame(width: 70)
+                    Button("Current") {
+                        exporter.configuration.width = Int(currentSize.width)
+                        exporter.configuration.height = Int(currentSize.height)
+                    }
+                }
+                Picker("Framing", selection: config.framing) {
+                    ForEach(ExportFraming.allCases) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                Picker("Color", selection: config.colorSpace) {
+                    Text("sRGB").tag(ExportColorSpace.sRGB)
+                    Text("Display P3").tag(ExportColorSpace.displayP3)
+                }
+                LabeledContent("Quality") { Slider(value: config.quality, in: 0...1) }
+                Toggle("Alpha", isOn: config.includeAlpha)
+                    .disabled(exporter.configuration.outputKind == .movie && !exporter.configuration.movieCodec.supportsAlpha)
+            }
+            .textFieldStyle(.roundedBorder)
+        }
+
+        GroupBox("Timing") {
+            VStack(spacing: 8) {
+                RateField("Capture FPS", value: config.captureFPS)
+                RateField("Playback FPS", value: config.playbackFPS)
+                if exporter.configuration.renderMode != .live {
+                    RateField("Simulation FPS", value: config.simulationFPS)
+                    Picker("Replay timing", selection: config.replayTiming) {
+                        Text("Original").tag(ExportReplayTiming.original)
+                        Text("Remove idle gaps").tag(ExportReplayTiming.removeIdleGaps)
+                        Text("Fixed gap").tag(ExportReplayTiming.fixedGap)
+                    }
+                    if exporter.configuration.replayTiming == .fixedGap {
+                        RateField("Fixed gap", value: config.fixedReplayGap, range: 0...3600, suffix: "s")
+                    }
+                    RateField("Speed", value: config.replaySpeed, range: 0.01...100, suffix: "×")
+                }
+            }
+        }
+
+        GroupBox("Capture rule") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Trigger", selection: config.trigger) {
+                    ForEach(CaptureTrigger.allCases) { Text(triggerLabel($0)).tag($0) }
+                }
+                RateField("Debounce", value: config.minimumEventInterval, range: 0...60, suffix: "s")
+                ForEach(Array(exporter.configuration.gates.enumerated()), id: \.element.id) { index, gate in
+                    VStack(spacing: 4) {
+                        HStack {
+                            Toggle("", isOn: gateBinding(index, \.enabled)).labelsHidden()
+                            Picker("", selection: gateBinding(index, \.kind)) {
+                                ForEach(CaptureGateKind.allCases) { Text(gateLabel($0)).tag($0) }
+                            }.labelsHidden()
+                            Picker("", selection: gateBinding(index, \.comparison)) {
+                                ForEach(CaptureComparator.allCases) { Text($0.rawValue).tag($0) }
+                            }.labelsHidden().frame(width: 76)
+                            Button(role: .destructive) { exporter.configuration.gates.remove(at: index) } label: {
+                                Image(systemName: "minus.circle")
+                            }.buttonStyle(.plain)
+                        }
+                        HStack {
+                            if gate.kind == .streamMetric {
+                                Picker("Layer", selection: gateBinding(index, \.layerID)) {
+                                    Text("Final output").tag(UUID?.none)
+                                    ForEach(metricLayers, id: \.id) { layer in
+                                        Text(layer.name).tag(Optional(layer.id))
+                                    }
+                                }.labelsHidden()
+                                Picker("Metric", selection: gateBinding(index, \.metric)) {
+                                    ForEach(ExportMetric.allCases) { Text(camelLabel($0.rawValue)).tag($0) }
+                                }.labelsHidden()
+                            }
+                            TextField("lower", value: gateBinding(index, \.lowerBound), format: .number)
+                            if gate.comparison == .inside || gate.comparison == .outside {
+                                TextField("upper", value: gateBinding(index, \.upperBound), format: .number)
+                            }
+                        }
+                        .textFieldStyle(.roundedBorder)
+                    }
+                }
+                Button("Add AND gate") {
+                    exporter.configuration.gates.append(CaptureGate(kind: .inkPixelsChanging))
+                }
+            }
+        }
+
+        GroupBox("Rotoscope") {
+            VStack(spacing: 8) {
+                LabeledContent("Advance frames") {
+                    TextField("0", value: config.sourceAdvanceFrames, format: .number).frame(width: 72)
+                }
+                RateField("Advance seconds", value: config.sourceAdvanceSeconds, range: 0...3600, suffix: "s")
+                Toggle("Loop source", isOn: config.loopSource)
+            }
+        }
+
+        GroupBox("Limits & extras") {
+            VStack(spacing: 8) {
+                LabeledContent("Maximum frames") {
+                    TextField("0 = unlimited", value: config.maximumFrames, format: .number).frame(width: 100)
+                }
+                RateField("Maximum duration", value: config.maximumDuration, range: 0...864000, suffix: "s")
+                RateField("Keep disk free", value: config.minimumFreeDiskGB, range: 0...1024, suffix: "GB")
+                Toggle("Metadata sidecar", isOn: config.writeMetadata)
+                Toggle("Poster still", isOn: config.writePoster)
+            }
+        }
+
+        HStack {
+            Button("Export Current", action: exportCurrent)
+            Button("Capture Next") { exporter.captureNext() }
+                .disabled(exporter.state != .recording)
+        }
+        HStack {
+            Button("Start") { exporter.start() }
+                .disabled(exporter.destinationURL == nil || exporter.state == .recording || exporter.state == .finishing)
+            Button("Stop") { exporter.stop() }.disabled(exporter.state != .recording)
+            Button("Cancel") { exporter.stop(cancelled: true) }.disabled(exporter.state != .recording)
+        }
+        Text("\(exporter.statusText) · \(exporter.capturedFrames) frames · \(exporter.duplicatedFrames) duplicate · \(exporter.droppedFrames) dropped")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if let progress = exporter.progress {
+            ProgressView(value: progress)
+        }
+        if exporter.configuration.outputKind == .gif {
+            Text("GIF uses an indexed palette; transparency and sub-centisecond frame delays are approximate.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    private func gateBinding<T>(_ index: Int, _ keyPath: WritableKeyPath<CaptureGate, T>) -> Binding<T> {
+        Binding {
+            exporter.configuration.gates[index][keyPath: keyPath]
+        } set: { value in
+            guard exporter.configuration.gates.indices.contains(index) else { return }
+            exporter.configuration.gates[index][keyPath: keyPath] = value
+        }
+    }
+
+    private func exportLabel(_ value: ExportOutputKind) -> String {
+        switch value { case .still: "Still"; case .movie: "Movie"; case .imageSequence: "Image sequence"; case .gif: "GIF" }
+    }
+    private func codecLabel(_ value: ExportMovieCodec) -> String {
+        switch value { case .h264: "H.264"; case .hevc: "HEVC"; case .proRes422: "ProRes 422"; case .proRes422HQ: "ProRes 422 HQ"; case .proRes4444: "ProRes 4444" }
+    }
+    private func triggerLabel(_ value: CaptureTrigger) -> String {
+        camelLabel(value.rawValue)
+    }
+    private func gateLabel(_ value: CaptureGateKind) -> String {
+        camelLabel(value.rawValue)
+    }
+    private func camelLabel(_ value: String) -> String {
+        value.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).capitalized
+    }
+}
+
+private struct RateField: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let suffix: String
+
+    init(_ title: String, value: Binding<Double>, range: ClosedRange<Double> = 0.001...360, suffix: String = "") {
+        self.title = title; self._value = value; self.range = range; self.suffix = suffix
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 4) {
+                TextField(title, value: $value, format: .number.precision(.fractionLength(0...3)))
+                    .frame(width: 86).textFieldStyle(.roundedBorder)
+                    .onSubmit { value = min(range.upperBound, max(range.lowerBound, value)) }
+                if !suffix.isEmpty { Text(suffix).foregroundStyle(.secondary) }
+            }
         }
     }
 }

@@ -45,6 +45,7 @@
 		7A46446167656D52AAD61F91 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
 		7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */; };
 		8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C5A560087A8027F400A91B /* LineWalkTests.swift */; };
+		833262C300EA850219563B22 /* OutputStreamExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE6E7B68623AE7FFDEC21DB /* OutputStreamExporter.swift */; };
 		869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */; };
 		88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
 		88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */; };
@@ -72,6 +73,7 @@
 		C26C6DBC05DE084E1B4DA33B /* CameraExtensionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */; };
 		C39390A667FE1AE7DA36DEA5 /* SyntheticLandmarkGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADB3CDD39AC71FF4499B6528 /* SyntheticLandmarkGenerator.swift */; };
 		C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */; };
+		C5971C8CB4E97DDA4AD79C3D /* ExportConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A2ADF99B728A98F5A906B2 /* ExportConfiguration.swift */; };
 		C6A599DD32DCFD1680A9C53C /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
 		C87529AB29628FA1EB349EAE /* TrackedMotionFieldProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */; };
 		C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */; };
@@ -85,12 +87,14 @@
 		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
 		DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */; };
 		DC1AD4420A3047544009C546 /* OpticalFlowFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A63B02550B658217469650 /* OpticalFlowFieldProviderSelfCheck.swift */; };
+		DC243E3B79A14A1FE624C935 /* PerformanceEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53CC0D22F039EDD469473E8D /* PerformanceEventLog.swift */; };
 		DEB84A185E52E975B0D4F74E /* AcrylicConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */; };
 		E5383731BB4BFCECB3CC7913 /* BodyHullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */; };
 		E598C200049D557A9ADF8F10 /* SketchCamState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69372C0E7B99EADDD8731E11 /* SketchCamState.swift */; };
 		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
 		EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */; };
 		EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B76938CF9C16060A016345E /* ControlFieldGraph.swift */; };
+		F7F153CEC156E1593CD068A6 /* ExportConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */; };
 		F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEAB9229D624BE20FB261892 /* Assets.xcassets */; };
 		FD3836D973381874AC5BC066 /* PresetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291424DBAD8774D373DAC93E /* PresetStore.swift */; };
 		FFBBD15157D1674733BD39A0 /* GPUControlFieldStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE95665DB6FBF3B8F84AF9 /* GPUControlFieldStore.swift */; };
@@ -182,6 +186,7 @@
 		2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyHullTests.swift; sourceTree = "<group>"; };
 		2836CF880DAF3F0A8928640F /* LineWalk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalk.swift; sourceTree = "<group>"; };
 		291424DBAD8774D373DAC93E /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
+		2FE6E7B68623AE7FFDEC21DB /* OutputStreamExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputStreamExporter.swift; sourceTree = "<group>"; };
 		33A62B38FB62959937129F6F /* ProcessingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingSettings.swift; sourceTree = "<group>"; };
 		34C077C1A613941A722E856D /* FrameFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormat.swift; sourceTree = "<group>"; };
 		3803EA2DB77B7DC43D6D7744 /* ControlFieldCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlFieldCoordinator.swift; sourceTree = "<group>"; };
@@ -196,6 +201,7 @@
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
 		5219B099618056834D2AEF4C /* LayerGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerGraphTests.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
+		53CC0D22F039EDD469473E8D /* PerformanceEventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceEventLog.swift; sourceTree = "<group>"; };
 		5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProviderSelfCheck.swift; sourceTree = "<group>"; };
 		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
@@ -206,6 +212,7 @@
 		6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLineRenderer.swift; sourceTree = "<group>"; };
 		70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferPreview.swift; sourceTree = "<group>"; };
 		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportConfigurationTests.swift; sourceTree = "<group>"; };
 		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
 		7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviePlaybackSource.swift; sourceTree = "<group>"; };
 		85F10111FD7F23C099A99795 /* ControlFieldGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlFieldGraphTests.swift; sourceTree = "<group>"; };
@@ -231,6 +238,7 @@
 		B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProvider.swift; sourceTree = "<group>"; };
 		B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkObservation.swift; sourceTree = "<group>"; };
 		BA070CBC57DBE52F7CB11C5C /* ProcessorThroughputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessorThroughputTests.swift; sourceTree = "<group>"; };
+		C1A2ADF99B728A98F5A906B2 /* ExportConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportConfiguration.swift; sourceTree = "<group>"; };
 		C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = InkWashShaders.metal; sourceTree = "<group>"; };
 		C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkDetectionService.swift; sourceTree = "<group>"; };
 		C63392630883E5E55B589354 /* SketchCamCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -351,6 +359,8 @@
 			children = (
 				B114A15FAA4899558AA203BB /* CanvasActionHistory.swift */,
 				96EBEE96DC987956AD1E458A /* ContentView.swift */,
+				2FE6E7B68623AE7FFDEC21DB /* OutputStreamExporter.swift */,
+				53CC0D22F039EDD469473E8D /* PerformanceEventLog.swift */,
 				ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */,
 				291424DBAD8774D373DAC93E /* PresetStore.swift */,
 				A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */,
@@ -384,6 +394,7 @@
 				0ABB67374102E461263FC61A /* CanvasActionLedgerTests.swift */,
 				85F10111FD7F23C099A99795 /* ControlFieldGraphTests.swift */,
 				01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */,
+				77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */,
 				61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */,
 				4B257710C9008790891F0103 /* LayerGraphCompositorParityTests.swift */,
 				5219B099618056834D2AEF4C /* LayerGraphTests.swift */,
@@ -530,6 +541,7 @@
 				6A11527CED2B1176DBD497CA /* CanvasActionLedger.swift */,
 				1B76938CF9C16060A016345E /* ControlFieldGraph.swift */,
 				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
+				C1A2ADF99B728A98F5A906B2 /* ExportConfiguration.swift */,
 				7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */,
 				B02169792350DA5793406338 /* LayerGraph.swift */,
 				2836CF880DAF3F0A8928640F /* LineWalk.swift */,
@@ -763,7 +775,9 @@
 				C49C8C9DC6B1D85E98D46DAC /* MoviePlaybackSource.swift in Sources */,
 				29DF29EB20777989E0A4AEEB /* OpticalFlowFieldProvider.swift in Sources */,
 				DC1AD4420A3047544009C546 /* OpticalFlowFieldProviderSelfCheck.swift in Sources */,
+				833262C300EA850219563B22 /* OutputStreamExporter.swift in Sources */,
 				2AE02D6F5621DCBEB301F779 /* PaperControlFieldProvider.swift in Sources */,
+				DC243E3B79A14A1FE624C935 /* PerformanceEventLog.swift in Sources */,
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				FD3836D973381874AC5BC066 /* PresetStore.swift in Sources */,
@@ -794,6 +808,7 @@
 				2E64E4D8A8372D03B42373B1 /* CanvasActionLedger.swift in Sources */,
 				EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */,
 				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
+				C5971C8CB4E97DDA4AD79C3D /* ExportConfiguration.swift in Sources */,
 				D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */,
 				66D99898FC53D50F55AFB2E3 /* LayerGraph.swift in Sources */,
 				D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */,
@@ -812,6 +827,7 @@
 				C09D440065D650F8709BA319 /* CanvasActionLedgerTests.swift in Sources */,
 				105F4A2BFDBC46CB4A634777 /* ControlFieldGraphTests.swift in Sources */,
 				117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */,
+				F7F153CEC156E1593CD068A6 /* ExportConfigurationTests.swift in Sources */,
 				AD38C7B038CA3355BEF19A34 /* FrameFormatTests.swift in Sources */,
 				1280A5C4C280516FC2EC2EF9 /* LayerGraphCompositorParityTests.swift in Sources */,
 				34FE163B36F97ECD02BD4C25 /* LayerGraphTests.swift in Sources */,

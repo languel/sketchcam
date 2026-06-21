@@ -8,6 +8,16 @@ import SketchCamCore
 import SketchCamShared
 import UniformTypeIdentifiers
 
+private final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+    init(_ value: Value) { storage = value }
+    var value: Value {
+        get { lock.withLock { storage } }
+        set { lock.withLock { storage = newValue } }
+    }
+}
+
 /// Separate observable for the high-frequency preview image + debug stats, so
 /// updating them (~4 Hz) only invalidates the small views that read them, not
 /// the whole control panel. See `SketchCamViewModel.live`.
@@ -75,6 +85,7 @@ final class SketchCamViewModel: ObservableObject {
     /// SwiftUI Picker tag projections / Observation registrars on every pass).
     /// Only the small views that show them observe this store.
     let live = LiveReadouts()
+    let exporter = OutputStreamExporter()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -104,6 +115,7 @@ final class SketchCamViewModel: ObservableObject {
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
     private let canvasActions = CanvasActionHistory()
+    private let performanceEvents = PerformanceEventLog()
     @Published private(set) var canvasHistoryRevision = 0
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
@@ -127,6 +139,8 @@ final class SketchCamViewModel: ObservableObject {
     private var frozenFrame: CVPixelBuffer?
     private let exportLock = NSLock()
     private var lastPublishedFrame: CVPixelBuffer?
+    private var lastOriginalPublishedFrame: CVPixelBuffer?
+    private let nrtQueue = DispatchQueue(label: "io.github.languel.sketchcam.nrt", qos: .userInitiated)
     private var movieRateBeforePause: Double = 1
     private var lastPreviewTime: CFAbsoluteTime = 0
     private var lastStatsTime: CFAbsoluteTime = 0
@@ -139,11 +153,15 @@ final class SketchCamViewModel: ObservableObject {
     private var fpsStartTime = CFAbsoluteTimeGetCurrent()
     private var fpsFrameCount = 0
     private var testPatternTimer: DispatchSourceTimer?
+    private var activeExportStroke: (id: UUID, mode: InkBrushMode, samples: Int)?
 
     /// Preview readback cadence; publishing runs at full frame rate regardless.
     private let statsInterval: CFAbsoluteTime = 0.25
 
     init() {
+        gpuCompositor?.metricTap = { [weak exporter] layerID, buffer in
+            exporter?.updateStreamMetrics(layerID: layerID, pixelBuffer: buffer)
+        }
         captureService.onConfigurationChanged = { [weak self] size in
             DispatchQueue.main.async {
                 self?.live.stats.cameraResolution = size
@@ -154,6 +172,15 @@ final class SketchCamViewModel: ObservableObject {
         }
         movieSource.onPixelBuffer = { [weak self] pixelBuffer in
             self?.handleMovieFrame(pixelBuffer)
+        }
+        exporter.onAcceptedFrame = { [weak self] _ in
+            guard let self, self.frameSource == .movie else { return }
+            let config = self.exporter.configuration
+            let seconds = config.sourceAdvanceSeconds + Double(config.sourceAdvanceFrames) / 30.0
+            if seconds > 0 { self.movieSource.step(seconds: seconds, loop: config.loopSource) }
+        }
+        exporter.onNRTRequested = { [weak self] configuration in
+            self?.beginNRT(configuration)
         }
     }
 
@@ -221,8 +248,7 @@ final class SketchCamViewModel: ObservableObject {
         }
     }
 
-    /// Export the most recently published frame (full output resolution,
-    /// PNG with alpha) via a save panel.
+    /// Export the most recently published frame using the Export panel's still settings.
     func exportCurrentFrame() {
         let frame = exportLock.withLock { lastPublishedFrame }
         guard let frame else {
@@ -230,32 +256,221 @@ final class SketchCamViewModel: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        let format = exporter.configuration.imageFormat
+        panel.allowedContentTypes = [Self.contentType(for: format)]
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        panel.nameFieldStringValue = "sketchcam-\(stamp).png"
+        panel.nameFieldStringValue = "sketchcam-\(stamp).\(format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        exporter.exportCurrent(frame, to: url)
+    }
 
-        let image = CIImage(cvPixelBuffer: frame)
-        guard let cgImage = Self.sharedCIContext.createCGImage(
-            image,
-            from: image.extent,
-            format: .BGRA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        ) else {
-            errorText = "Could not render export image."
+    func chooseExportDestination() {
+        let config = exporter.configuration
+        if config.outputKind == .imageSequence {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false; panel.canChooseDirectories = true
+            panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+            panel.prompt = "Choose"
+            if panel.runModal() == .OK { exporter.destinationURL = panel.url }
             return
         }
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = rep.representation(using: .png, properties: [:]) else {
-            errorText = "Could not encode PNG."
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        switch config.outputKind {
+        case .still: panel.allowedContentTypes = [Self.contentType(for: config.imageFormat)]
+        case .gif: panel.allowedContentTypes = [.gif]
+        case .movie: panel.allowedContentTypes = [config.container == .mp4 ? .mpeg4Movie : .quickTimeMovie]
+        case .imageSequence: break
+        }
+        panel.nameFieldStringValue = config.takeName + "." + exportExtension(config)
+        if panel.runModal() == .OK { exporter.destinationURL = panel.url }
+    }
+
+    private func exportExtension(_ config: ExportConfiguration) -> String {
+        switch config.outputKind {
+        case .still: config.imageFormat.fileExtension
+        case .imageSequence: ""
+        case .gif: "gif"
+        case .movie: config.container.rawValue
+        }
+    }
+
+    private static func contentType(for format: ExportImageFormat) -> UTType {
+        switch format {
+        case .png: .png
+        case .tiff: .tiff
+        case .jpeg: .jpeg
+        case .heif: .heic
+        }
+    }
+
+    private func beginNRT(_ configuration: ExportConfiguration) {
+        let source = exportLock.withLock {
+            configuration.renderMode == .nrtContinue ? lastPublishedFrame : (lastOriginalPublishedFrame ?? lastPublishedFrame)
+        }
+        guard let source else {
+            exporter.stop(cancelled: true)
+            errorText = "No source frame is available for offline rendering."
             return
         }
-        do {
-            try data.write(to: url)
-        } catch {
-            errorText = "Export failed: \(error.localizedDescription)"
+        let sourceCopy = Self.copyPixelBuffer(source, context: Self.sharedCIContext) ?? source
+        let settings = settings
+        let events = performanceEvents.snapshot()
+        let deterministicMovieURL = frameSource == .movie ? movieURL : nil
+        nrtQueue.async { [weak self] in
+            self?.renderNRT(source: sourceCopy, movieURL: deterministicMovieURL,
+                            settings: settings, events: events, configuration: configuration)
         }
+    }
+
+    private func renderNRT(source: CVPixelBuffer, movieURL: URL?, settings: ProcessingSettings,
+                           events: [PerformanceEvent], configuration: ExportConfiguration) {
+        let format = FrameFormat(id: "export", width: configuration.width, height: configuration.height,
+                                 frameRate: max(1, Int(configuration.playbackFPS.rounded())))
+        let simulationStep = 1.0 / configuration.simulationFPS
+        let scheduled = Self.schedule(events, configuration: configuration)
+        let scheduledEnd = scheduled.last?.time ?? 0
+        let duration: Double = {
+            if configuration.maximumFrames > 0 { return Double(configuration.maximumFrames) / configuration.captureFPS }
+            if configuration.maximumDuration > 0 { return configuration.maximumDuration }
+            return max(1, scheduledEnd + 1)
+        }()
+
+        if configuration.renderMode == .nrtContinue {
+            var t = 0.0, index = 0
+            while t <= duration, exporter.isRecording {
+                exporter.offerOfflineFrame(source, frameIndex: index, renderTime: t)
+                if index.isMultiple(of: 10) { exporter.updateNRTProgress(t / max(duration, 0.001)) }
+                index += 1; t += simulationStep
+            }
+            DispatchQueue.main.async { [weak self] in if self?.exporter.isRecording == true { self?.exporter.stop() } }
+            return
+        }
+
+        let context = CIContext(options: [.cacheIntermediates: false])
+        let processor = CoreImageFrameProcessor(context: context)
+        let ink = InkLayerCompositor()
+        let movieAsset = movieURL.map(AVURLAsset.init(url:))
+        let movieGenerator: AVAssetImageGenerator? = movieAsset.map {
+            let generator = AVAssetImageGenerator(asset: $0)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            return generator
+        }
+        let movieDuration = movieAsset.map(Self.loadedDuration) ?? 0
+        var renderSettings = settings
+        var paths: [InkEditorPath] = []
+        var applied = 0, frame = 0, t = 0.0
+        while t <= duration, exporter.isRecording {
+            while applied < scheduled.count, scheduled[applied].time <= t + 0.000_001 {
+                let event = scheduled[applied].event
+                switch event.kind {
+                case .pen, .wash:
+                    if let path = event.path { paths.removeAll { $0.id == path.id }; paths.append(path) }
+                case .undo:
+                    if let id = event.actionID { paths.removeAll { $0.id == id } }
+                case .redo:
+                    if let id = event.actionID,
+                       let path = events.first(where: { $0.actionID == id && $0.path != nil })?.path {
+                        paths.removeAll { $0.id == id }; paths.append(path)
+                    }
+                case .clear: paths.removeAll()
+                case .fix: renderSettings.landmarks.inkFixRevision = (renderSettings.landmarks.inkFixRevision ?? 0) + 1
+                case .unfix: renderSettings.landmarks.inkUnfixRevision = (renderSettings.landmarks.inkUnfixRevision ?? 0) + 1
+                case .wetCanvas: renderSettings.landmarks.inkWetCanvasRevision = (renderSettings.landmarks.inkWetCanvasRevision ?? 0) + 1
+                case .dryCanvas: renderSettings.landmarks.inkDryCanvasRevision = (renderSettings.landmarks.inkDryCanvasRevision ?? 0) + 1
+                }
+                applied += 1
+            }
+            let inkImage = ink.layer(settings: renderSettings, live: nil, livePoints: [], endedLiveID: nil,
+                                     outputSize: format.size, frameIndex: frame, actionPaths: paths)
+            do {
+                let frameSource = Self.movieFrame(
+                    generator: movieGenerator, fallback: source, time: t,
+                    duration: movieDuration, loop: configuration.loopSource, context: context
+                )
+                let result = try processor.process(
+                    pixelBuffer: frameSource, settings: renderSettings, outputFormat: format,
+                    frameIndex: frame, timestamp: CMTime(seconds: t, preferredTimescale: 600_000),
+                    overlay: nil, matte: nil, webLayer: nil, inkLayer: inkImage,
+                    webAboveDrawing: renderSettings.web.placement == .aboveDrawing
+                )
+                exporter.offerOfflineFrame(result.pixelBuffer, frameIndex: frame, renderTime: t)
+                if frame.isMultiple(of: 10) { exporter.updateNRTProgress(t / max(duration, 0.001)) }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.errorText = "NRT render failed: \(error.localizedDescription)"
+                    self?.exporter.stop(cancelled: true)
+                }
+                return
+            }
+            frame += 1; t += simulationStep
+        }
+        DispatchQueue.main.async { [weak self] in if self?.exporter.isRecording == true { self?.exporter.stop() } }
+    }
+
+    private static func schedule(_ events: [PerformanceEvent], configuration: ExportConfiguration)
+        -> [(time: Double, event: PerformanceEvent)] {
+        var cursor = 0.0
+        return events.map { event in
+            let duration = max(0, event.endedAt - event.startedAt) / configuration.replaySpeed
+            let time: Double
+            switch configuration.replayTiming {
+            case .original: time = event.endedAt / configuration.replaySpeed
+            case .removeIdleGaps: cursor += duration; time = cursor
+            case .fixedGap: cursor += duration + configuration.fixedReplayGap; time = cursor
+            }
+            return (time, event)
+        }
+    }
+
+    private static func copyPixelBuffer(_ source: CVPixelBuffer, context: CIContext) -> CVPixelBuffer? {
+        var copy: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, CVPixelBufferGetWidth(source), CVPixelBufferGetHeight(source),
+                            CVPixelBufferGetPixelFormatType(source),
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &copy)
+        if let copy { context.render(CIImage(cvPixelBuffer: source), to: copy) }
+        return copy
+    }
+
+    private static func movieFrame(generator: AVAssetImageGenerator?, fallback: CVPixelBuffer,
+                                   time: Double, duration: Double, loop: Bool,
+                                   context: CIContext) -> CVPixelBuffer {
+        guard let generator, duration.isFinite, duration > 0 else { return fallback }
+        let seconds = loop ? time.truncatingRemainder(dividingBy: duration) : min(time, duration)
+        guard let image = generateCGImage(
+            generator, at: CMTime(seconds: max(0, seconds), preferredTimescale: 600_000)
+        ) else { return fallback }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, image.width, image.height, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
+        guard let buffer else { return fallback }
+        context.render(CIImage(cgImage: image), to: buffer)
+        return buffer
+    }
+
+    private static func loadedDuration(_ asset: AVAsset) -> Double {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = LockedBox<Double>(0)
+        Task {
+            if let duration = try? await asset.load(.duration) { box.value = duration.seconds }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value
+    }
+
+    private static func generateCGImage(_ generator: AVAssetImageGenerator, at time: CMTime) -> CGImage? {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = LockedBox<CGImage?>(nil)
+        generator.generateCGImageAsynchronously(for: time) { image, _, _ in
+            box.value = image
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value
     }
 
     private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
@@ -276,16 +491,32 @@ final class SketchCamViewModel: ObservableObject {
 
     // MARK: - Ink live stroke (main thread → engine, off the settings path)
 
-    func updateInkLiveStroke(_ sample: InkLiveStrokeSample) { inkLiveStroke.update(sample) }
-    func endInkLiveStroke() { inkLiveStroke.end() }
+    func updateInkLiveStroke(_ sample: InkLiveStrokeSample) {
+        if activeExportStroke?.id != sample.id {
+            activeExportStroke = (sample.id, sample.brushMode, 1)
+            exporter.signal(sample.brushMode == .pen ? .drawBegin : .washBegin)
+        }
+        else { activeExportStroke?.samples += 1 }
+        inkLiveStroke.update(sample)
+    }
+    func endInkLiveStroke() {
+        if let activeExportStroke {
+            exporter.signal(activeExportStroke.mode == .pen ? .drawEnd : .washEnd)
+        }
+        activeExportStroke = nil
+        inkLiveStroke.end()
+    }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
 
     func commitImmediateCanvasStroke(_ path: InkEditorPath) {
         canvasActions.commitImmediate(path)
         canvasHistoryRevision &+= 1
+        performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash, path: path)
+        exporter.signal(.anyCanvasAction, actionID: path.id)
     }
 
     func replaceEditableCanvasPaths(_ paths: [InkEditorPath]) {
+        performanceEvents.migrateIfEmpty(paths)
         canvasActions.replaceEditablePaths(paths)
         canvasHistoryRevision &+= 1
     }
@@ -298,6 +529,7 @@ final class SketchCamViewModel: ObservableObject {
         cancelInkLiveStroke()
         let action = canvasActions.undo()
         if action != nil { canvasHistoryRevision &+= 1 }
+        if let action { performanceEvents.append(kind: .undo, actionID: action.id); exporter.signal(.anyCanvasAction, actionID: action.id) }
         return action
     }
 
@@ -306,6 +538,7 @@ final class SketchCamViewModel: ObservableObject {
         cancelInkLiveStroke()
         let action = canvasActions.redo()
         if action != nil { canvasHistoryRevision &+= 1 }
+        if let action { performanceEvents.append(kind: .redo, actionID: action.id); exporter.signal(.anyCanvasAction, actionID: action.id) }
         return action
     }
 
@@ -313,7 +546,23 @@ final class SketchCamViewModel: ObservableObject {
         cancelInkLiveStroke()
         canvasActions.clear()
         canvasHistoryRevision &+= 1
+        performanceEvents.append(kind: .clear)
+        exporter.signal(.anyCanvasAction)
     }
+
+    func signalCanvasAction(path: InkEditorPath? = nil) {
+        if let path {
+            performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash, path: path)
+        }
+        exporter.signal(.anyCanvasAction, actionID: path?.id)
+    }
+
+    func recordPerformanceCommand(_ kind: PerformanceEventKind) {
+        performanceEvents.append(kind: kind)
+        exporter.signal(.anyCanvasAction)
+    }
+
+    func performanceEventSnapshot() -> [PerformanceEvent] { performanceEvents.snapshot() }
 
     // MARK: - Web layer controls (main thread)
 
@@ -642,6 +891,11 @@ final class SketchCamViewModel: ObservableObject {
                         controlFields: controlFields
                     )
                 }
+                let inkActivity = self.inkCompositor.activitySnapshot
+                self.exporter.updateInkActivity(
+                    solverActive: inkActivity.solverActive,
+                    change: inkActivity.physicalChange
+                )
                 // Overlay renders async; report the latest render duration
                 // (like detect/segment), not the ~0ms cache fetch.
                 self.timings.record(.overlay, seconds: self.overlayCompositor.lastRenderMillis / 1_000)
@@ -838,7 +1092,11 @@ final class SketchCamViewModel: ObservableObject {
         timings.measure(.publish) {
             publisher.publish(sampleBuffer)
         }
-        exportLock.withLock { lastPublishedFrame = pixelBuffer }
+        exportLock.withLock {
+            lastPublishedFrame = pixelBuffer
+            lastOriginalPublishedFrame = originalPixelBuffer
+        }
+        exporter.offerFrame(pixelBuffer, frameIndex: frameIndex)
         let fps = updateFPS()
 
         // Preview/display is decoupled from publishing: the virtual camera gets
