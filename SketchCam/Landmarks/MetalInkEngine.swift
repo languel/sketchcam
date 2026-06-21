@@ -20,6 +20,67 @@ enum InkUndoPreferences {
     }
 }
 
+/// An immutable, exact copy of every persistent GPU field that defines the
+/// current ink artifact. The textures are private copies, so an offline renderer
+/// can continue the simulation without mutating or stalling the live engine.
+final class MetalInkStateSnapshot: @unchecked Sendable {
+    fileprivate let deviceRegistryID: UInt64
+    fileprivate let outputWidth: Int
+    fileprivate let outputHeight: Int
+    fileprivate let velocity: MTLTexture
+    fileprivate let pressure: MTLTexture
+    fileprivate let ink: MTLTexture
+    fileprivate let fixed: MTLTexture
+    fileprivate let wet: MTLTexture
+    fileprivate let locked: MTLTexture
+    fileprivate let paths: [InkEditorPath]
+    fileprivate let activeFramesRemaining: Int
+    fileprivate let fixTimer: Float
+    fileprivate let brushLift: Float
+    fileprivate let clearFade: Float
+    fileprivate let clearFadeActive: Bool
+    fileprivate let fixRevision: Int
+    fileprivate let unfixRevision: Int
+    fileprivate let wetCanvasRevision: Int
+    fileprivate let dryCanvasRevision: Int
+    fileprivate let rebuildRevision: Int
+    fileprivate let clearFadeRevision: Int
+
+    var outputSize: CGSize { CGSize(width: outputWidth, height: outputHeight) }
+    var actionPaths: [InkEditorPath] { paths }
+
+    fileprivate init(deviceRegistryID: UInt64, outputWidth: Int, outputHeight: Int,
+                     velocity: MTLTexture, pressure: MTLTexture, ink: MTLTexture,
+                     fixed: MTLTexture, wet: MTLTexture, locked: MTLTexture,
+                     paths: [InkEditorPath], activeFramesRemaining: Int,
+                     fixTimer: Float, brushLift: Float, clearFade: Float,
+                     clearFadeActive: Bool, fixRevision: Int, unfixRevision: Int,
+                     wetCanvasRevision: Int, dryCanvasRevision: Int,
+                     rebuildRevision: Int, clearFadeRevision: Int) {
+        self.deviceRegistryID = deviceRegistryID
+        self.outputWidth = outputWidth
+        self.outputHeight = outputHeight
+        self.velocity = velocity
+        self.pressure = pressure
+        self.ink = ink
+        self.fixed = fixed
+        self.wet = wet
+        self.locked = locked
+        self.paths = paths
+        self.activeFramesRemaining = activeFramesRemaining
+        self.fixTimer = fixTimer
+        self.brushLift = brushLift
+        self.clearFade = clearFade
+        self.clearFadeActive = clearFadeActive
+        self.fixRevision = fixRevision
+        self.unfixRevision = unfixRevision
+        self.wetCanvasRevision = wetCanvasRevision
+        self.dryCanvasRevision = dryCanvasRevision
+        self.rebuildRevision = rebuildRevision
+        self.clearFadeRevision = clearFadeRevision
+    }
+}
+
 final class MetalInkEngine {
     private static let dyeBase = 2048
     private static let simBase = 256
@@ -368,7 +429,7 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
         let l = settings.landmarks
@@ -529,7 +590,8 @@ final class MetalInkEngine {
             // speed/pressure and the fluid step stay correct when the frame rate
             // is irregular (notably right after the app is tabbed out and back).
             let now = CFAbsoluteTimeGetCurrent()
-            let dt: Float = lastStepTime > 0 ? Float(min(1.0 / 20.0, max(1.0 / 120.0, now - lastStepTime))) : 1.0 / 60.0
+            let dt: Float = fixedDeltaTime.map { max(0, min(1.0 / 20.0, $0)) }
+                ?? (lastStepTime > 0 ? Float(min(1.0 / 20.0, max(1.0 / 120.0, now - lastStepTime))) : 1.0 / 60.0)
             lastStepTime = now
             if clearFadeActive {
                 clearFade = max(0, clearFade - dt / fadeDuration)
@@ -551,7 +613,7 @@ final class MetalInkEngine {
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
             }
-            if !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
+            if advanceSimulation, !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
@@ -572,6 +634,101 @@ final class MetalInkEngine {
         let image = CIImage(cvPixelBuffer: outputBuffer).cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
         cachedImage = image
         return image
+    }
+
+    /// Copies the complete current physical state into independent GPU
+    /// textures. This is intentionally separate from the bounded undo ring:
+    /// the caller owns the snapshot for exactly one offline export session.
+    func makeStateSnapshot() -> MetalInkStateSnapshot? {
+        guard outputSize.x > 0, outputSize.y > 0,
+              let velocity = velocity?.read,
+              let pressure = pressure?.read,
+              let ink = ink?.read,
+              let fixed = fixed?.read,
+              let wet = wet?.read,
+              let locked,
+              let velocityCopy = makeTexture(width: velocity.width, height: velocity.height, format: velocity.pixelFormat),
+              let pressureCopy = makeTexture(width: pressure.width, height: pressure.height, format: pressure.pixelFormat),
+              let inkCopy = makeTexture(width: ink.width, height: ink.height, format: ink.pixelFormat),
+              let fixedCopy = makeTexture(width: fixed.width, height: fixed.height, format: fixed.pixelFormat),
+              let wetCopy = makeTexture(width: wet.width, height: wet.height, format: wet.pixelFormat),
+              let lockedCopy = makeTexture(width: locked.width, height: locked.height, format: locked.pixelFormat),
+              let commandBuffer = queue.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return nil }
+        copy(velocity, to: velocityCopy, using: blit)
+        copy(pressure, to: pressureCopy, using: blit)
+        copy(ink, to: inkCopy, using: blit)
+        copy(fixed, to: fixedCopy, using: blit)
+        copy(wet, to: wetCopy, using: blit)
+        copy(locked, to: lockedCopy, using: blit)
+        blit.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { return nil }
+        return MetalInkStateSnapshot(
+            deviceRegistryID: device.registryID,
+            outputWidth: Int(outputSize.x), outputHeight: Int(outputSize.y),
+            velocity: velocityCopy, pressure: pressureCopy, ink: inkCopy,
+            fixed: fixedCopy, wet: wetCopy, locked: lockedCopy,
+            paths: replayedPaths, activeFramesRemaining: activeFramesRemaining,
+            fixTimer: fixTimer, brushLift: brushLift, clearFade: clearFade,
+            clearFadeActive: clearFadeActive, fixRevision: lastFixRevision,
+            unfixRevision: lastUnfixRevision, wetCanvasRevision: lastWetCanvasRevision,
+            dryCanvasRevision: lastDryCanvasRevision, rebuildRevision: lastRebuildRevision,
+            clearFadeRevision: lastClearFadeRevision
+        )
+    }
+
+    /// Seeds a fresh engine from an immutable physical snapshot. The snapshot
+    /// must originate on the same Metal device; all fields are copied again so
+    /// the offline engine can evolve independently.
+    func restoreStateSnapshot(_ snapshot: MetalInkStateSnapshot) -> Bool {
+        guard snapshot.deviceRegistryID == device.registryID,
+              configure(width: snapshot.outputWidth, height: snapshot.outputHeight),
+              let velocity, let pressure, let ink, let fixed, let wet, let locked,
+              let commandBuffer = queue.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return false }
+        copy(snapshot.velocity, to: velocity.read, using: blit)
+        copy(snapshot.velocity, to: velocity.write, using: blit)
+        copy(snapshot.pressure, to: pressure.read, using: blit)
+        copy(snapshot.pressure, to: pressure.write, using: blit)
+        copy(snapshot.ink, to: ink.read, using: blit)
+        copy(snapshot.ink, to: ink.write, using: blit)
+        copy(snapshot.fixed, to: fixed.read, using: blit)
+        copy(snapshot.fixed, to: fixed.write, using: blit)
+        copy(snapshot.wet, to: wet.read, using: blit)
+        copy(snapshot.wet, to: wet.write, using: blit)
+        copy(snapshot.locked, to: locked, using: blit)
+        blit.endEncoding()
+        if let divergence { encodeClear(divergence, commandBuffer: commandBuffer) }
+        if let curl { encodeClear(curl, commandBuffer: commandBuffer) }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { return false }
+
+        rebuildKey = RebuildKey(outputWidth: snapshot.outputWidth, outputHeight: snapshot.outputHeight)
+        replayedPaths = snapshot.paths
+        activeFramesRemaining = snapshot.activeFramesRemaining
+        fixTimer = snapshot.fixTimer
+        brushLift = snapshot.brushLift
+        clearFade = snapshot.clearFade
+        clearFadeActive = snapshot.clearFadeActive
+        lastFixRevision = snapshot.fixRevision
+        lastUnfixRevision = snapshot.unfixRevision
+        lastWetCanvasRevision = snapshot.wetCanvasRevision
+        lastDryCanvasRevision = snapshot.dryCanvasRevision
+        lastRebuildRevision = snapshot.rebuildRevision
+        lastClearFadeRevision = snapshot.clearFadeRevision
+        brushNow = .zero
+        livePointerStates = [:]
+        bakedLiveIDs = []
+        stateSnapshots = []
+        restoredStateThisFrame = false
+        lastFrameIndex = nil
+        lastStepTime = 0
+        lastRenderSig = nil
+        cachedImage = nil
+        return true
     }
 
     private func configure(width: Int, height: Int) -> Bool {

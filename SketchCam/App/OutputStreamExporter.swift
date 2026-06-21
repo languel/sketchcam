@@ -178,6 +178,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     @Published private(set) var presets: [ExportPreset] = []
     var onAcceptedFrame: ((Int) -> Void)?
     var onNRTRequested: ((ExportConfiguration) -> Void)?
+    var sourceTimeProvider: (() -> Double?)?
 
     private struct Runtime {
         var active = false
@@ -195,9 +196,10 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         var inkChange = 0.0
         var metrics: [ExportMetric: Double] = [:]
         var layerMetrics: [UUID: [ExportMetric: Double]] = [:]
-        var layerMetricSamples: [UUID: [UInt8]] = [:]
-        var metricSamples: [UInt8] = []
+        var layerMetricFrames: [UUID: CVPixelBuffer] = [:]
+        var metricFrame: CVPixelBuffer?
         var streamConditionWasTrue = false
+        var acceptedCount = 0
         var metadata: [ExportFrameMetadata] = []
     }
 
@@ -226,6 +228,10 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     }
 
     var isRecording: Bool { lock.withLock { runtime.active } }
+
+    func needsMetricTarget(_ id: UUID) -> Bool {
+        isRecording && configuration.gates.contains { $0.enabled && $0.kind == .streamMetric && $0.layerID == id }
+    }
 
     func applyPreset(_ preset: BuiltInPreset) {
         var value = ExportConfiguration()
@@ -379,23 +385,18 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
 
     func updateStreamMetrics(layerID: UUID, pixelBuffer: CVPixelBuffer) {
         guard isRecording, configuration.gates.contains(where: { $0.enabled && $0.layerID == layerID }) else { return }
-        let measured = sampleMetrics(pixelBuffer)
+        let previous = lock.withLock { runtime.layerMetricFrames[layerID] }
+        let measured = reduceMetrics(pixelBuffer, previous: previous)
+        let retained = copyPixelBuffer(pixelBuffer) ?? pixelBuffer
         lock.withLock {
-            let previous = runtime.layerMetricSamples[layerID] ?? []
-            var values: [ExportMetric: Double] = [
+            runtime.layerMetrics[layerID] = [
                 .meanLuma: measured.meanLuma,
                 .alphaCoverage: measured.alphaCoverage,
-                .thresholdCoverage: measured.thresholdCoverage
+                .thresholdCoverage: measured.thresholdCoverage,
+                .frameChange: measured.frameChange,
+                .motionMagnitude: measured.frameChange
             ]
-            if previous.count == measured.samples.count, !previous.isEmpty {
-                let change = zip(previous, measured.samples).reduce(0.0) {
-                    $0 + abs(Double($1.0) - Double($1.1)) / 255
-                } / Double(previous.count)
-                values[.frameChange] = change
-                values[.motionMagnitude] = change
-            }
-            runtime.layerMetrics[layerID] = values
-            runtime.layerMetricSamples[layerID] = measured.samples
+            runtime.layerMetricFrames[layerID] = retained
         }
     }
 
@@ -414,23 +415,16 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
 
     private func offer(_ pixelBuffer: CVPixelBuffer, frameIndex: Int, wallTime: Double, offline: Bool) {
         if isRecording, needsMetrics {
-            let measured = sampleMetrics(pixelBuffer)
+            let previous = lock.withLock { runtime.metricFrame }
+            let measured = reduceMetrics(pixelBuffer, previous: previous)
+            let retained = copyPixelBuffer(pixelBuffer) ?? pixelBuffer
             lock.withLock {
-                let previous = runtime.metricSamples
                 runtime.metrics[.meanLuma] = measured.meanLuma
                 runtime.metrics[.alphaCoverage] = measured.alphaCoverage
                 runtime.metrics[.thresholdCoverage] = measured.thresholdCoverage
-                if previous.count == measured.samples.count, !previous.isEmpty {
-                    let total = zip(previous, measured.samples).reduce(0.0) { partial, pair in
-                        partial + abs(Double(pair.0) - Double(pair.1)) / 255.0
-                    }
-                    runtime.metrics[.frameChange] = total / Double(previous.count)
-                    runtime.metrics[.motionMagnitude] = total / Double(previous.count)
-                } else {
-                    runtime.metrics[.frameChange] = 0
-                    runtime.metrics[.motionMagnitude] = 0
-                }
-                runtime.metricSamples = measured.samples
+                runtime.metrics[.frameChange] = measured.frameChange
+                runtime.metrics[.motionMagnitude] = measured.frameChange
+                runtime.metricFrame = retained
                 if configuration.trigger == .streamCrossing {
                     let condition = gatesPass(runtime)
                     if condition, !runtime.streamConditionWasTrue { runtime.eventPending = .streamCrossing }
@@ -442,7 +436,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
             guard runtime.active else { return nil }
             let elapsed = wallTime - runtime.startedAt
             if configuration.maximumDuration > 0, elapsed >= configuration.maximumDuration { return (0, .manual, elapsed, nil) }
-            if configuration.maximumFrames > 0, runtime.metadata.count >= configuration.maximumFrames { return (0, .manual, elapsed, nil) }
+            if configuration.maximumFrames > 0, runtime.acceptedCount >= configuration.maximumFrames { return (0, .manual, elapsed, nil) }
             guard gatesPass(runtime) else { return nil }
             var count = 0; var trigger = configuration.trigger
             var actionID: UUID?
@@ -467,6 +461,15 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         if offline {
             writerSlots.wait()
         } else if cadence, writerSlots.wait(timeout: .now()) != .success {
+            let index = lock.withLock { runtime.acceptedCount }
+            lock.withLock {
+                runtime.metadata.append(ExportFrameMetadata(
+                    frameIndex: index, renderTime: decision.elapsed,
+                    wallTime: Date().timeIntervalSince1970, trigger: decision.trigger,
+                    duplicated: false, dropped: true, sourceTime: sourceTimeProvider?(),
+                    actionID: decision.actionID
+                ))
+            }
             DispatchQueue.main.async { self.droppedFrames += decision.count }
             return
         }
@@ -481,14 +484,18 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
                     try self.checkDisk(config)
                     let (buffer, image) = try self.render(source, config: config)
                     if self.posterImage == nil { self.posterImage = image }
-                    let index = self.lock.withLock { self.runtime.metadata.count }
+                    let index = self.lock.withLock { self.runtime.acceptedCount }
                     let time = CMTime(seconds: ExportTiming.presentationTime(frameIndex: index, fps: config.playbackFPS),
                                       preferredTimescale: 600_000)
                     try self.sink?.append(image, pixelBuffer: buffer, time: time)
                     let meta = ExportFrameMetadata(frameIndex: index, renderTime: decision.elapsed,
                         wallTime: Date().timeIntervalSince1970, trigger: decision.trigger,
-                        duplicated: slot > 0, dropped: false, sourceTime: nil, actionID: decision.actionID)
-                    self.lock.withLock { self.runtime.metadata.append(meta) }
+                        duplicated: slot > 0, dropped: false, sourceTime: self.sourceTimeProvider?(),
+                        actionID: decision.actionID)
+                    self.lock.withLock {
+                        self.runtime.metadata.append(meta)
+                        self.runtime.acceptedCount += 1
+                    }
                     DispatchQueue.main.async {
                         self.capturedFrames += 1
                         if slot > 0 { self.duplicatedFrames += 1 }
@@ -540,35 +547,44 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Sparse post-composite sampling. It runs only during an export session
-    /// that requests a metric, and avoids a full-frame CPU readback.
-    private func sampleMetrics(_ buffer: CVPixelBuffer) ->
-        (meanLuma: Double, alphaCoverage: Double, thresholdCoverage: Double, samples: [UInt8]) {
-        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA else {
-            return (0, 0, 0, [])
+    /// GPU reductions for export gates. Full frames remain in GPU/IOSurface
+    /// memory; only four bytes per metric cross back to the CPU.
+    private func reduceMetrics(_ buffer: CVPixelBuffer, previous: CVPixelBuffer?) ->
+        (meanLuma: Double, alphaCoverage: Double, thresholdCoverage: Double, frameChange: Double) {
+        let image = CIImage(cvPixelBuffer: buffer)
+        let luma = image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+            "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+            "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+        ])
+        let threshold = luma.applyingFilter("CIColorThreshold", parameters: ["inputThreshold": 0.5])
+        let alpha = image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
+        let change: CIImage? = previous.map {
+            image.applyingFilter("CIDifferenceBlendMode", parameters: [kCIInputBackgroundImageKey: CIImage(cvPixelBuffer: $0)])
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                    "inputGVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0),
+                    "inputBVector": CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+                ])
         }
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return (0, 0, 0, []) }
-        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
-        let stride = CVPixelBufferGetBytesPerRow(buffer)
-        let columns = 32, rows = 18
-        var lumaTotal = 0.0, alphaCount = 0.0, thresholdCount = 0.0
-        var samples: [UInt8] = []; samples.reserveCapacity(columns * rows)
-        for row in 0..<rows {
-            let y = min(height - 1, row * height / rows)
-            let line = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
-            for column in 0..<columns {
-                let x = min(width - 1, column * width / columns), offset = x * 4
-                let b = Double(line[offset]), g = Double(line[offset + 1]), r = Double(line[offset + 2])
-                let luma = UInt8(min(255, max(0, 0.0722 * b + 0.7152 * g + 0.2126 * r)))
-                samples.append(luma); lumaTotal += Double(luma) / 255
-                if line[offset + 3] > 2 { alphaCount += 1 }
-                if luma >= 128 { thresholdCount += 1 }
-            }
-        }
-        let count = Double(max(1, samples.count))
-        return (lumaTotal / count, alphaCount / count, thresholdCount / count, samples)
+        return (areaAverage(luma), areaAverage(alpha), areaAverage(threshold), change.map(areaAverage) ?? 0)
+    }
+
+    private func areaAverage(_ image: CIImage) -> Double {
+        let average = image.applyingFilter("CIAreaAverage", parameters: [
+            kCIInputExtentKey: CIVector(cgRect: image.extent)
+        ])
+        var pixel = [UInt8](repeating: 0, count: 4)
+        context.render(average, toBitmap: &pixel, rowBytes: 4,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        return Double(pixel[0]) / 255
     }
 
     private func render(_ source: CVPixelBuffer, config: ExportConfiguration) throws -> (CVPixelBuffer, CGImage) {
@@ -612,16 +628,35 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         if config.outputKind == .imageSequence {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             var take = url.appendingPathComponent(config.takeName, isDirectory: true)
-            var suffix = 2
-            while FileManager.default.fileExists(atPath: take.path),
-                  !(try FileManager.default.contentsOfDirectory(atPath: take.path)).isEmpty {
-                take = url.appendingPathComponent(String(format: "%@-%03d", config.takeName, suffix), isDirectory: true)
-                suffix += 1
+            if config.resolvedCollisionPolicy == .replace,
+               FileManager.default.fileExists(atPath: take.path) {
+                try FileManager.default.removeItem(at: take)
+            } else {
+                var suffix = 2
+                while FileManager.default.fileExists(atPath: take.path),
+                      !(try FileManager.default.contentsOfDirectory(atPath: take.path)).isEmpty {
+                    take = url.appendingPathComponent(String(format: "%@-%03d", config.takeName, suffix), isDirectory: true)
+                    suffix += 1
+                }
             }
             try FileManager.default.createDirectory(at: take, withIntermediateDirectories: true)
             return take
         } else if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+            if config.resolvedCollisionPolicy == .replace {
+                try FileManager.default.removeItem(at: url)
+            } else {
+                let folder = url.deletingLastPathComponent()
+                let ext = url.pathExtension
+                let stem = url.deletingPathExtension().lastPathComponent
+                var suffix = 2
+                var candidate: URL
+                repeat {
+                    candidate = folder.appendingPathComponent(String(format: "%@-%03d", stem, suffix))
+                    if !ext.isEmpty { candidate.appendPathExtension(ext) }
+                    suffix += 1
+                } while FileManager.default.fileExists(atPath: candidate.path)
+                return candidate
+            }
         }
         return url
     }

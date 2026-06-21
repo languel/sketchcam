@@ -85,12 +85,16 @@ The final `publish(...)` seam offers immutable composed frames to an
 `OutputStreamExporter`. The exporter is isolated from virtual-camera and preview
 delivery, evaluates versioned trigger/gate rules, and writes accepted frames on
 its own bounded queue. Post-effect layer conditions address graph nodes by UUID;
-the Metal compositor exposes a dormant metric tap at the point immediately
-after a layer's effect chain.
+control-field conditions address providers by UUID. The Metal compositor
+exposes a dormant metric tap after each effect chain, while paper/motion fields
+publish representative scalar textures. GPU reductions return one pixel per
+requested metric.
 
-Offline rendering snapshots settings, source pixels, and the append-only
-performance event log, then uses a separate `InkLayerCompositor`,
-`CoreImageFrameProcessor`, and deterministic clock. Capture, simulation, and
+Offline rendering snapshots settings, source pixels, the append-only
+performance event log, and—when continuing—the complete physical Metal ink
+state. It uses a separate `InkLayerCompositor`, `ControlFieldCoordinator`,
+`CoreImageFrameProcessor`, and deterministic clock. Temporary Camera/Web proxy
+tracks make moving live inputs frame-addressable. Capture, simulation, and
 presentation timestamps are separate. See `notes/output-stream-exporter.md`.
 
 ## Future Boundaries

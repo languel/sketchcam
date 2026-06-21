@@ -167,6 +167,19 @@ final class ControlFieldCoordinator {
         lastPaperSeconds = 0
     }
 
+    /// Exposes one representative scalar metric field per provider for export
+    /// conditions without making control fields visible layers. Paper uses
+    /// absorbency; motion providers use motion magnitude.
+    func exportMetricFields(graph: ControlFieldGraph, width: Int, height: Int) -> [(UUID, MTLTexture)] {
+        graph.providers.compactMap { provider in
+            guard provider.enabled else { return nil }
+            let output: ControlFieldOutputID = provider.kind == .paper ? .paperAbsorbency : .motionMagnitude
+            guard provider.kind.outputs.contains(output) else { return nil }
+            return (provider.id, store.resolve(.init(provider: provider.id, output: output),
+                                               width: width, height: height).texture)
+        }
+    }
+
     private func providerClosure(
         from roots: Set<UUID>,
         settingsByID: [UUID: ControlFieldProvider],

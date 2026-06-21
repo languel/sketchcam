@@ -23,6 +23,20 @@
          </BuildActionEntry>
          <BuildActionEntry
             buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "58A8AAAEE02D280631D7BE35"
+               BuildableName = "SketchCamAppTests.xctest"
+               BlueprintName = "SketchCamAppTests"
+               ReferencedContainer = "container:SketchCam.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -75,6 +89,17 @@
                BlueprintIdentifier = "D5686A89FBFB342B441A410D"
                BuildableName = "SketchCamCoreTests.xctest"
                BlueprintName = "SketchCamCoreTests"
+               ReferencedContainer = "container:SketchCam.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "58A8AAAEE02D280631D7BE35"
+               BuildableName = "SketchCamAppTests.xctest"
+               BlueprintName = "SketchCamAppTests"
                ReferencedContainer = "container:SketchCam.xcodeproj">
             </BuildableReference>
          </TestableReference>

@@ -8,7 +8,8 @@ final class PerformanceEventLog: @unchecked Sendable {
     private var events: [PerformanceEvent] = []
     private let epoch = ProcessInfo.processInfo.systemUptime
 
-    func append(kind: PerformanceEventKind, path: InkEditorPath? = nil, actionID: UUID? = nil) {
+    func append(kind: PerformanceEventKind, path: InkEditorPath? = nil, actionID: UUID? = nil,
+                material: PerformanceMaterialSnapshot? = nil) {
         let now = ProcessInfo.processInfo.systemUptime - epoch
         let duration = path?.sampleTimes?.last ?? 0
         let event = PerformanceEvent(
@@ -17,7 +18,7 @@ final class PerformanceEventLog: @unchecked Sendable {
             endedAt: now,
             actionID: actionID ?? path?.id,
             path: path,
-            timingEstimated: path?.sampleTimes == nil
+            timingEstimated: path?.sampleTimes == nil, material: material
         )
         lock.withLock { events.append(event) }
     }

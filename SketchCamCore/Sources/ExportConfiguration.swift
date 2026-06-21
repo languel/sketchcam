@@ -42,6 +42,16 @@ public enum ExportReplayTiming: String, Codable, Sendable, CaseIterable, Identif
     public var id: String { rawValue }
 }
 
+public enum ExportLiveInputMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    case freezeLatest, recordedProxy
+    public var id: String { rawValue }
+}
+
+public enum ExportCollisionPolicy: String, Codable, Sendable, CaseIterable, Identifiable {
+    case newTake, replace
+    public var id: String { rawValue }
+}
+
 public enum CaptureTrigger: String, Codable, Sendable, CaseIterable, Identifiable {
     case cadence, interval, manual
     case mouseDown, mouseUp, click, dragBegin, dragEnd
@@ -92,7 +102,7 @@ public struct CaptureGate: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ExportConfiguration: Codable, Sendable, Equatable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
     public var version: Int
     public var outputKind: ExportOutputKind
     public var imageFormat: ExportImageFormat
@@ -123,6 +133,15 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
     public var fixedReplayGap: Double
     public var replaySpeed: Double
     public var takeName: String
+    /// Optional for backward-compatible decoding of exporter presets written
+    /// before live-input proxies and explicit collision handling existed.
+    public var liveInputMode: ExportLiveInputMode?
+    public var collisionPolicy: ExportCollisionPolicy?
+    public var sourceStartSeconds: Double?
+    public var sourceEndSeconds: Double?
+
+    public var resolvedLiveInputMode: ExportLiveInputMode { liveInputMode ?? .freezeLatest }
+    public var resolvedCollisionPolicy: ExportCollisionPolicy { collisionPolicy ?? .newTake }
 
     public init(outputKind: ExportOutputKind = .still, imageFormat: ExportImageFormat = .png,
                 movieCodec: ExportMovieCodec = .h264, container: ExportContainer = .mov,
@@ -136,7 +155,10 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
                 maximumFrames: Int = 0, maximumDuration: Double = 0,
                 minimumFreeDiskGB: Double = 1, writeMetadata: Bool = false,
                 writePoster: Bool = false, replayTiming: ExportReplayTiming = .original,
-                fixedReplayGap: Double = 0.25, replaySpeed: Double = 1, takeName: String = "take-001") {
+                fixedReplayGap: Double = 0.25, replaySpeed: Double = 1, takeName: String = "take-001",
+                liveInputMode: ExportLiveInputMode? = .freezeLatest,
+                collisionPolicy: ExportCollisionPolicy? = .newTake,
+                sourceStartSeconds: Double? = nil, sourceEndSeconds: Double? = nil) {
         self.version = Self.currentVersion
         self.outputKind = outputKind
         self.imageFormat = imageFormat
@@ -167,9 +189,14 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
         self.fixedReplayGap = fixedReplayGap
         self.replaySpeed = replaySpeed
         self.takeName = takeName
+        self.liveInputMode = liveInputMode
+        self.collisionPolicy = collisionPolicy
+        self.sourceStartSeconds = sourceStartSeconds
+        self.sourceEndSeconds = sourceEndSeconds
     }
 
     public mutating func clamp() {
+        version = Self.currentVersion
         width = max(1, width); height = max(1, height)
         captureFPS = min(360, max(0.001, captureFPS))
         playbackFPS = min(360, max(0.001, playbackFPS))
@@ -179,6 +206,11 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
         minimumEventInterval = max(0, minimumEventInterval)
         maximumFrames = max(0, maximumFrames)
         maximumDuration = max(0, maximumDuration)
+        sourceStartSeconds = sourceStartSeconds.map { max(0, $0) }
+        sourceEndSeconds = sourceEndSeconds.map { max(0, $0) }
+        if let start = sourceStartSeconds, let end = sourceEndSeconds, end < start {
+            sourceEndSeconds = start
+        }
         if !movieCodec.supportsAlpha { includeAlpha = false }
         if container == .mp4 && movieCodec != .h264 && movieCodec != .hevc { container = .mov }
     }
@@ -277,6 +309,28 @@ public enum PerformanceEventKind: String, Codable, Sendable {
     case pen, wash, fix, unfix, wetCanvas, dryCanvas, clear, undo, redo
 }
 
+public struct PerformanceMaterialSnapshot: Codable, Sendable, Equatable {
+    public var penWidth: Float
+    public var washWidth: Float
+    public var flow: Float
+    public var bleed: Float
+    public var dry: Float
+    public var colorSeparation: Float
+    public var brushInk: Float
+    public var inkKind: InkKind
+    public var inkColor: RGBAColor
+    public var washColor: RGBAColor
+
+    public init(penWidth: Float, washWidth: Float, flow: Float, bleed: Float, dry: Float,
+                colorSeparation: Float, brushInk: Float, inkKind: InkKind,
+                inkColor: RGBAColor, washColor: RGBAColor) {
+        self.penWidth = penWidth; self.washWidth = washWidth; self.flow = flow
+        self.bleed = bleed; self.dry = dry; self.colorSeparation = colorSeparation
+        self.brushInk = brushInk; self.inkKind = inkKind
+        self.inkColor = inkColor; self.washColor = washColor
+    }
+}
+
 public struct PerformanceEvent: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
     public var kind: PerformanceEventKind
@@ -285,11 +339,13 @@ public struct PerformanceEvent: Codable, Sendable, Equatable, Identifiable {
     public var actionID: UUID?
     public var path: InkEditorPath?
     public var timingEstimated: Bool
+    public var material: PerformanceMaterialSnapshot?
 
     public init(id: UUID = UUID(), kind: PerformanceEventKind, startedAt: Double,
                 endedAt: Double, actionID: UUID? = nil, path: InkEditorPath? = nil,
-                timingEstimated: Bool = false) {
+                timingEstimated: Bool = false, material: PerformanceMaterialSnapshot? = nil) {
         self.id = id; self.kind = kind; self.startedAt = startedAt; self.endedAt = endedAt
         self.actionID = actionID; self.path = path; self.timingEstimated = timingEstimated
+        self.material = material
     }
 }

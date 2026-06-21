@@ -388,18 +388,23 @@ struct ContentView: View {
     @ViewBuilder private var exportTab: some View {
         ExportPanel(
             exporter: model.exporter,
+            proxyRecorder: model.inputProxyRecorder,
             currentSize: model.outputFormat.size,
             metricLayers: exportMetricLayers,
             chooseDestination: model.chooseExportDestination,
-            exportCurrent: model.exportCurrentFrame
+            exportCurrent: model.exportCurrentFrame,
+            startProxy: { model.inputProxyRecorder.start(size: model.outputFormat.size,
+                                                         fps: model.exporter.configuration.captureFPS) }
         )
     }
 
     private var exportMetricLayers: [(id: UUID, name: String)] {
         let graph = (model.settings.layerGraph ?? .defaultGraph(from: model.settings)).reconciled(with: model.settings)
-        return graph.layers.compactMap { layer in
+        let layers = graph.layers.compactMap { layer in
             graph.node(layer.node).map { ($0.id, $0.name) }
         }
+        let fields = model.settings.resolvedControlFields.providers.map { ($0.id, "Field · \($0.name)") }
+        return layers + fields
     }
 
 
@@ -3882,10 +3887,12 @@ private struct CheckerboardBackground: View {
 
 private struct ExportPanel: View {
     @ObservedObject var exporter: OutputStreamExporter
+    @ObservedObject var proxyRecorder: TemporaryInputProxyRecorder
     let currentSize: CGSize
     let metricLayers: [(id: UUID, name: String)]
     let chooseDestination: () -> Void
     let exportCurrent: () -> Void
+    let startProxy: () -> Void
 
     private var config: Binding<ExportConfiguration> { $exporter.configuration }
 
@@ -3929,6 +3936,10 @@ private struct ExportPanel: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         .truncationMode(.middle)
                 }
+                Picker("If output exists", selection: resolvedCollisionPolicy) {
+                    Text("Create new take").tag(ExportCollisionPolicy.newTake)
+                    Text("Replace").tag(ExportCollisionPolicy.replace)
+                }
             }
         }
 
@@ -3943,8 +3954,14 @@ private struct ExportPanel: View {
                     Text("NRT · continue").tag(ExportRenderMode.nrtContinue)
                 }
                 if exporter.configuration.renderMode == .nrtContinue {
-                    Text("Continue clones the current published artifact into an isolated export; cross-resolution fluid-field continuation awaits sparse canvas checkpoints.")
-                        .font(.caption).foregroundStyle(.orange)
+                    Text("Continue clones the exact pigment, wetness, velocity, pressure, lock, and fixed-pigment fields into an isolated renderer. The live canvas is unchanged.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if exporter.configuration.renderMode != .live {
+                    Picker("Live inputs", selection: resolvedLiveInputMode) {
+                        Text("Freeze latest").tag(ExportLiveInputMode.freezeLatest)
+                        Text("Recorded proxy").tag(ExportLiveInputMode.recordedProxy)
+                    }
                 }
                 if exporter.configuration.outputKind == .still || exporter.configuration.outputKind == .imageSequence {
                     Picker("Format", selection: config.imageFormat) {
@@ -4049,11 +4066,23 @@ private struct ExportPanel: View {
 
         GroupBox("Rotoscope") {
             VStack(spacing: 8) {
+                HStack {
+                    Button(proxyRecorder.isRecording ? "Stop input proxy" : "Record input proxy") {
+                        proxyRecorder.isRecording ? proxyRecorder.stop() : startProxy()
+                    }
+                    Button("Clear", action: proxyRecorder.clear)
+                        .disabled(proxyRecorder.isRecording || proxyRecorder.recordedDuration == 0)
+                }
+                Text(proxyRecorder.statusText).font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Advance frames") {
                     TextField("0", value: config.sourceAdvanceFrames, format: .number).frame(width: 72)
                 }
                 RateField("Advance seconds", value: config.sourceAdvanceSeconds, range: 0...3600, suffix: "s")
                 Toggle("Loop source", isOn: config.loopSource)
+                RateField("Source start", value: sourceStart, range: 0...864000, suffix: "s")
+                RateField("Source end", value: sourceEnd, range: 0...864000, suffix: "s")
+                Text("Set Source end to 0 to use the full source.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
 
@@ -4097,6 +4126,26 @@ private struct ExportPanel: View {
         } set: { value in
             exporter.configuration.updateGate(id: gate.id, keyPath: keyPath, value: value)
         }
+    }
+
+    private var resolvedLiveInputMode: Binding<ExportLiveInputMode> {
+        Binding { exporter.configuration.resolvedLiveInputMode }
+        set: { exporter.configuration.liveInputMode = $0 }
+    }
+
+    private var resolvedCollisionPolicy: Binding<ExportCollisionPolicy> {
+        Binding { exporter.configuration.resolvedCollisionPolicy }
+        set: { exporter.configuration.collisionPolicy = $0 }
+    }
+
+    private var sourceStart: Binding<Double> {
+        Binding { exporter.configuration.sourceStartSeconds ?? 0 }
+        set: { exporter.configuration.sourceStartSeconds = $0 > 0 ? $0 : nil }
+    }
+
+    private var sourceEnd: Binding<Double> {
+        Binding { exporter.configuration.sourceEndSeconds ?? 0 }
+        set: { exporter.configuration.sourceEndSeconds = $0 > 0 ? $0 : nil }
     }
 
     private func exportLabel(_ value: ExportOutputKind) -> String {

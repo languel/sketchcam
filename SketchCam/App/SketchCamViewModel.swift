@@ -86,6 +86,7 @@ final class SketchCamViewModel: ObservableObject {
     /// Only the small views that show them observe this store.
     let live = LiveReadouts()
     let exporter = OutputStreamExporter()
+    let inputProxyRecorder = TemporaryInputProxyRecorder()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -177,10 +178,16 @@ final class SketchCamViewModel: ObservableObject {
             guard let self, self.frameSource == .movie else { return }
             let config = self.exporter.configuration
             let seconds = config.sourceAdvanceSeconds + Double(config.sourceAdvanceFrames) / 30.0
-            if seconds > 0 { self.movieSource.step(seconds: seconds, loop: config.loopSource) }
+            if seconds > 0, !self.movieSource.step(seconds: seconds, loop: config.loopSource) {
+                self.exporter.stop()
+            }
         }
         exporter.onNRTRequested = { [weak self] configuration in
             self?.beginNRT(configuration)
+        }
+        exporter.sourceTimeProvider = { [weak self] in
+            guard let self, self.frameSource == .movie else { return nil }
+            return self.movieSource.currentTimeSeconds
         }
     }
 
@@ -307,7 +314,7 @@ final class SketchCamViewModel: ObservableObject {
 
     private func beginNRT(_ configuration: ExportConfiguration) {
         let source = exportLock.withLock {
-            configuration.renderMode == .nrtContinue ? lastPublishedFrame : (lastOriginalPublishedFrame ?? lastPublishedFrame)
+            lastOriginalPublishedFrame ?? lastPublishedFrame
         }
         guard let source else {
             exporter.stop(cancelled: true)
@@ -317,55 +324,90 @@ final class SketchCamViewModel: ObservableObject {
         let sourceCopy = Self.copyPixelBuffer(source, context: Self.sharedCIContext) ?? source
         let settings = settings
         let events = performanceEvents.snapshot()
+        let frozenWeb = settings.web.enabled ? webController.currentImage() : nil
+        let proxy: TemporaryInputProxySnapshot?
+        if configuration.resolvedLiveInputMode == .recordedProxy {
+            guard let recorded = inputProxyRecorder.snapshot() else {
+                exporter.stop(cancelled: true)
+                errorText = "Record a Camera/Web input proxy before using Recorded proxy in NRT."
+                return
+            }
+            proxy = recorded
+        } else {
+            proxy = nil
+        }
+        let physicalState = configuration.renderMode == .nrtContinue ? inkCompositor.makeStateSnapshot() : nil
+        if configuration.renderMode == .nrtContinue, physicalState == nil {
+            exporter.stop(cancelled: true)
+            errorText = "The current ink simulation has no physical state to continue. Draw or wet the canvas first."
+            return
+        }
         let deterministicMovieURL = frameSource == .movie ? movieURL : nil
         nrtQueue.async { [weak self] in
             self?.renderNRT(source: sourceCopy, movieURL: deterministicMovieURL,
-                            settings: settings, events: events, configuration: configuration)
+                            frozenWeb: frozenWeb, proxy: proxy, settings: settings,
+                            events: events, physicalState: physicalState,
+                            configuration: configuration)
         }
     }
 
-    private func renderNRT(source: CVPixelBuffer, movieURL: URL?, settings: ProcessingSettings,
-                           events: [PerformanceEvent], configuration: ExportConfiguration) {
-        let format = FrameFormat(id: "export", width: configuration.width, height: configuration.height,
+    private func renderNRT(source: CVPixelBuffer, movieURL: URL?, frozenWeb: CIImage?,
+                           proxy: TemporaryInputProxySnapshot?, settings: ProcessingSettings,
+                           events: [PerformanceEvent], physicalState: MetalInkStateSnapshot?,
+                           configuration: ExportConfiguration) {
+        let renderSize = physicalState?.outputSize ?? CGSize(width: configuration.width, height: configuration.height)
+        let format = FrameFormat(id: "export", width: max(1, Int(renderSize.width)), height: max(1, Int(renderSize.height)),
                                  frameRate: max(1, Int(configuration.playbackFPS.rounded())))
         let simulationStep = 1.0 / configuration.simulationFPS
         let scheduled = Self.schedule(events, configuration: configuration)
-        let scheduledEnd = scheduled.last?.time ?? 0
-        let duration: Double = {
+        let scheduledEnd = scheduled.last?.end ?? 0
+        var duration: Double = {
             if configuration.maximumFrames > 0 { return Double(configuration.maximumFrames) / configuration.captureFPS }
             if configuration.maximumDuration > 0 { return configuration.maximumDuration }
             return max(1, scheduledEnd + 1)
         }()
-
-        if configuration.renderMode == .nrtContinue {
-            var t = 0.0, index = 0
-            while t <= duration, exporter.isRecording {
-                exporter.offerOfflineFrame(source, frameIndex: index, renderTime: t)
-                if index.isMultiple(of: 10) { exporter.updateNRTProgress(t / max(duration, 0.001)) }
-                index += 1; t += simulationStep
-            }
-            DispatchQueue.main.async { [weak self] in if self?.exporter.isRecording == true { self?.exporter.stop() } }
-            return
+        if !configuration.loopSource, let sourceEnd = configuration.sourceEndSeconds {
+            duration = min(duration, max(0, sourceEnd - (configuration.sourceStartSeconds ?? 0)))
         }
 
         let context = CIContext(options: [.cacheIntermediates: false])
         let processor = CoreImageFrameProcessor(context: context)
         let ink = InkLayerCompositor()
-        let movieAsset = movieURL.map(AVURLAsset.init(url:))
-        let movieGenerator: AVAssetImageGenerator? = movieAsset.map {
+        let controlCoordinator = ControlFieldCoordinator()
+        let cameraAsset = (proxy?.cameraURL ?? movieURL).map(AVURLAsset.init(url:))
+        let webAsset = proxy?.webURL.map(AVURLAsset.init(url:))
+        let movieGenerator: AVAssetImageGenerator? = cameraAsset.map {
             let generator = AVAssetImageGenerator(asset: $0)
             generator.appliesPreferredTrackTransform = true
             generator.requestedTimeToleranceBefore = .zero
             generator.requestedTimeToleranceAfter = .zero
             return generator
         }
-        let movieDuration = movieAsset.map(Self.loadedDuration) ?? 0
+        let webGenerator: AVAssetImageGenerator? = webAsset.map {
+            let generator = AVAssetImageGenerator(asset: $0)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            return generator
+        }
+        let movieDuration = cameraAsset.map(Self.loadedDuration) ?? 0
+        let webDuration = webAsset.map(Self.loadedDuration) ?? 0
         var renderSettings = settings
-        var paths: [InkEditorPath] = []
+        var paths: [InkEditorPath] = physicalState?.actionPaths ?? []
+        if let physicalState, !ink.restoreStateSnapshot(physicalState) {
+            DispatchQueue.main.async { [weak self] in
+                self?.errorText = "NRT continuation could not restore the current physical ink state."
+                self?.exporter.stop(cancelled: true)
+            }
+            return
+        }
         var applied = 0, frame = 0, t = 0.0
+        var previousInkTexture: CVPixelBuffer?
         while t <= duration, exporter.isRecording {
-            while applied < scheduled.count, scheduled[applied].time <= t + 0.000_001 {
+            while configuration.renderMode == .nrtReplay,
+                  applied < scheduled.count, scheduled[applied].end <= t + 0.000_001 {
                 let event = scheduled[applied].event
+                if let material = event.material { Self.apply(material, to: &renderSettings) }
                 switch event.kind {
                 case .pen, .wash:
                     if let path = event.path { paths.removeAll { $0.id == path.id }; paths.append(path) }
@@ -384,17 +426,52 @@ final class SketchCamViewModel: ObservableObject {
                 }
                 applied += 1
             }
-            let inkImage = ink.layer(settings: renderSettings, live: nil, livePoints: [], endedLiveID: nil,
-                                     outputSize: format.size, frameIndex: frame, actionPaths: paths)
+            var framePaths = paths
+            if configuration.renderMode == .nrtReplay {
+                for item in scheduled.dropFirst(applied)
+                    where item.start <= t && t < item.end && (item.event.kind == .pen || item.event.kind == .wash) {
+                    if let path = item.event.path,
+                       let partial = Self.partialPath(path, elapsed: t - item.start,
+                                                     duration: item.end - item.start) {
+                        framePaths.append(partial)
+                    }
+                }
+            }
             do {
                 let frameSource = Self.movieFrame(
-                    generator: movieGenerator, fallback: source, time: t,
+                    generator: movieGenerator, fallback: source,
+                    time: t + (configuration.sourceStartSeconds ?? 0),
                     duration: movieDuration, loop: configuration.loopSource, context: context
                 )
+                let webFrame = Self.movieImage(generator: webGenerator, fallback: frozenWeb,
+                                               time: t + (configuration.sourceStartSeconds ?? 0),
+                                               duration: webDuration, loop: configuration.loopSource)
+                let fields = controlCoordinator?.update(
+                    graph: renderSettings.resolvedControlFields,
+                    context: ControlFieldFrameContext(
+                        frameIndex: frame,
+                        timestamp: CMTime(seconds: t, preferredTimescale: 600_000),
+                        outputSize: format.size,
+                        cameraPixelBuffer: frameSource,
+                        moviePixelBuffer: frameSource,
+                        inkTexturePixelBuffer: previousInkTexture,
+                        detection: nil,
+                        settings: renderSettings
+                    )
+                ) ?? .empty
+                let inkImage = ink.layer(
+                    settings: renderSettings, live: nil, livePoints: [], endedLiveID: nil,
+                    outputSize: format.size, frameIndex: frame, actionPaths: framePaths,
+                    controlFields: fields, fixedDeltaTime: Float(simulationStep),
+                    advanceSimulation: frame > 0 || configuration.renderMode == .nrtReplay
+                )
+                if Self.controlGraphNeedsInkTexture(renderSettings.resolvedControlFields) {
+                    previousInkTexture = self.pixelBuffer(from: inkImage, outputFormat: format)
+                }
                 let result = try processor.process(
                     pixelBuffer: frameSource, settings: renderSettings, outputFormat: format,
                     frameIndex: frame, timestamp: CMTime(seconds: t, preferredTimescale: 600_000),
-                    overlay: nil, matte: nil, webLayer: nil, inkLayer: inkImage,
+                    overlay: nil, matte: nil, webLayer: webFrame, inkLayer: inkImage,
                     webAboveDrawing: renderSettings.web.placement == .aboveDrawing
                 )
                 exporter.offerOfflineFrame(result.pixelBuffer, frameIndex: frame, renderTime: t)
@@ -411,19 +488,87 @@ final class SketchCamViewModel: ObservableObject {
         DispatchQueue.main.async { [weak self] in if self?.exporter.isRecording == true { self?.exporter.stop() } }
     }
 
+    private struct ScheduledPerformanceEvent {
+        var start: Double
+        var end: Double
+        var event: PerformanceEvent
+    }
+
     private static func schedule(_ events: [PerformanceEvent], configuration: ExportConfiguration)
-        -> [(time: Double, event: PerformanceEvent)] {
+        -> [ScheduledPerformanceEvent] {
         var cursor = 0.0
         return events.map { event in
             let duration = max(0, event.endedAt - event.startedAt) / configuration.replaySpeed
-            let time: Double
+            let start: Double
             switch configuration.replayTiming {
-            case .original: time = event.endedAt / configuration.replaySpeed
-            case .removeIdleGaps: cursor += duration; time = cursor
-            case .fixedGap: cursor += duration + configuration.fixedReplayGap; time = cursor
+            case .original:
+                start = event.startedAt / configuration.replaySpeed
+            case .removeIdleGaps:
+                start = cursor
+                cursor += duration
+            case .fixedGap:
+                start = cursor
+                cursor += duration + configuration.fixedReplayGap
             }
-            return (time, event)
+            return ScheduledPerformanceEvent(start: start, end: start + duration, event: event)
         }
+    }
+
+    /// Returns the exact prefix of a recorded gesture visible at an offline
+    /// clock time, including an interpolated tip between captured samples.
+    private static func partialPath(_ path: InkEditorPath, elapsed: Double, duration: Double) -> InkEditorPath? {
+        guard path.points.count > 1, duration > 0 else { return nil }
+        let recorded: [Double]
+        if let times = path.sampleTimes, times.count == path.points.count,
+           zip(times, times.dropFirst()).allSatisfy({ $0.0 <= $0.1 }) {
+            recorded = times
+        } else {
+            recorded = path.points.indices.map { Double($0) / Double(max(1, path.points.count - 1)) }
+        }
+        let recordedEnd = max(recorded.last ?? 0, 0.000_001)
+        let target = min(recordedEnd, max(0, elapsed / duration * recordedEnd))
+        var upper = recorded.firstIndex(where: { $0 > target }) ?? recorded.count
+        upper = min(max(1, upper), path.points.count)
+        var points = Array(path.points.prefix(upper))
+        var times = Array(recorded.prefix(upper))
+        if upper < path.points.count {
+            let lower = upper - 1
+            let span = max(0.000_001, recorded[upper] - recorded[lower])
+            let fraction = min(1, max(0, (target - recorded[lower]) / span))
+            let a = path.points[lower], b = path.points[upper]
+            points.append(CGPoint(x: a.x + (b.x - a.x) * fraction,
+                                  y: a.y + (b.y - a.y) * fraction))
+            times.append(target)
+        }
+        guard points.count > 1 else { return nil }
+        var result = path
+        result.points = points
+        result.sampleTimes = times
+        return result
+    }
+
+    private static func apply(_ material: PerformanceMaterialSnapshot, to settings: inout ProcessingSettings) {
+        settings.landmarks.inkWidth = material.penWidth
+        settings.landmarks.inkWashWidth = material.washWidth
+        settings.landmarks.inkFlow = material.flow
+        settings.landmarks.inkBleed = material.bleed
+        settings.landmarks.inkDry = material.dry
+        settings.landmarks.inkColorSeparation = material.colorSeparation
+        settings.landmarks.inkBrushInk = material.brushInk
+        settings.landmarks.inkKind = material.inkKind
+        settings.landmarks.inkColor = material.inkColor
+        settings.landmarks.inkWashColor = material.washColor
+    }
+
+    private var currentPerformanceMaterial: PerformanceMaterialSnapshot {
+        let ink = settings.landmarks
+        return PerformanceMaterialSnapshot(
+            penWidth: ink.inkWidth, washWidth: ink.inkWashWidth ?? ink.inkWidth,
+            flow: ink.inkFlow, bleed: ink.inkBleed, dry: ink.inkDry,
+            colorSeparation: ink.inkColorSeparation ?? 0.5, brushInk: ink.inkBrushInk ?? 0,
+            inkKind: ink.inkKind ?? .black, inkColor: ink.inkColor,
+            washColor: ink.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89)
+        )
     }
 
     private static func copyPixelBuffer(_ source: CVPixelBuffer, context: CIContext) -> CVPixelBuffer? {
@@ -449,6 +594,16 @@ final class SketchCamViewModel: ObservableObject {
         guard let buffer else { return fallback }
         context.render(CIImage(cgImage: image), to: buffer)
         return buffer
+    }
+
+    private static func movieImage(generator: AVAssetImageGenerator?, fallback: CIImage?,
+                                   time: Double, duration: Double, loop: Bool) -> CIImage? {
+        guard let generator, duration.isFinite, duration > 0 else { return fallback }
+        let seconds = loop ? time.truncatingRemainder(dividingBy: duration) : min(time, duration)
+        guard let image = generateCGImage(
+            generator, at: CMTime(seconds: max(0, seconds), preferredTimescale: 600_000)
+        ) else { return fallback }
+        return CIImage(cgImage: image)
     }
 
     private static func loadedDuration(_ asset: AVAsset) -> Double {
@@ -511,7 +666,8 @@ final class SketchCamViewModel: ObservableObject {
     func commitImmediateCanvasStroke(_ path: InkEditorPath) {
         canvasActions.commitImmediate(path)
         canvasHistoryRevision &+= 1
-        performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash, path: path)
+        performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash,
+                                 path: path, material: currentPerformanceMaterial)
         exporter.signal(.anyCanvasAction, actionID: path.id)
     }
 
@@ -552,13 +708,14 @@ final class SketchCamViewModel: ObservableObject {
 
     func signalCanvasAction(path: InkEditorPath? = nil) {
         if let path {
-            performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash, path: path)
+            performanceEvents.append(kind: (path.brushMode ?? .pen) == .pen ? .pen : .wash,
+                                     path: path, material: currentPerformanceMaterial)
         }
         exporter.signal(.anyCanvasAction, actionID: path?.id)
     }
 
     func recordPerformanceCommand(_ kind: PerformanceEventKind) {
-        performanceEvents.append(kind: kind)
+        performanceEvents.append(kind: kind, material: currentPerformanceMaterial)
         exporter.signal(.anyCanvasAction)
     }
 
@@ -634,6 +791,7 @@ final class SketchCamViewModel: ObservableObject {
         testPatternTimer?.cancel()
         testPatternTimer = nil
         publisher.disconnect()
+        inputProxyRecorder.clear()
         if let realtimeActivity {
             ProcessInfo.processInfo.endActivity(realtimeActivity)
             self.realtimeActivity = nil
@@ -784,6 +942,7 @@ final class SketchCamViewModel: ObservableObject {
                 DispatchQueue.main.async { self.webController.update(settings: web, outputSize: size) }
             }
             let webLayer = settings.web.enabled ? self.webController.currentImage() : nil
+            self.inputProxyRecorder.offer(camera: originalPixelBuffer, web: webLayer)
             do {
                 let frameIndex = self.nextFrameIndex()
                 // Segmentation runs when keying OR the silhouette contour
@@ -872,6 +1031,16 @@ final class SketchCamViewModel: ObservableObject {
                 if let coordinator = self.controlFieldCoordinator {
                     self.timings.record(.motion, seconds: coordinator.lastMotionSeconds)
                     self.timings.record(.paperFields, seconds: coordinator.lastPaperSeconds)
+                    for (providerID, texture) in coordinator.exportMetricFields(
+                        graph: settings.resolvedControlFields,
+                        width: max(1, Int(outputFormat.size.width)),
+                        height: max(1, Int(outputFormat.size.height))
+                    ) where self.exporter.needsMetricTarget(providerID) {
+                        if let fieldImage = CIImage(mtlTexture: texture, options: [.colorSpace: NSNull()]),
+                           let fieldBuffer = self.pixelBuffer(from: fieldImage, outputFormat: outputFormat) {
+                            self.exporter.updateStreamMetrics(layerID: providerID, pixelBuffer: fieldBuffer)
+                        }
+                    }
                 }
                 // The inkwash engine runs synchronously (Metal commit +
                 // waitUntilCompleted + CPU readback) inline on this queue, so

@@ -28,16 +28,17 @@ is raised.
 
 ## Capture rules
 
-Version 1 uses one trigger and zero or more AND gates. Mouse and gesture events
+Version 2 uses one trigger and zero or more AND gates. Mouse and gesture events
 arm a pending capture which is fulfilled by the next fully composed frame, so an
 event never saves the stale frame from before the action. Gates can inspect
-mouse/Draw/Wash state, solver activity, physical ink change, final output, or a
-stable UUID-addressed layer's post-effect output. Metrics are mean luma,
+mouse/Draw/Wash state, solver activity, physical ink change, final output, a
+stable UUID-addressed layer's post-effect output, or a GPU control field
+(paper absorbency or motion magnitude). Metrics are mean luma,
 threshold coverage, alpha coverage, and inter-frame change/motion.
 
-The post-effect layer tap is dormant unless an active session addresses that
-layer. Final-output metrics use sparse samples and run only when a configured
-rule needs them.
+The post-effect layer/control-field taps are dormant unless an active session
+addresses them. Metric images are reduced on the GPU and only one pixel per
+metric is read back; no full export frame crosses to the CPU for analysis.
 
 ## Writers and destinations
 
@@ -46,8 +47,9 @@ rule needs them.
 - GIF: ImageIO animation with the expected indexed-palette, transparency, and
   frame-delay precision limits.
 
-Image sequences create a take directory and increment its suffix instead of
-mixing frames into an existing non-empty take. Optional sidecars record timing,
+Every destination has an explicit **Create new take** or **Replace** collision
+policy. Image sequences create a take directory and never mix frames into an
+existing non-empty take. Optional sidecars record timing,
 trigger, duplicate/drop state, and output indices. Optional poster frames are
 written beside the primary output.
 
@@ -58,12 +60,23 @@ Gesture events keep monotonic start/end times, per-sample path timing, material
 settings, stable action IDs, and explicit undo/redo/command events.
 
 NRT replay snapshots the current settings, source frame, and event log, creates
-an independent ink compositor and frame processor, then advances a synthetic
-clock. It never resizes or mutates the live canvas. Replay supports original
-timing, removed idle gaps, fixed gaps, and a global speed multiplier. NRT
-Continue currently clones the published artifact visually and advances the
-export clock without mutating the live artifact; full cross-resolution cloning
-of all private fluid fields remains part of the canvas-tile checkpoint work.
+an independent ink compositor, control-field graph, and frame processor, then
+advances a synthetic clock. Recorded sample times reveal each gesture across
+its real duration rather than popping in a completed path. Replay supports
+original timing, removed idle gaps, fixed gaps, a global speed multiplier, and
+material snapshots. Undo/redo and canvas commands remain explicit events.
+
+NRT Continue clones the exact GPU pigment, fixed pigment, wetness, velocity,
+pressure, and lock fields into an isolated engine. Both engines can then advance
+at a fixed simulation step without the export mutating the live canvas. The
+physical clone stays at its native simulation resolution and is framed to the
+requested output size by the exporter.
+
+Camera and Web inputs freeze their latest completed frame by default. For
+moving deterministic input, **Record input proxy** creates temporary HEVC Camera
+and Web tracks. NRT addresses those tracks by frame time; Source start/end and
+looping define the range. Proxy files are deleted on normal quit and stale
+session folders are pruned on the next launch.
 
 ## Performance guarantees
 

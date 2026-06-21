@@ -41,6 +41,15 @@ final class ExportConfigurationTests: XCTestCase {
                                                 from: JSONEncoder().encode(value)), value)
     }
 
+    func testLegacyConfigurationDecodesWithNewDefaults() throws {
+        var value = ExportConfiguration()
+        value.liveInputMode = nil
+        value.collisionPolicy = nil
+        let decoded = try JSONDecoder().decode(ExportConfiguration.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(decoded.resolvedLiveInputMode, .freezeLatest)
+        XCTAssertEqual(decoded.resolvedCollisionPolicy, .newTake)
+    }
+
     func testExtremePlaybackRatesStayMonotonic() {
         XCTAssertEqual(ExportTiming.presentationTime(frameIndex: 1, fps: 0.001), 1_000, accuracy: 0.0001)
         var previous = -1.0
