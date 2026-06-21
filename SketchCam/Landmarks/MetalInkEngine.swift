@@ -6,6 +6,20 @@ import SketchCamCore
 import SketchCamShared
 import simd
 
+enum InkUndoPreferences {
+    static let gpuStateCountKey = "inkUndoGPUStateCount"
+    static let defaultGPUStateCount = 6
+    static let absoluteMaximumGPUStateCount = 4096
+
+    static var gpuStateCount: Int {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: gpuStateCountKey) != nil else {
+            return defaultGPUStateCount
+        }
+        return min(absoluteMaximumGPUStateCount, max(0, defaults.integer(forKey: gpuStateCountKey)))
+    }
+}
+
 final class MetalInkEngine {
     private static let dyeBase = 2048
     private static let simBase = 256
@@ -33,6 +47,23 @@ final class MetalInkEngine {
         var speed: Float
         var simPressure: Float
         var stirPhase: Float
+    }
+
+    /// Short interactive undo cache. These are canonical simulation fields,
+    /// not rendered images, so restoring one preserves fluid momentum and locks
+    /// without reenacting earlier washes. The bounded ring is intentionally a
+    /// bridge to sparse changed-tile deltas.
+    private struct StateSnapshot {
+        var paths: [InkEditorPath]
+        var velocity: MTLTexture
+        var pressure: MTLTexture
+        var ink: MTLTexture
+        var fixed: MTLTexture
+        var wet: MTLTexture
+        var locked: MTLTexture
+        var activeFramesRemaining: Int
+        var fixTimer: Float
+        var brushLift: Float
     }
 
     private struct SplatParams {
@@ -185,6 +216,8 @@ final class MetalInkEngine {
     private var lastClearFadeRevision = 0
     private var replayedPaths: [InkEditorPath] = []
     private var livePointerStates: [UUID: LivePointerState] = [:]
+    private var stateSnapshots: [StateSnapshot] = []
+    private var restoredStateThisFrame = false
     /// Strokes whose ink was injected live (already on the canvas); the
     /// committed path with the same id must NOT be replayed (avoids the double
     /// mark). Cleared on full rebuild/replay.
@@ -325,6 +358,8 @@ final class MetalInkEngine {
         lastClearFadeRevision = 0
         replayedPaths = []
         livePointerStates = [:]
+        stateSnapshots = []
+        restoredStateThisFrame = false
         bakedLiveIDs = []
         lastRenderSig = nil
         cachedImage = nil
@@ -391,6 +426,7 @@ final class MetalInkEngine {
         }
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return cachedImage }
+        restoredStateThisFrame = false
 
         // A completed stroke becomes a canonical action.  Live drawing is only
         // a low-latency preview: its frame-grouping and pressure integrator are
@@ -503,6 +539,7 @@ final class MetalInkEngine {
                 clearFade = max(0, clearFade - dt / fadeDuration)
                 if clearFade <= 0.001 {
                     clearAll(commandBuffer)
+                    stateSnapshots = []
                     bakedLiveIDs = []
                     livePointerStates = [:]
                     clearFadeActive = false
@@ -518,11 +555,17 @@ final class MetalInkEngine {
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
             }
-            if motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive {
+            if !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
             lastFrameIndex = frameIndex
+        }
+        // Mouse-up adopts the live pixels as the canonical result. Snapshot
+        // that exact simulation state so redo restores it without compressing
+        // the gesture into a more forceful replay.
+        if endedLiveID != nil {
+            captureState(for: replayablePaths, commandBuffer: commandBuffer)
         }
         render(settings: settings, paperConfig: paperConfig, commandBuffer: commandBuffer)
         commandBuffer.commit()
@@ -538,6 +581,8 @@ final class MetalInkEngine {
     private func configure(width: Int, height: Int) -> Bool {
         let out = SIMD2(Int32(width), Int32(height))
         if outputSize == out, outputBuffer != nil, outputTexture != nil { return true }
+        stateSnapshots = []
+        restoredStateThisFrame = false
         outputSize = out
         let shortSide = max(1, min(width, height))
         let dyeScale = Float(min(Self.dyeBase, shortSide)) / Float(shortSide)
@@ -595,6 +640,98 @@ final class MetalInkEngine {
             .forEach { encodeClear($0, commandBuffer: commandBuffer) }
     }
 
+    private func captureState(for paths: [InkEditorPath], commandBuffer: MTLCommandBuffer) {
+        let requestedStateCount = InkUndoPreferences.gpuStateCount
+        guard requestedStateCount > 0 else {
+            stateSnapshots = []
+            return
+        }
+        guard let velocity = velocity?.read,
+              let pressure = pressure?.read,
+              let ink = ink?.read,
+              let fixed = fixed?.read,
+              let wet = wet?.read,
+              let locked,
+              let velocityCopy = makeTexture(width: velocity.width, height: velocity.height, format: velocity.pixelFormat),
+              let pressureCopy = makeTexture(width: pressure.width, height: pressure.height, format: pressure.pixelFormat),
+              let inkCopy = makeTexture(width: ink.width, height: ink.height, format: ink.pixelFormat),
+              let fixedCopy = makeTexture(width: fixed.width, height: fixed.height, format: fixed.pixelFormat),
+              let wetCopy = makeTexture(width: wet.width, height: wet.height, format: wet.pixelFormat),
+              let lockedCopy = makeTexture(width: locked.width, height: locked.height, format: locked.pixelFormat),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return }
+
+        // Metal uses unified memory on Apple silicon. Never retain snapshots
+        // beyond half of physical RAM even if a stale preference was written
+        // for a smaller output format.
+        let bytesPerState = ink.width * ink.height * 26 + velocity.width * velocity.height * 6
+        let memoryLimitedCount = max(1, Int((ProcessInfo.processInfo.physicalMemory / 2) / UInt64(bytesPerState)))
+        let maximumStateSnapshots = min(requestedStateCount, memoryLimitedCount)
+
+        copy(velocity, to: velocityCopy, using: blit)
+        copy(pressure, to: pressureCopy, using: blit)
+        copy(ink, to: inkCopy, using: blit)
+        copy(fixed, to: fixedCopy, using: blit)
+        copy(wet, to: wetCopy, using: blit)
+        copy(locked, to: lockedCopy, using: blit)
+        blit.endEncoding()
+
+        stateSnapshots.removeAll { $0.paths == paths }
+        stateSnapshots.append(StateSnapshot(
+            paths: paths,
+            velocity: velocityCopy,
+            pressure: pressureCopy,
+            ink: inkCopy,
+            fixed: fixedCopy,
+            wet: wetCopy,
+            locked: lockedCopy,
+            activeFramesRemaining: activeFramesRemaining,
+            fixTimer: fixTimer,
+            brushLift: brushLift
+        ))
+        if stateSnapshots.count > maximumStateSnapshots {
+            stateSnapshots.removeFirst(stateSnapshots.count - maximumStateSnapshots)
+        }
+    }
+
+    @discardableResult
+    private func restoreState(for paths: [InkEditorPath], commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let snapshot = stateSnapshots.last(where: { $0.paths == paths }),
+              let velocity, let pressure, let ink, let fixed, let wet, let locked,
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return false }
+
+        copy(snapshot.velocity, to: velocity.read, using: blit)
+        copy(snapshot.velocity, to: velocity.write, using: blit)
+        copy(snapshot.pressure, to: pressure.read, using: blit)
+        copy(snapshot.pressure, to: pressure.write, using: blit)
+        copy(snapshot.ink, to: ink.read, using: blit)
+        copy(snapshot.ink, to: ink.write, using: blit)
+        copy(snapshot.fixed, to: fixed.read, using: blit)
+        copy(snapshot.fixed, to: fixed.write, using: blit)
+        copy(snapshot.wet, to: wet.read, using: blit)
+        copy(snapshot.wet, to: wet.write, using: blit)
+        copy(snapshot.locked, to: locked, using: blit)
+        blit.endEncoding()
+
+        if let divergence { encodeClear(divergence, commandBuffer: commandBuffer) }
+        if let curl { encodeClear(curl, commandBuffer: commandBuffer) }
+        activeFramesRemaining = snapshot.activeFramesRemaining
+        fixTimer = snapshot.fixTimer
+        brushLift = snapshot.brushLift
+        brushNow = SIMD3(0, 0, 0)
+        livePointerStates = [:]
+        bakedLiveIDs = []
+        restoredStateThisFrame = true
+        return true
+    }
+
+    private func copy(_ source: MTLTexture, to destination: MTLTexture, using blit: MTLBlitCommandEncoder) {
+        blit.copy(from: source, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
+                  to: destination, destinationSlice: 0, destinationLevel: 0,
+                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+    }
+
     private func replay(paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard !paths.isEmpty else { return }
         brushLift = 0   // replayed/committed wash is additive, not destructive
@@ -608,6 +745,10 @@ final class MetalInkEngine {
 
     private func reconcileCommittedPaths(_ paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard paths != replayedPaths else { return }
+        if restoreState(for: paths, commandBuffer: commandBuffer) {
+            replayedPaths = paths
+            return
+        }
         if replayedPaths.isEmpty || isAppendOnly(previous: replayedPaths, next: paths) {
             let appended = paths.dropFirst(replayedPaths.count)
             for path in appended where path.points.count > 1 {
@@ -732,6 +873,9 @@ final class MetalInkEngine {
             return false
         }
         guard let ink, let wet, let velocity else { return false }
+        if livePointerStates[sample.id] == nil {
+            captureState(for: replayedPaths, commandBuffer: commandBuffer)
+        }
         // Mark this stroke baked-live as soon as it starts drawing (many frames
         // before it commits to inkPaths), so the committed path is never
         // replayed on top — race-free, unlike relying on the end signal.
