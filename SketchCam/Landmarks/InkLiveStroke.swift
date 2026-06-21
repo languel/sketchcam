@@ -7,6 +7,7 @@ import SketchCamCore
 /// engine can inject ink along ALL of them (dense), not just the latest.
 struct InkLiveStrokeSample: Equatable {
     var id: UUID
+    var seed: UInt64
     var point: CGPoint
     var brushMode: InkBrushMode
     var inkKind: InkKind

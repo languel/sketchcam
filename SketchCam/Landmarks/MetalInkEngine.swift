@@ -392,13 +392,16 @@ final class MetalInkEngine {
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return cachedImage }
 
-        // A finished stroke's wet ink is already on the canvas (drawn live). On
-        // a reconcile (not a full rebuild) mark it baked BEFORE reconciling so
-        // the committed path with the same id is skipped — avoids the double
-        // mark. On a full rebuild the path is redrawn by replay instead.
-        if let endedLiveID, !needRebuild {
-            bakedLiveIDs.insert(endedLiveID)
-        }
+        // A completed stroke becomes a canonical action.  Live drawing is only
+        // a low-latency preview: its frame-grouping and pressure integrator are
+        // deliberately responsive to the event stream, and therefore cannot be
+        // reconstructed byte-for-byte later.  As soon as the complete path is
+        // available, rebuild it with the deterministic replay tessellator.  Undo
+        // and redo then show exactly the same committed silhouette instead of a
+        // second, thicker series of circular stamps.
+        let canonicalizeEndedStroke = endedLiveID.map { id in
+            replayablePaths.contains(where: { $0.id == id })
+        } ?? false
 
         if needRebuild {
             guard configure(width: width, height: height) else { return cachedImage }
@@ -409,6 +412,13 @@ final class MetalInkEngine {
             livePointerStates = [:]
             rebuildKey = key
             lastFrameIndex = nil
+            activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
+        } else if canonicalizeEndedStroke && !clearFadeRequested && !clearFadeActive {
+            clearAll(commandBuffer)
+            bakedLiveIDs = []
+            replay(paths: replayablePaths, settings: settings, commandBuffer: commandBuffer)
+            replayedPaths = replayablePaths
+            livePointerStates = [:]
             activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
         } else if pathsChanged && !clearFadeRequested && !clearFadeActive {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
@@ -634,33 +644,55 @@ final class MetalInkEngine {
         let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
         let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
         let color = path.color ?? settings.landmarks.inkColor
-        let points = smoothed(points: path.points, fit: settings.landmarks.inkCurveFit)
-            .map { SIMD2<Float>(Float($0.x), Float($0.y)) }
-        guard points.count > 1 else { return }
+        let samples = deterministicReplaySamples(for: path, fit: settings.landmarks.inkCurveFit)
+        guard samples.count > 1 else { return }
 
-        var previous = points[0]
+        var previous = samples[0].point
+        var previousTime = samples[0].time
+        var replayPressure: Float = 0.35
+        var previousPenRadius: Float?
         var brushStepCounter = 0
-        for point in points.dropFirst() {
+        for sample in samples.dropFirst() {
+            let point = sample.point
             let delta = point - previous
             let dist = simd_length(delta)
             if dist <= 0.0001 {
                 previous = point
+                previousTime = sample.time
                 continue
             }
-            let pressure: Float = 0.45
-            let speed = min(dist * 60.0, 3.0)
+            let sampleDT = max(sample.time - previousTime, 1.0 / 240.0)
+            let speed = min(dist / sampleDT, 3.0)
+            let targetPressure = min(max(1.18 - speed * 0.95, 0.12), 1.0)
+            replayPressure += (targetPressure - replayPressure) * (1 - exp(-sampleDT * 6))
+            let pressure = replayPressure
             if mode == .pen {
                 let radius = penRadius(pressure: pressure, speed: speed, size: size)
                 let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
                 let steps = min(max(1, Int(ceil(dist / max(radius * 0.6, 0.0008)))), 80)
+                var segmentStart = previous
+                var segmentRadius = previousPenRadius ?? radius
                 for i in 1...steps {
                     let t = Float(i) / Float(steps)
                     let p = previous + delta * t
-                    splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
+                    // Use the same max-blended capsule primitive as live pen
+                    // drawing.  The old replay path stamped additive Gaussian
+                    // discs, making every undo/redo visibly chunkier, darker,
+                    // and wider even though the centerline was unchanged.
+                    splatCapsule(texture: ink.read, a: segmentStart, b: p,
+                                 ra: segmentRadius, rb: radius,
+                                 color: inkColor(kind: kind, base: color, density: density),
+                                 blend: .max, commandBuffer: commandBuffer)
                     if i % 2 == 0 || steps == 1 {
-                        splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                        splatCapsule(texture: wet.read, a: segmentStart, b: p,
+                                     ra: segmentRadius * 2.8, rb: radius * 2.8,
+                                     color: SIMD4<Float>(0.16, 0, 0, 0),
+                                     blend: .max, commandBuffer: commandBuffer)
                     }
+                    segmentStart = p
+                    segmentRadius = radius
                 }
+                previousPenRadius = radius
             } else {
                 let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(point.x, point.y, radius)
@@ -686,6 +718,7 @@ final class MetalInkEngine {
                 }
             }
             previous = point
+            previousTime = sample.time
         }
         brushNow = SIMD3(0, 0, 0)
     }
@@ -746,7 +779,7 @@ final class MetalInkEngine {
             by: rawPoints.first?.y ?? fallback.y,
             speed: 0,
             simPressure: 0.35,
-            stirPhase: Float(sample.id.hashValue & 0x3ff) * 0.0061359
+            stirPhase: Float(sample.seed & 0x3ff) * 0.0061359
         )
 
         let smoothing = clamp01(max(settings.landmarks.inkSmoothing, sample.smoothBoost ? 0.85 : 0))
@@ -1108,6 +1141,52 @@ final class MetalInkEngine {
     private func smoothed(points: [CGPoint], fit: CurveFit) -> [CGPoint] {
         guard points.count > 2 else { return points }
         return DrawingSupport.curvePoints(points, fit: fit, samplesPerSegment: 6)
+    }
+
+    /// Produces a deterministic fitted centerline while carrying the recorded
+    /// time-to-arc-length profile onto the fitted samples.  Curve fitting may
+    /// add points, so indexing the original times directly would change speed
+    /// (and therefore width) after every rebuild.
+    private func deterministicReplaySamples(for path: InkEditorPath, fit: CurveFit) -> [(point: SIMD2<Float>, time: Float)] {
+        let raw = path.points
+        guard raw.count > 1 else { return raw.map { (SIMD2(Float($0.x), Float($0.y)), 0) } }
+        let fitted = smoothed(points: raw, fit: fit)
+        let recorded = path.sampleTimes
+        let times: [Double]
+        if let recorded, recorded.count == raw.count,
+           zip(recorded, recorded.dropFirst()).allSatisfy({ $0.0 <= $0.1 }) {
+            times = recorded
+        } else {
+            // Legacy paths had geometry only.  Their cadence is explicitly an
+            // estimate, but remains stable across all subsequent replays.
+            times = raw.indices.map { Double($0) / 60.0 }
+        }
+
+        func cumulativeLengths(_ points: [CGPoint]) -> [Double] {
+            guard !points.isEmpty else { return [] }
+            var result = [Double](repeating: 0, count: points.count)
+            for index in 1..<points.count {
+                result[index] = result[index - 1] + hypot(points[index].x - points[index - 1].x,
+                                                          points[index].y - points[index - 1].y)
+            }
+            return result
+        }
+
+        let rawArc = cumulativeLengths(raw)
+        let fittedArc = cumulativeLengths(fitted)
+        let rawTotal = max(rawArc.last ?? 0, 0.000_001)
+        let fittedTotal = max(fittedArc.last ?? 0, 0.000_001)
+        var rawIndex = 1
+        return fitted.indices.map { index in
+            let targetArc = fittedArc[index] / fittedTotal * rawTotal
+            while rawIndex < rawArc.count - 1, rawArc[rawIndex] < targetArc { rawIndex += 1 }
+            let lower = max(0, rawIndex - 1)
+            let span = max(rawArc[rawIndex] - rawArc[lower], 0.000_001)
+            let fraction = min(1, max(0, (targetArc - rawArc[lower]) / span))
+            let time = times[lower] + (times[rawIndex] - times[lower]) * fraction
+            let point = fitted[index]
+            return (SIMD2<Float>(Float(point.x), Float(point.y)), Float(time))
+        }
     }
 
     private var aspect: Float {

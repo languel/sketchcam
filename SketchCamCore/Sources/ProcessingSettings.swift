@@ -111,6 +111,13 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     /// Points are normalized to the output canvas (0...1), so editor strokes
     /// survive output-size changes.
     public var points: [CGPoint]
+    /// Seconds relative to the first sample.  Older paths decode as nil and use
+    /// an estimated uniform cadence.  Keeping the time profile is what lets a
+    /// replay preserve the speed/pressure character of the original gesture.
+    public var sampleTimes: [TimeInterval]?
+    /// Seed captured when the gesture begins. Any intentional rendering
+    /// variation must derive from this value, never process-global randomness.
+    public var strokeSeed: UInt64?
     /// Optional metadata keeps old saved paths valid; nil means the current
     /// inkwash defaults: black pen with the live controls.
     public var brushMode: InkBrushMode?
@@ -126,6 +133,8 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     public init(
         id: UUID = UUID(),
         points: [CGPoint],
+        sampleTimes: [TimeInterval]? = nil,
+        strokeSeed: UInt64? = nil,
         brushMode: InkBrushMode? = nil,
         inkKind: InkKind? = nil,
         width: Float? = nil,
@@ -138,6 +147,8 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     ) {
         self.id = id
         self.points = points
+        self.sampleTimes = sampleTimes
+        self.strokeSeed = strokeSeed
         self.brushMode = brushMode
         self.inkKind = inkKind
         self.width = width

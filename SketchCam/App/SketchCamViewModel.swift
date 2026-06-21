@@ -103,6 +103,8 @@ final class SketchCamViewModel: ObservableObject {
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
+    private let canvasActions = CanvasActionHistory()
+    @Published private(set) var canvasHistoryRevision = 0
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
@@ -277,6 +279,41 @@ final class SketchCamViewModel: ObservableObject {
     func updateInkLiveStroke(_ sample: InkLiveStrokeSample) { inkLiveStroke.update(sample) }
     func endInkLiveStroke() { inkLiveStroke.end() }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
+
+    func commitImmediateCanvasStroke(_ path: InkEditorPath) {
+        canvasActions.commitImmediate(path)
+        canvasHistoryRevision &+= 1
+    }
+
+    func replaceEditableCanvasPaths(_ paths: [InkEditorPath]) {
+        canvasActions.replaceEditablePaths(paths)
+        canvasHistoryRevision &+= 1
+    }
+
+    var canUndoCanvasAction: Bool { canvasActions.canUndo() }
+    var canRedoCanvasAction: Bool { canvasActions.canRedo() }
+
+    @discardableResult
+    func undoCanvasAction() -> CanvasStrokeAction? {
+        cancelInkLiveStroke()
+        let action = canvasActions.undo()
+        if action != nil { canvasHistoryRevision &+= 1 }
+        return action
+    }
+
+    @discardableResult
+    func redoCanvasAction() -> CanvasStrokeAction? {
+        cancelInkLiveStroke()
+        let action = canvasActions.redo()
+        if action != nil { canvasHistoryRevision &+= 1 }
+        return action
+    }
+
+    func clearCanvasActions() {
+        cancelInkLiveStroke()
+        canvasActions.clear()
+        canvasHistoryRevision &+= 1
+    }
 
     // MARK: - Web layer controls (main thread)
 
@@ -601,6 +638,7 @@ final class SketchCamViewModel: ObservableObject {
                         outputSize: outputFormat.size,
                         frameIndex: frameIndex,
                         textureInput: inkTexture,
+                        actionPaths: self.canvasActions.replayPaths(),
                         controlFields: controlFields
                     )
                 }
