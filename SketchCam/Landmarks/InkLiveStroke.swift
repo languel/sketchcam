@@ -9,6 +9,8 @@ struct InkLiveStrokeSample: Equatable {
     var id: UUID
     var seed: UInt64
     var point: CGPoint
+    /// Seconds from the beginning of this gesture.
+    var time: TimeInterval
     var brushMode: InkBrushMode
     var inkKind: InkKind
     var width: Float
@@ -25,6 +27,11 @@ struct InkLiveStrokeSample: Equatable {
     var charge: Float
 }
 
+struct InkLiveStrokePoint: Equatable {
+    var point: CGPoint
+    var time: TimeInterval
+}
+
 /// Thread-safe hand-off of the live stroke from the drawing UI (main thread) to
 /// the ink engine (processing queue), off the `@Published` settings path.
 /// Accumulates every cursor point between engine frames so fast drags stay
@@ -33,7 +40,7 @@ final class InkLiveStroke {
     private let lock = NSLock()
     private var latest: InkLiveStrokeSample?
     private var activeID: UUID?
-    private var pending: [CGPoint] = []
+    private var pending: [InkLiveStrokePoint] = []
     private var endedID: UUID?
 
     /// Called per mouse move while drawing.
@@ -44,7 +51,7 @@ final class InkLiveStroke {
             pending.removeAll(keepingCapacity: true)
         }
         latest = s
-        pending.append(s.point)
+        pending.append(InkLiveStrokePoint(point: s.point, time: s.time))
         lock.unlock()
     }
 
@@ -70,7 +77,7 @@ final class InkLiveStroke {
 
     /// Engine reads the active sample (params), all points captured this frame
     /// (cleared), and any just-ended id (delivered once).
-    func consume() -> (sample: InkLiveStrokeSample?, points: [CGPoint], ended: UUID?) {
+    func consume() -> (sample: InkLiveStrokeSample?, points: [InkLiveStrokePoint], ended: UUID?) {
         lock.lock(); defer { lock.unlock() }
         let e = endedID
         endedID = nil

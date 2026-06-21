@@ -11,7 +11,7 @@ final class InkLayerCompositor {
     private var engine: MetalInkEngine? = MetalInkEngine()
     private let paperRenderer = MetalPaperRenderer.shared
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint],
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
                actionPaths: [InkEditorPath]? = nil,
                controlFields: ResolvedControlFields = .empty) -> CIImage? {
