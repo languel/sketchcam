@@ -48,6 +48,18 @@ final class ExportConfigurationTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ExportConfiguration.self, from: JSONEncoder().encode(value))
         XCTAssertEqual(decoded.resolvedLiveInputMode, .freezeLatest)
         XCTAssertEqual(decoded.resolvedCollisionPolicy, .newTake)
+        XCTAssertEqual(decoded.resolvedRotation, .degrees0)
+        XCTAssertFalse(decoded.resolvedFlipHorizontal)
+    }
+
+    func testCropInsetsRemainValid() {
+        var value = ExportConfiguration(cropLeft: 0.8, cropTop: -2,
+                                        cropRight: 0.8, cropBottom: 4)
+        value.clamp()
+        XCTAssertEqual(value.cropTop, 0)
+        XCTAssertEqual(value.cropBottom, 0.95)
+        XCTAssertLessThan((value.cropLeft ?? 0) + (value.cropRight ?? 0), 1)
+        XCTAssertLessThan((value.cropTop ?? 0) + (value.cropBottom ?? 0), 1)
     }
 
     func testExtremePlaybackRatesStayMonotonic() {

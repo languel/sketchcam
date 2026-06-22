@@ -102,6 +102,7 @@ struct ContentView: View {
     @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
     @AppStorage(InkUndoPreferences.gpuStateCountKey)
     private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
+    @AppStorage("ink.drawAcrossPanels") private var inkDrawAcrossPanels = false
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
@@ -199,7 +200,7 @@ struct ContentView: View {
                     // re-evaluate the whole ContentView body.
                     LivePreviewImage(live: model.live)
                 }
-                if tab == .ink, model.settings.landmarks.inkEnabled {
+                if inkCanvasInputActive {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
                         showLivePath: model.settings.landmarks.inkShowLivePath,
@@ -378,6 +379,12 @@ struct ContentView: View {
         model.frameSource == .movie ? model.movieRate == 0 : model.inputFrozen
     }
 
+    /// The canvas drawing surface normally follows the Ink inspector. The
+    /// persistent option keeps it available while another inspector is open.
+    private var inkCanvasInputActive: Bool {
+        model.settings.landmarks.inkEnabled && (tab == .ink || inkDrawAcrossPanels)
+    }
+
     private var freezeButtonTitle: String {
         if model.frameSource == .movie {
             return model.movieRate == 0 ? "Play" : "Pause"
@@ -389,7 +396,11 @@ struct ContentView: View {
         ExportPanel(
             exporter: model.exporter,
             proxyRecorder: model.inputProxyRecorder,
+            live: model.live,
+            liveDisplay: model.exportPreviewDisplay,
+            usesMetalLivePreview: model.settings.useMetalPreview && model.settings.previewMode != .split,
             currentSize: model.outputFormat.size,
+            currentFPS: Double(model.outputFormat.frameRate),
             metricLayers: exportMetricLayers,
             chooseDestination: model.chooseExportDestination,
             exportCurrent: model.exportCurrentFrame,
@@ -829,6 +840,8 @@ struct ContentView: View {
         Toggle("Enable Ink", isOn: $model.settings.landmarks.inkEnabled)
             .font(.headline)
             .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
+        Toggle("Draw on canvas in every panel", isOn: $inkDrawAcrossPanels)
+            .help("Keep the full-canvas Ink drawing surface active while Export, Layers, Camera, or another panel is selected. Panel controls still receive their own clicks.")
         Group {
             SectionHeader("Paper")
             HStack(spacing: 6) {
@@ -3885,27 +3898,121 @@ private struct CheckerboardBackground: View {
     }
 }
 
+private struct ExportPreviewCanvas: View {
+    @ObservedObject var live: LiveReadouts
+    let liveDisplay: SampleBufferDisplayController
+    let usesMetalLivePreview: Bool
+    let reviewImage: CGImage?
+    let isLoading: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+            if let reviewImage {
+                Image(decorative: reviewImage, scale: 1)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
+            } else if usesMetalLivePreview {
+                SampleBufferDisplayView(controller: liveDisplay)
+            } else if let image = live.previewImage {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .interpolation(.none)
+                    .scaledToFit()
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            if isLoading { ProgressView().controlSize(.small) }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
 private struct ExportPanel: View {
     @ObservedObject var exporter: OutputStreamExporter
     @ObservedObject var proxyRecorder: TemporaryInputProxyRecorder
+    let live: LiveReadouts
+    let liveDisplay: SampleBufferDisplayController
+    let usesMetalLivePreview: Bool
     let currentSize: CGSize
+    let currentFPS: Double
     let metricLayers: [(id: UUID, name: String)]
     let chooseDestination: () -> Void
     let exportCurrent: () -> Void
     let startProxy: () -> Void
+    @State private var previewShowsReview = false
 
     private var config: Binding<ExportConfiguration> { $exporter.configuration }
 
     var body: some View {
         SectionHeader("Export")
 
+        GroupBox("Preview") {
+            VStack(alignment: .leading, spacing: 8) {
+                if exporter.reviewImage != nil {
+                    Picker("", selection: $previewShowsReview) {
+                        Text("Live").tag(false)
+                        Text("Review").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                ExportPreviewCanvas(
+                    live: live,
+                    liveDisplay: liveDisplay,
+                    usesMetalLivePreview: usesMetalLivePreview,
+                    reviewImage: previewShowsReview ? exporter.reviewImage : nil,
+                    isLoading: previewShowsReview && exporter.reviewIsLoading
+                )
+                .frame(height: 170)
+
+                if previewShowsReview, exporter.reviewImage != nil {
+                    if exporter.reviewFrameCount > 1 {
+                        Slider(value: Binding(
+                            get: { Double(exporter.reviewFrame) },
+                            set: { exporter.seekReview(frame: Int($0.rounded())) }
+                        ), in: 0...Double(exporter.reviewFrameCount - 1), step: 1)
+                    }
+                    HStack {
+                        Button { exporter.stepReview(-1) } label: { Image(systemName: "backward.frame") }
+                        Button { exporter.stepReview(1) } label: { Image(systemName: "forward.frame") }
+                        Text("Frame \(exporter.reviewFrame + 1) / \(max(1, exporter.reviewFrameCount)) · \(exporter.reviewTime, format: .number.precision(.fractionLength(2))) s")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button("Continue from frame") { exporter.continueFromReview() }
+                        Button("Re-export clip") { exporter.reexportReview() }
+                    }
+                    .disabled(exporter.state != .idle || exporter.reviewFrameCount == 0 || exporter.destinationURL == nil)
+                    Text("Continue creates a new take with the reviewed prefix, then appends new captures. The original remains untouched.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Live composed output. Completed exports are available under Review.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onChange(of: exporter.reviewURL) { _, url in
+            if url != nil { previewShowsReview = true }
+        }
+
         GroupBox("Presets") {
             VStack(spacing: 6) {
                 HStack {
-                    Button("Live") { exporter.applyPreset(.liveMovie) }
-                    Button("Stop motion") { exporter.applyPreset(.stopMotion) }
-                    Button("Actions") { exporter.applyPreset(.actionCapture) }
+                    Text("Workflow")
+                    Spacer()
+                    Menu(exporter.selectedBuiltInPreset?.title ?? "Choose…") {
+                        ForEach(OutputStreamExporter.BuiltInPreset.allCases) { preset in
+                            Button(preset.title) { exporter.applyPreset(preset, outputFPS: currentFPS) }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
                 }
+                Text(exporter.selectedBuiltInPreset?.summary ?? "Choose a ready-made workflow, then adjust any setting and optionally save it as your own preset.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 HStack {
                     TextField("Preset name", text: $exporter.presetName)
                     Button("Save") { exporter.saveNamedPreset() }.disabled(exporter.presetName.isEmpty)
@@ -3977,15 +4084,27 @@ private struct ExportPanel: View {
                 }
                 HStack {
                     Text("Size")
-                    TextField("Width", value: config.width, format: .number).frame(width: 70)
+                    TextField("Width", value: Binding(
+                        get: { exporter.configuration.width },
+                        set: { exporter.configuration.width = $0; exporter.refreshReviewPreview() }
+                    ), format: .number).frame(width: 70)
                     Text("×")
-                    TextField("Height", value: config.height, format: .number).frame(width: 70)
+                    TextField("Height", value: Binding(
+                        get: { exporter.configuration.height },
+                        set: { exporter.configuration.height = $0; exporter.refreshReviewPreview() }
+                    ), format: .number).frame(width: 70)
                     Button("Current") {
                         exporter.configuration.width = Int(currentSize.width)
                         exporter.configuration.height = Int(currentSize.height)
+                        exporter.refreshReviewPreview()
                     }
                 }
-                Picker("Framing", selection: config.framing) {
+                Text("Size sets the final export aspect. Crop is enlarged to fill that frame.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Framing", selection: Binding(
+                    get: { exporter.configuration.framing },
+                    set: { exporter.configuration.framing = $0; exporter.refreshReviewPreview() }
+                )) {
                     ForEach(ExportFraming.allCases) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 Picker("Color", selection: config.colorSpace) {
@@ -3997,6 +4116,34 @@ private struct ExportPanel: View {
                     .disabled(exporter.configuration.outputKind == .movie && !exporter.configuration.movieCodec.supportsAlpha)
             }
             .textFieldStyle(.roundedBorder)
+        }
+
+
+        GroupBox("Crop & transform") {
+            VStack(spacing: 8) {
+                HStack {
+                    PercentField("Left", value: optionalPercent(\.cropLeft))
+                    PercentField("Right", value: optionalPercent(\.cropRight))
+                }
+                HStack {
+                    PercentField("Top", value: optionalPercent(\.cropTop))
+                    PercentField("Bottom", value: optionalPercent(\.cropBottom))
+                }
+                HStack {
+                    Button("1:1") { setCropAspect(1) }
+                    Button("4:3") { setCropAspect(4.0 / 3.0) }
+                    Button("16:9") { setCropAspect(16.0 / 9.0) }
+                    Button("Reset", action: resetTransform)
+                }
+                Picker("Rotate", selection: resolvedRotation) {
+                    ForEach(ExportRotation.allCases) { Text("\($0.rawValue)°").tag($0) }
+                }
+                HStack {
+                    Toggle("Flip horizontal", isOn: resolvedFlipHorizontal)
+                    Toggle("Flip vertical", isOn: resolvedFlipVertical)
+                }
+            }
+            .controlSize(.small)
         }
 
         GroupBox("Timing") {
@@ -4023,6 +4170,9 @@ private struct ExportPanel: View {
                 Picker("Trigger", selection: config.trigger) {
                     ForEach(CaptureTrigger.allCases) { Text(triggerLabel($0)).tag($0) }
                 }
+                Text(captureRuleHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 RateField("Debounce", value: config.minimumEventInterval, range: 0...60, suffix: "s")
                 ForEach(exporter.configuration.gates) { gate in
                     VStack(spacing: 4) {
@@ -4148,6 +4298,54 @@ private struct ExportPanel: View {
         set: { exporter.configuration.sourceEndSeconds = $0 > 0 ? $0 : nil }
     }
 
+    private var resolvedRotation: Binding<ExportRotation> {
+        Binding { exporter.configuration.resolvedRotation }
+        set: { exporter.configuration.rotation = $0; exporter.refreshReviewPreview() }
+    }
+
+    private var resolvedFlipHorizontal: Binding<Bool> {
+        Binding { exporter.configuration.resolvedFlipHorizontal }
+        set: { exporter.configuration.flipHorizontal = $0; exporter.refreshReviewPreview() }
+    }
+
+    private var resolvedFlipVertical: Binding<Bool> {
+        Binding { exporter.configuration.resolvedFlipVertical }
+        set: { exporter.configuration.flipVertical = $0; exporter.refreshReviewPreview() }
+    }
+
+    private func optionalPercent(_ keyPath: WritableKeyPath<ExportConfiguration, Double?>) -> Binding<Double> {
+        Binding { exporter.configuration[keyPath: keyPath] ?? 0 }
+        set: {
+            exporter.configuration[keyPath: keyPath] = min(0.95, max(0, $0))
+            exporter.refreshReviewPreview()
+        }
+    }
+
+    private func resetTransform() {
+        exporter.configuration.cropLeft = 0; exporter.configuration.cropRight = 0
+        exporter.configuration.cropTop = 0; exporter.configuration.cropBottom = 0
+        exporter.configuration.rotation = .degrees0
+        exporter.configuration.flipHorizontal = false; exporter.configuration.flipVertical = false
+        exporter.refreshReviewPreview()
+    }
+
+    private func setCropAspect(_ target: CGFloat) {
+        guard let image = exporter.reviewImage else { return }
+        let source = CGFloat(image.width) / CGFloat(max(1, image.height))
+        exporter.configuration.cropLeft = 0; exporter.configuration.cropRight = 0
+        exporter.configuration.cropTop = 0; exporter.configuration.cropBottom = 0
+        if source > target {
+            let inset = (1 - target / source) / 2
+            exporter.configuration.cropLeft = Double(inset)
+            exporter.configuration.cropRight = Double(inset)
+        } else {
+            let inset = (1 - source / target) / 2
+            exporter.configuration.cropTop = Double(inset)
+            exporter.configuration.cropBottom = Double(inset)
+        }
+        exporter.refreshReviewPreview()
+    }
+
     private func exportLabel(_ value: ExportOutputKind) -> String {
         switch value { case .still: "Still"; case .movie: "Movie"; case .imageSequence: "Image sequence"; case .gif: "GIF" }
     }
@@ -4155,7 +4353,24 @@ private struct ExportPanel: View {
         switch value { case .h264: "H.264"; case .hevc: "HEVC"; case .proRes422: "ProRes 422"; case .proRes422HQ: "ProRes 422 HQ"; case .proRes4444: "ProRes 4444" }
     }
     private func triggerLabel(_ value: CaptureTrigger) -> String {
-        camelLabel(value.rawValue)
+        switch value {
+        case .cadence: "Continuous rate"
+        case .interval: "Fixed interval"
+        case .manual: "Capture Next only"
+        default: camelLabel(value.rawValue)
+        }
+    }
+    private var captureRuleHelp: String {
+        switch exporter.configuration.trigger {
+        case .cadence:
+            "Samples continuously at Capture FPS. Enabled gates are checked for every scheduled frame."
+        case .interval:
+            "Samples once per 1 ÷ Capture FPS seconds. Enabled gates must pass at that instant."
+        case .manual:
+            "Waits for Capture Next; the first fully composed frame after the command is saved."
+        default:
+            "The event arms one capture, fulfilled by the first fully composed frame for which all gates pass."
+        }
     }
     private func gateLabel(_ value: CaptureGateKind) -> String {
         camelLabel(value.rawValue)
@@ -4182,6 +4397,28 @@ private struct RateField: View {
                     .frame(width: 86).textFieldStyle(.roundedBorder)
                     .onSubmit { value = min(range.upperBound, max(range.lowerBound, value)) }
                 if !suffix.isEmpty { Text(suffix).foregroundStyle(.secondary) }
+            }
+        }
+    }
+}
+
+private struct PercentField: View {
+    let title: String
+    @Binding var value: Double
+
+    init(_ title: String, value: Binding<Double>) {
+        self.title = title; self._value = value
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 3) {
+                TextField(title, value: Binding(
+                    get: { value * 100 },
+                    set: { value = min(0.95, max(0, $0 / 100)) }
+                ), format: .number.precision(.fractionLength(0...1)))
+                .frame(width: 54).textFieldStyle(.roundedBorder)
+                Text("%").foregroundStyle(.secondary)
             }
         }
     }

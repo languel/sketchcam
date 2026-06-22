@@ -106,6 +106,9 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     /// Zero-readback display path (the preview pane / presentation output).
     let previewDisplay = SampleBufferDisplayController()
+    /// A display layer cannot belong to two NSViews. Export gets its own
+    /// zero-readback layer fed from the same completed compositor frame.
+    let exportPreviewDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
@@ -1330,6 +1333,7 @@ final class SketchCamViewModel: ObservableObject {
         DispatchQueue.main.async {
             if let displayBuffer {
                 self.previewDisplay.enqueue(displayBuffer)
+                self.exportPreviewDisplay.enqueue(displayBuffer)
             }
             if let image {
                 self.live.previewImage = image

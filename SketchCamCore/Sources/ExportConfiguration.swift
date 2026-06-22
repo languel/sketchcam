@@ -52,6 +52,11 @@ public enum ExportCollisionPolicy: String, Codable, Sendable, CaseIterable, Iden
     public var id: String { rawValue }
 }
 
+public enum ExportRotation: Int, Codable, Sendable, CaseIterable, Identifiable {
+    case degrees0 = 0, degrees90 = 90, degrees180 = 180, degrees270 = 270
+    public var id: Int { rawValue }
+}
+
 public enum CaptureTrigger: String, Codable, Sendable, CaseIterable, Identifiable {
     case cadence, interval, manual
     case mouseDown, mouseUp, click, dragBegin, dragEnd
@@ -102,7 +107,7 @@ public struct CaptureGate: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ExportConfiguration: Codable, Sendable, Equatable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     public var version: Int
     public var outputKind: ExportOutputKind
     public var imageFormat: ExportImageFormat
@@ -139,9 +144,21 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
     public var collisionPolicy: ExportCollisionPolicy?
     public var sourceStartSeconds: Double?
     public var sourceEndSeconds: Double?
+    /// Normalized, non-destructive source insets. `cropTop` follows visual UI
+    /// coordinates; the renderer converts it to Core Image's bottom-up space.
+    public var cropLeft: Double?
+    public var cropTop: Double?
+    public var cropRight: Double?
+    public var cropBottom: Double?
+    public var rotation: ExportRotation?
+    public var flipHorizontal: Bool?
+    public var flipVertical: Bool?
 
     public var resolvedLiveInputMode: ExportLiveInputMode { liveInputMode ?? .freezeLatest }
     public var resolvedCollisionPolicy: ExportCollisionPolicy { collisionPolicy ?? .newTake }
+    public var resolvedRotation: ExportRotation { rotation ?? .degrees0 }
+    public var resolvedFlipHorizontal: Bool { flipHorizontal ?? false }
+    public var resolvedFlipVertical: Bool { flipVertical ?? false }
 
     public init(outputKind: ExportOutputKind = .still, imageFormat: ExportImageFormat = .png,
                 movieCodec: ExportMovieCodec = .h264, container: ExportContainer = .mov,
@@ -158,7 +175,11 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
                 fixedReplayGap: Double = 0.25, replaySpeed: Double = 1, takeName: String = "take-001",
                 liveInputMode: ExportLiveInputMode? = .freezeLatest,
                 collisionPolicy: ExportCollisionPolicy? = .newTake,
-                sourceStartSeconds: Double? = nil, sourceEndSeconds: Double? = nil) {
+                sourceStartSeconds: Double? = nil, sourceEndSeconds: Double? = nil,
+                cropLeft: Double? = 0, cropTop: Double? = 0,
+                cropRight: Double? = 0, cropBottom: Double? = 0,
+                rotation: ExportRotation? = .degrees0,
+                flipHorizontal: Bool? = false, flipVertical: Bool? = false) {
         self.version = Self.currentVersion
         self.outputKind = outputKind
         self.imageFormat = imageFormat
@@ -193,6 +214,10 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
         self.collisionPolicy = collisionPolicy
         self.sourceStartSeconds = sourceStartSeconds
         self.sourceEndSeconds = sourceEndSeconds
+        self.cropLeft = cropLeft; self.cropTop = cropTop
+        self.cropRight = cropRight; self.cropBottom = cropBottom
+        self.rotation = rotation
+        self.flipHorizontal = flipHorizontal; self.flipVertical = flipVertical
     }
 
     public mutating func clamp() {
@@ -210,6 +235,16 @@ public struct ExportConfiguration: Codable, Sendable, Equatable {
         sourceEndSeconds = sourceEndSeconds.map { max(0, $0) }
         if let start = sourceStartSeconds, let end = sourceEndSeconds, end < start {
             sourceEndSeconds = start
+        }
+        cropLeft = min(0.95, max(0, cropLeft ?? 0))
+        cropTop = min(0.95, max(0, cropTop ?? 0))
+        cropRight = min(0.95, max(0, cropRight ?? 0))
+        cropBottom = min(0.95, max(0, cropBottom ?? 0))
+        if (cropLeft ?? 0) + (cropRight ?? 0) >= 0.99 {
+            cropRight = max(0, 0.99 - (cropLeft ?? 0))
+        }
+        if (cropTop ?? 0) + (cropBottom ?? 0) >= 0.99 {
+            cropBottom = max(0, 0.99 - (cropTop ?? 0))
         }
         if !movieCodec.supportsAlpha { includeAlpha = false }
         if container == .mp4 && movieCodec != .h264 && movieCodec != .hevc { container = .mov }

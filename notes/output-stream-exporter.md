@@ -28,13 +28,25 @@ is raised.
 
 ## Capture rules
 
-Version 2 uses one trigger and zero or more AND gates. Mouse and gesture events
+Version 3 uses one trigger and zero or more AND gates. Mouse and gesture events
 arm a pending capture which is fulfilled by the next fully composed frame, so an
 event never saves the stale frame from before the action. Gates can inspect
 mouse/Draw/Wash state, solver activity, physical ink change, final output, a
 stable UUID-addressed layer's post-effect output, or a GPU control field
 (paper absorbency or motion magnitude). Metrics are mean luma,
 threshold coverage, alpha coverage, and inter-frame change/motion.
+
+In the UI, **Continuous rate** is the clearer name for the `cadence` trigger:
+it schedules samples at Capture FPS and evaluates every enabled gate for each
+sample. **Active Ink Performance** combines this trigger with the continuously
+sampled Ink Solver Active gate, preserving live gestures and post-release
+settling while removing fully idle time.
+
+Built-in workflows provide safe starting points for active-ink performance,
+full realtime capture, manual and mouse-up stop motion, canvas-action capture,
+and active-ink time-lapse. They use the current published output frame rate
+where realtime playback should remain one-to-one; every field remains editable
+and the result can be saved as a named user preset.
 
 The post-effect layer/control-field taps are dormant unless an active session
 addresses them. Metric images are reduced on the GPU and only one pixel per
@@ -52,6 +64,34 @@ policy. Image sequences create a take directory and never mix frames into an
 existing non-empty take. Optional sidecars record timing,
 trigger, duplicate/drop state, and output indices. Optional poster frames are
 written beside the primary output.
+
+## Review, crop, and continuation
+
+After a still, movie, GIF, or image sequence finishes, the Export panel opens
+it as a frame-addressable review source. The scrubber and step buttons decode
+only the requested frame, so long-form exports are not loaded into memory.
+The preview remains at the top of the panel and can switch between the current
+live composite and the completed export review.
+
+The live Export preview has its own `AVSampleBufferDisplayLayer`. In Metal
+preview mode the compositor enqueues the same completed display buffer into the
+canvas and Export display layers, avoiding both a GPU-to-CPU image readback and
+the single-superlayer limitation of sharing one `CALayer` between two views.
+
+Normalized crop insets, quarter-turn rotation, and horizontal/vertical flips
+run in Core Image in final framed-output coordinates. This keeps the encoded
+crop identical to the review guide even when a 16:9 canvas is fitted into a
+square GIF. The transformed crop then fills the requested output frame. The
+preview offers centered 1:1, 4:3, and 16:9 presets.
+**Re-export clip** transcodes the reviewed frames with the current output and
+transform settings into a new take.
+
+**Continue from frame** is deliberately non-destructive: it creates a new take,
+copies the reviewed prefix through the selected frame, then arms the configured
+live/event capture after that prefix. Finalized movie containers are never
+edited in place, and the original export remains untouched. If transform
+settings are unchanged, reviewed frames are copied without applying their
+original crop/rotation a second time.
 
 ## Performance and NRT
 
@@ -85,3 +125,8 @@ captures use a bounded four-frame writer queue; overload is counted instead of
 growing memory without limit. Manual and event captures are retained. NRT uses
 back-pressure on that same queue. Writer and disk-limit failures stop the
 session and ask native writers to finalize what they can.
+
+For live workflow tuning, **Draw on canvas in every panel** keeps the Ink input
+surface active while the Export inspector is visible. Inspector controls retain
+their clicks, and Ink keyboard shortcuts remain scoped to the Ink panel so text
+entry and export controls do not acquire hidden shortcut conflicts.

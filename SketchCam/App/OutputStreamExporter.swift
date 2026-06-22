@@ -162,9 +162,96 @@ private final class MovieSink: ExportFrameSink {
     }
 }
 
+private final class ExportReviewSource: @unchecked Sendable {
+    enum Storage {
+        case movie(AVAssetImageGenerator)
+        case images([URL])
+        case imageSource(CGImageSource)
+    }
+
+    let storage: Storage
+    let frameCount: Int
+    let fps: Double
+
+    init?(url: URL, configuration: ExportConfiguration) {
+        fps = max(0.001, configuration.playbackFPS)
+        switch configuration.outputKind {
+        case .movie:
+            let asset = AVURLAsset(url: url)
+            let duration = max(0, CMTimeGetSeconds(asset.duration))
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            storage = .movie(generator)
+            frameCount = max(1, Int((duration * fps).rounded(.up)))
+        case .imageSequence:
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: nil
+            ).filter({ $0.lastPathComponent.hasPrefix("frame-") }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }),
+                  !urls.isEmpty else { return nil }
+            storage = .images(urls); frameCount = urls.count
+        case .gif, .still:
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            storage = .imageSource(source); frameCount = max(1, CGImageSourceGetCount(source))
+        }
+    }
+
+    func image(at index: Int) -> CGImage? {
+        let safe = min(max(0, index), frameCount - 1)
+        switch storage {
+        case .movie(let generator):
+            return try? generator.copyCGImage(
+                at: CMTime(seconds: Double(safe) / fps, preferredTimescale: 600_000),
+                actualTime: nil
+            )
+        case .images(let urls):
+            guard let source = CGImageSourceCreateWithURL(urls[safe] as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        case .imageSource(let source):
+            return CGImageSourceCreateImageAtIndex(source, safe, nil)
+        }
+    }
+}
+
 final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     enum SessionState: String { case idle, recording, finishing, failed }
-    enum BuiltInPreset { case liveMovie, stopMotion, actionCapture }
+    enum BuiltInPreset: String, CaseIterable, Identifiable {
+        case activeInkPerformance
+        case realtimePerformance
+        case manualStopMotion
+        case mouseUpStopMotion
+        case canvasActions
+        case inkTimeLapse
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .activeInkPerformance: "Active Ink Performance"
+            case .realtimePerformance: "Realtime Performance"
+            case .manualStopMotion: "Manual Stop Motion"
+            case .mouseUpStopMotion: "Mouse-Up Stop Motion"
+            case .canvasActions: "Canvas Actions"
+            case .inkTimeLapse: "Ink Time-Lapse"
+            }
+        }
+        var summary: String {
+            switch self {
+            case .activeInkPerformance:
+                "Capture smoothly while a gesture or the ink simulation is active; omit settled idle time."
+            case .realtimePerformance:
+                "Capture every composed frame at the current output rate, including pauses."
+            case .manualStopMotion:
+                "Add one frame only with Capture Next or its keyboard shortcut."
+            case .mouseUpStopMotion:
+                "Add one completed frame whenever the canvas pointer is released."
+            case .canvasActions:
+                "Add one frame after each committed stroke, command, undo, or redo."
+            case .inkTimeLapse:
+                "Sample active ink at 5 FPS and play it at the output rate for a compact simulation study."
+            }
+        }
+    }
 
     @Published var configuration = ExportConfiguration()
     @Published var destinationURL: URL?
@@ -174,14 +261,21 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     @Published private(set) var droppedFrames = 0
     @Published private(set) var statusText = "Ready"
     @Published private(set) var progress: Double?
+    @Published private(set) var reviewImage: CGImage?
+    @Published private(set) var reviewFrame = 0
+    @Published private(set) var reviewFrameCount = 0
+    @Published private(set) var reviewURL: URL?
+    @Published private(set) var reviewIsLoading = false
     @Published var presetName = ""
     @Published private(set) var presets: [ExportPreset] = []
+    @Published private(set) var selectedBuiltInPreset: BuiltInPreset?
     var onAcceptedFrame: ((Int) -> Void)?
     var onNRTRequested: ((ExportConfiguration) -> Void)?
     var sourceTimeProvider: (() -> Double?)?
 
     private struct Runtime {
         var active = false
+        var acceptingFrames = true
         var manualPending = 0
         var eventPending: CaptureTrigger?
         var pendingActionID: UUID?
@@ -210,9 +304,19 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private var sink: ExportFrameSink?
     private var scopedURL: URL?
+    private var reviewScopedURL: URL?
     private var lastFrame: CVPixelBuffer?
     private var posterImage: CGImage?
     private var restoreConfigurationAfterSession: ExportConfiguration?
+    private var reviewSource: ExportReviewSource?
+    private var reviewConfiguration: ExportConfiguration?
+    /// The compositor frame before export framing/crop. Keeping the latest raw
+    /// frame lets Review use the exact same renderer as the encoder instead of
+    /// drawing a second crop guide over an already transformed export.
+    private var reviewInputImage: CGImage?
+    private var reviewInputIsPreExport = false
+    private var reviewPreviewRevision = 0
+    private let reviewQueue = DispatchQueue(label: "io.github.languel.sketchcam.export.review", qos: .userInitiated)
     private let defaultsKey = "io.github.languel.sketchcam.export.configuration"
     private let presetsKey = "io.github.languel.sketchcam.export.presets"
 
@@ -227,28 +331,57 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         }
     }
 
+    deinit {
+        scopedURL?.stopAccessingSecurityScopedResource()
+        reviewScopedURL?.stopAccessingSecurityScopedResource()
+    }
+
     var isRecording: Bool { lock.withLock { runtime.active } }
+    var reviewTime: Double {
+        Double(reviewFrame) / max(0.001, reviewConfiguration?.playbackFPS ?? configuration.playbackFPS)
+    }
 
     func needsMetricTarget(_ id: UUID) -> Bool {
         isRecording && configuration.gates.contains { $0.enabled && $0.kind == .streamMetric && $0.layerID == id }
     }
 
-    func applyPreset(_ preset: BuiltInPreset) {
+    func applyPreset(_ preset: BuiltInPreset, outputFPS: Double = 30) {
+        let fps = min(360, max(0.001, outputFPS))
         var value = ExportConfiguration()
         switch preset {
-        case .liveMovie:
+        case .activeInkPerformance:
             value.outputKind = .movie
             value.trigger = .cadence
-        case .stopMotion:
+            value.captureFPS = fps
+            value.playbackFPS = fps
+            value.gates = [CaptureGate(kind: .inkSolverActive, comparison: .above, lowerBound: 0.5)]
+        case .realtimePerformance:
+            value.outputKind = .movie
+            value.trigger = .cadence
+            value.captureFPS = fps
+            value.playbackFPS = fps
+            value.gates = []
+        case .manualStopMotion:
             value.outputKind = .movie
             value.trigger = .manual
             value.captureFPS = 1
-            value.playbackFPS = 30
-        case .actionCapture:
+            value.playbackFPS = fps
+        case .mouseUpStopMotion:
+            value.outputKind = .movie
+            value.trigger = .mouseUp
+            value.playbackFPS = fps
+        case .canvasActions:
             value.outputKind = .movie
             value.trigger = .anyCanvasAction
-            value.playbackFPS = 30
+            value.playbackFPS = fps
+        case .inkTimeLapse:
+            value.outputKind = .movie
+            value.trigger = .cadence
+            value.captureFPS = 5
+            value.playbackFPS = fps
+            value.gates = [CaptureGate(kind: .inkSolverActive, comparison: .above, lowerBound: 0.5)]
         }
+        selectedBuiltInPreset = preset
         configuration = value
         persistConfiguration()
     }
@@ -264,7 +397,11 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         persistPresets()
     }
 
-    func applyPreset(_ preset: ExportPreset) { configuration = preset.configuration; persistConfiguration() }
+    func applyPreset(_ preset: ExportPreset) {
+        selectedBuiltInPreset = nil
+        configuration = preset.configuration
+        persistConfiguration()
+    }
 
     func deletePreset(_ preset: ExportPreset) {
         presets.removeAll { $0.id == preset.id }
@@ -280,7 +417,9 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: defaultsKey) }
     }
 
-    func start() {
+    func start() { start(seedingReview: false) }
+
+    private func start(seedingReview: Bool) {
         guard state == .idle || state == .failed, let chosenURL = destinationURL else {
             statusText = ExporterError.noDestination.localizedDescription; return
         }
@@ -303,7 +442,8 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
             posterImage = nil
             let now = config.renderMode == .live ? ProcessInfo.processInfo.systemUptime : 0
             lock.withLock {
-                runtime = Runtime(active: true, startedAt: now, nextCaptureAt: now)
+                runtime = Runtime(active: true, acceptingFrames: !seedingReview,
+                                  startedAt: now, nextCaptureAt: now)
             }
             capturedFrames = 0; duplicatedFrames = 0; droppedFrames = 0
             progress = config.renderMode == .live ? nil : 0
@@ -338,10 +478,19 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
                     }
                 }
                 DispatchQueue.main.async {
-                    self.scopedURL?.stopAccessingSecurityScopedResource(); self.scopedURL = nil
+                    if error == nil, !cancelled {
+                        self.reviewScopedURL?.stopAccessingSecurityScopedResource()
+                        self.reviewScopedURL = self.scopedURL
+                        self.scopedURL = nil
+                    } else {
+                        self.scopedURL?.stopAccessingSecurityScopedResource(); self.scopedURL = nil
+                    }
                     self.sink = nil; self.state = error == nil ? .idle : .failed
                     self.progress = error == nil && !cancelled ? 1 : nil
                     self.statusText = error?.localizedDescription ?? (cancelled ? "Cancelled" : "Finished \(self.capturedFrames) frames")
+                    if error == nil, !cancelled, let destination {
+                        self.loadReview(url: destination, configuration: config)
+                    }
                     if let restore = self.restoreConfigurationAfterSession {
                         self.configuration = restore
                         self.restoreConfigurationAfterSession = nil
@@ -354,6 +503,165 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     }
 
     func captureNext() { lock.withLock { runtime.manualPending += 1 } }
+
+    func seekReview(frame: Int) {
+        guard let source = reviewSource else { return }
+        let target = min(max(0, frame), source.frameCount - 1)
+        reviewFrame = target; reviewIsLoading = true
+        reviewQueue.async { [weak self, weak source] in
+            guard let self, let source else { return }
+            let image = source.image(at: target)
+            DispatchQueue.main.async {
+                guard self.reviewSource === source, self.reviewFrame == target else { return }
+                self.reviewInputImage = image
+                self.reviewInputIsPreExport = false
+                self.reviewImage = image
+                self.reviewIsLoading = false
+            }
+        }
+    }
+
+    func stepReview(_ delta: Int) { seekReview(frame: reviewFrame + delta) }
+
+    /// Rebuilds the Review image through the same framing/crop/transform path
+    /// used by every output sink. This is intentionally explicit: crop fields
+    /// call it as they change, while unrelated exporter settings do no work.
+    func refreshReviewPreview() {
+        guard let input = reviewInputImage else { return }
+        var config = configuration
+        config.clamp()
+        reviewPreviewRevision += 1
+        let revision = reviewPreviewRevision
+        reviewIsLoading = true
+        let inputIsPreExport = reviewInputIsPreExport
+        let reviewed = reviewConfiguration
+        reviewQueue.async { [weak self] in
+            guard let self else { return }
+            let image: CGImage?
+            if inputIsPreExport {
+                image = try? self.render(self.pixelBuffer(from: input), config: config).1
+            } else if let reviewed, self.sameVisualTransform(reviewed, config) {
+                // Decoded review frames already contain their original export
+                // transform. Showing them directly avoids applying it twice.
+                image = input
+            } else {
+                image = try? self.render(self.pixelBuffer(from: input), config: config).1
+            }
+            DispatchQueue.main.async {
+                guard self.reviewPreviewRevision == revision else { return }
+                self.reviewImage = image ?? input
+                self.reviewIsLoading = false
+            }
+        }
+    }
+
+    /// Creates a new take containing the reviewed prefix, then leaves the
+    /// exporter armed so subsequent live/event captures append after it.
+    func continueFromReview() { startFromReview(through: reviewFrame, continueRecording: true) }
+
+    /// Re-encodes the entire reviewed clip with the current crop, transform,
+    /// format, codec, and playback settings into a new take.
+    func reexportReview() { startFromReview(through: max(0, reviewFrameCount - 1), continueRecording: false) }
+
+    private func loadReview(url: URL, configuration: ExportConfiguration) {
+        reviewIsLoading = true
+        reviewQueue.async { [weak self] in
+            guard let self else { return }
+            let source = ExportReviewSource(url: url, configuration: configuration)
+            let last = max(0, (source?.frameCount ?? 1) - 1)
+            let image = source?.image(at: last)
+            DispatchQueue.main.async {
+                self.reviewSource = source
+                self.reviewConfiguration = configuration
+                self.reviewURL = source == nil ? nil : url
+                self.reviewFrameCount = source?.frameCount ?? 0
+                self.reviewFrame = last
+                self.reviewImage = image
+                self.reviewIsLoading = false
+            }
+        }
+    }
+
+    private func sameVisualTransform(_ lhs: ExportConfiguration, _ rhs: ExportConfiguration) -> Bool {
+        lhs.cropLeft == rhs.cropLeft && lhs.cropTop == rhs.cropTop &&
+        lhs.cropRight == rhs.cropRight && lhs.cropBottom == rhs.cropBottom &&
+        lhs.resolvedRotation == rhs.resolvedRotation &&
+        lhs.resolvedFlipHorizontal == rhs.resolvedFlipHorizontal &&
+        lhs.resolvedFlipVertical == rhs.resolvedFlipVertical &&
+        lhs.width == rhs.width && lhs.height == rhs.height && lhs.framing == rhs.framing
+    }
+
+    private func startFromReview(through requestedFrame: Int, continueRecording: Bool) {
+        guard state == .idle || state == .failed,
+              let source = reviewSource, reviewFrameCount > 0 else { return }
+        let last = min(max(0, requestedFrame), source.frameCount - 1)
+        if configuration.outputKind == .imageSequence, let reviewURL {
+            // A completed sequence points at its take folder; new takes belong
+            // beside it rather than nested inside it.
+            destinationURL = reviewURL.deletingLastPathComponent()
+        }
+        configuration.renderMode = .live
+        if configuration.resolvedCollisionPolicy == .replace {
+            configuration.collisionPolicy = .newTake
+        }
+        start(seedingReview: true)
+        guard state == .recording else { return }
+        statusText = continueRecording ? "Preparing reviewed prefix…" : "Re-exporting review…"
+        progress = 0
+        let config = configuration
+        var prefixConfig = config
+        if let reviewed = reviewConfiguration,
+           reviewed.cropLeft == config.cropLeft, reviewed.cropTop == config.cropTop,
+           reviewed.cropRight == config.cropRight, reviewed.cropBottom == config.cropBottom,
+           reviewed.resolvedRotation == config.resolvedRotation,
+           reviewed.resolvedFlipHorizontal == config.resolvedFlipHorizontal,
+           reviewed.resolvedFlipVertical == config.resolvedFlipVertical {
+            // Reviewed frames already contain the transform from their first
+            // encode. Preserve them exactly unless the user changed it.
+            prefixConfig.cropLeft = 0; prefixConfig.cropTop = 0
+            prefixConfig.cropRight = 0; prefixConfig.cropBottom = 0
+            prefixConfig.rotation = .degrees0
+            prefixConfig.flipHorizontal = false; prefixConfig.flipVertical = false
+        }
+        writerQueue.async { [weak self, weak source] in
+            guard let self, let source else { return }
+            for index in 0...last {
+                guard self.state == .recording, let raw = source.image(at: index) else { break }
+                do {
+                    let input = try self.pixelBuffer(from: raw)
+                    let (buffer, image) = try self.render(input, config: prefixConfig)
+                    let time = CMTime(seconds: ExportTiming.presentationTime(frameIndex: index, fps: config.playbackFPS),
+                                      preferredTimescale: 600_000)
+                    try self.sink?.append(image, pixelBuffer: buffer, time: time)
+                    self.lock.withLock { self.runtime.acceptedCount += 1 }
+                    DispatchQueue.main.async {
+                        self.capturedFrames = index + 1
+                        self.reviewImage = image
+                        self.reviewFrame = index
+                        self.progress = Double(index + 1) / Double(last + 1)
+                    }
+                } catch {
+                    DispatchQueue.main.async { self.fail(error) }
+                    return
+                }
+            }
+            DispatchQueue.main.async {
+                guard self.state == .recording else { return }
+                if continueRecording {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    self.lock.withLock {
+                        self.runtime.acceptingFrames = true
+                        self.runtime.startedAt = now
+                        self.runtime.nextCaptureAt = now
+                    }
+                    self.progress = nil
+                    self.statusText = "Recording after reviewed frame \(last + 1)"
+                } else {
+                    self.stop()
+                }
+            }
+        }
+    }
 
     func updateNRTProgress(_ value: Double) {
         DispatchQueue.main.async { self.progress = min(1, max(0, value)); self.statusText = "Rendering offline…" }
@@ -433,7 +741,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
             }
         }
         let decision: (count: Int, trigger: CaptureTrigger, elapsed: Double, actionID: UUID?)? = lock.withLock {
-            guard runtime.active else { return nil }
+            guard runtime.active, runtime.acceptingFrames else { return nil }
             let elapsed = wallTime - runtime.startedAt
             if configuration.maximumDuration > 0, elapsed >= configuration.maximumDuration { return (0, .manual, elapsed, nil) }
             if configuration.maximumFrames > 0, runtime.acceptedCount >= configuration.maximumFrames { return (0, .manual, elapsed, nil) }
@@ -479,6 +787,10 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             defer { if offline || cadence { self.writerSlots.signal() } }
+            let sourceExtent = CGRect(x: 0, y: 0,
+                                      width: CVPixelBufferGetWidth(source),
+                                      height: CVPixelBufferGetHeight(source))
+            let sourceImage = self.context.createCGImage(CIImage(cvPixelBuffer: source), from: sourceExtent)
             for slot in 0..<decision.count {
                 do {
                     try self.checkDisk(config)
@@ -499,6 +811,11 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async {
                         self.capturedFrames += 1
                         if slot > 0 { self.duplicatedFrames += 1 }
+                        self.reviewInputImage = sourceImage
+                        self.reviewInputIsPreExport = true
+                        self.reviewImage = image
+                        self.reviewFrame = index
+                        self.reviewFrameCount = index + 1
                         self.onAcceptedFrame?(index)
                     }
                 } catch { DispatchQueue.main.async { self.fail(error) }; return }
@@ -592,26 +909,80 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         CVPixelBufferCreate(kCFAllocatorDefault, config.width, config.height, kCVPixelFormatType_32BGRA,
                             [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &output)
         guard let output else { throw ExporterError.encodingFailed }
-        let input = CIImage(cvPixelBuffer: source)
         let target = CGRect(x: 0, y: 0, width: config.width, height: config.height)
-        let sx = target.width / input.extent.width, sy = target.height / input.extent.height
-        let tx: CGFloat, ty: CGFloat, xScale: CGFloat, yScale: CGFloat
-        switch config.framing {
-        case .stretch: xScale = sx; yScale = sy
-        case .fit: xScale = min(sx, sy); yScale = xScale
-        case .fill: xScale = max(sx, sy); yScale = xScale
-        }
-        tx = (target.width - input.extent.width * xScale) / 2
-        ty = (target.height - input.extent.height * yScale) / 2
         let background = CIImage(color: config.includeAlpha ? .clear : .black).cropped(to: target)
-        let framed = input.transformed(by: CGAffineTransform(scaleX: xScale, y: yScale))
-            .transformed(by: CGAffineTransform(translationX: tx, y: ty)).composited(over: background).cropped(to: target)
+        let base = frameImage(CIImage(cvPixelBuffer: source), into: target,
+                              framing: config.framing, background: background)
+        let hasTransform = (config.cropLeft ?? 0) > 0 || (config.cropTop ?? 0) > 0 ||
+            (config.cropRight ?? 0) > 0 || (config.cropBottom ?? 0) > 0 ||
+            config.resolvedRotation != .degrees0 || config.resolvedFlipHorizontal || config.resolvedFlipVertical
+        let framed: CIImage
+        if hasTransform {
+            // Crop lives in final-output coordinates, matching the review UI.
+            // Fill the transformed crop back into the requested output frame;
+            // this prevents the original Fit letterbox from reappearing.
+            framed = frameImage(transformedInput(base, config: config), into: target,
+                                framing: .fill, background: background)
+        } else {
+            framed = base
+        }
         let colorSpace = config.colorSpace == .displayP3 ? CGColorSpace(name: CGColorSpace.displayP3)! : CGColorSpace(name: CGColorSpace.sRGB)!
         context.render(framed, to: output, bounds: target, colorSpace: colorSpace)
         guard let cg = context.createCGImage(framed, from: target, format: .BGRA8, colorSpace: colorSpace) else {
             throw ExporterError.encodingFailed
         }
         return (output, cg)
+    }
+
+    private func frameImage(_ input: CIImage, into target: CGRect,
+                            framing: ExportFraming, background: CIImage) -> CIImage {
+        let sx = target.width / input.extent.width, sy = target.height / input.extent.height
+        let tx: CGFloat, ty: CGFloat, xScale: CGFloat, yScale: CGFloat
+        switch framing {
+        case .stretch: xScale = sx; yScale = sy
+        case .fit: xScale = min(sx, sy); yScale = xScale
+        case .fill: xScale = max(sx, sy); yScale = xScale
+        }
+        tx = (target.width - input.extent.width * xScale) / 2
+        ty = (target.height - input.extent.height * yScale) / 2
+        return input.transformed(by: CGAffineTransform(scaleX: xScale, y: yScale))
+            .transformed(by: CGAffineTransform(translationX: tx, y: ty)).composited(over: background).cropped(to: target)
+    }
+
+    private func transformedInput(_ source: CIImage, config: ExportConfiguration) -> CIImage {
+        let extent = source.extent
+        let left = CGFloat(config.cropLeft ?? 0), right = CGFloat(config.cropRight ?? 0)
+        let top = CGFloat(config.cropTop ?? 0), bottom = CGFloat(config.cropBottom ?? 0)
+        let crop = CGRect(x: extent.minX + extent.width * left,
+                          y: extent.minY + extent.height * bottom,
+                          width: max(1, extent.width * (1 - left - right)),
+                          height: max(1, extent.height * (1 - top - bottom)))
+        var image = source.cropped(to: crop)
+            .transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+        if config.resolvedFlipHorizontal {
+            image = image.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
+                                                             tx: image.extent.width, ty: 0))
+        }
+        if config.resolvedFlipVertical {
+            image = image.transformed(by: CGAffineTransform(a: 1, b: 0, c: 0, d: -1,
+                                                             tx: 0, ty: image.extent.height))
+        }
+        let angle = CGFloat(config.resolvedRotation.rawValue) * .pi / 180
+        if angle != 0 {
+            image = image.transformed(by: CGAffineTransform(rotationAngle: -angle))
+            image = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX,
+                                                             y: -image.extent.minY))
+        }
+        return image
+    }
+
+    private func pixelBuffer(from image: CGImage) throws -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, image.width, image.height, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
+        guard let buffer else { throw ExporterError.encodingFailed }
+        context.render(CIImage(cgImage: image), to: buffer)
+        return buffer
     }
 
     private func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
