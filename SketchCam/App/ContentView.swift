@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SketchCamCore
 import SketchCamShared
 import SwiftUI
@@ -3898,34 +3899,215 @@ private struct CheckerboardBackground: View {
     }
 }
 
+private struct ExportCropInsets: Equatable {
+    var left: Double
+    var top: Double
+    var right: Double
+    var bottom: Double
+}
+
 private struct ExportPreviewCanvas: View {
     @ObservedObject var live: LiveReadouts
     let liveDisplay: SampleBufferDisplayController
     let usesMetalLivePreview: Bool
     let reviewImage: CGImage?
     let isLoading: Bool
+    let outputSize: CGSize
+    let framing: ExportFraming
+    @Binding var cropInsets: ExportCropInsets
+    let cropIsEditable: Bool
+    let cropDidEndEditing: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.28)
-            if let reviewImage {
-                Image(decorative: reviewImage, scale: 1)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-            } else if usesMetalLivePreview {
-                SampleBufferDisplayView(controller: liveDisplay)
-            } else if let image = live.previewImage {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-            } else {
-                ProgressView().controlSize(.small)
+        GeometryReader { proxy in
+            let canvas = aspectFitRect(
+                aspect: max(0.01, outputSize.width / max(1, outputSize.height)),
+                inside: CGRect(origin: .zero, size: proxy.size)
+            )
+            ZStack {
+                Color.black.opacity(0.28)
+                ZStack {
+                    if let reviewImage {
+                        ExportPreviewImage(image: reviewImage, framing: .stretch)
+                    } else if usesMetalLivePreview {
+                        SampleBufferDisplayView(
+                            controller: liveDisplay,
+                            videoGravity: framing.videoGravity
+                        )
+                    } else if let image = live.previewImage {
+                        ExportPreviewImage(image: image, framing: framing)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    if cropIsEditable {
+                        ExportCropEditor(insets: $cropInsets, didEndEditing: cropDidEndEditing)
+                    }
+                    if isLoading { ProgressView().controlSize(.small) }
+                }
+                .frame(width: canvas.width, height: canvas.height)
+                .position(x: canvas.midX, y: canvas.midY)
+                .clipped()
             }
-            if isLoading { ProgressView().controlSize(.small) }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func aspectFitRect(aspect: CGFloat, inside bounds: CGRect) -> CGRect {
+        let boundsAspect = bounds.width / max(1, bounds.height)
+        let size = boundsAspect > aspect
+            ? CGSize(width: bounds.height * aspect, height: bounds.height)
+            : CGSize(width: bounds.width, height: bounds.width / aspect)
+        return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+}
+
+private extension ExportFraming {
+    var videoGravity: AVLayerVideoGravity {
+        switch self {
+        case .fit: .resizeAspect
+        case .fill: .resizeAspectFill
+        case .stretch: .resize
+        }
+    }
+}
+
+private struct ExportPreviewImage: View {
+    let image: CGImage
+    let framing: ExportFraming
+
+    var body: some View {
+        GeometryReader { proxy in
+            let content = Image(decorative: image, scale: 1)
+                .resizable()
+                .interpolation(.none)
+            switch framing {
+            case .fit:
+                content.scaledToFit().frame(width: proxy.size.width, height: proxy.size.height)
+            case .fill:
+                content.scaledToFill().frame(width: proxy.size.width, height: proxy.size.height).clipped()
+            case .stretch:
+                content.frame(width: proxy.size.width, height: proxy.size.height)
+            }
+        }
+    }
+}
+
+private struct ExportCropEditor: View {
+    private enum Handle: CaseIterable, Identifiable {
+        case move, top, bottom, left, right, topLeft, topRight, bottomLeft, bottomRight
+        var id: Self { self }
+    }
+
+    @Binding var insets: ExportCropInsets
+    let didEndEditing: () -> Void
+    @State private var dragStart: ExportCropInsets?
+    private let minimumSpan = 0.02
+
+    var body: some View {
+        GeometryReader { proxy in
+            let bounds = CGRect(origin: .zero, size: proxy.size)
+            let crop = cropRect(in: bounds)
+            ZStack {
+                Canvas { context, size in
+                    var shade = Path(CGRect(origin: .zero, size: size))
+                    shade.addRect(crop)
+                    context.fill(shade, with: .color(.black.opacity(0.56)),
+                                 style: FillStyle(eoFill: true))
+                }
+                .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .frame(width: crop.width, height: crop.height)
+                    .position(x: crop.midX, y: crop.midY)
+                    .gesture(dragGesture(.move, size: proxy.size))
+                    .help("Drag to reposition the crop")
+
+                Rectangle()
+                    .stroke(.white, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                    .shadow(color: .black.opacity(0.8), radius: 1)
+                    .frame(width: crop.width, height: crop.height)
+                    .position(x: crop.midX, y: crop.midY)
+                    .allowsHitTesting(false)
+
+                ForEach(Handle.allCases.filter { $0 != .move }) { handle in
+                    cropHandle(handle, crop: crop, size: proxy.size)
+                }
+            }
+        }
+    }
+
+    private func cropHandle(_ handle: Handle, crop: CGRect, size: CGSize) -> some View {
+        let point = handlePoint(handle, crop: crop)
+        let edge = handle == .top || handle == .bottom || handle == .left || handle == .right
+        return RoundedRectangle(cornerRadius: 2)
+            .fill(.white)
+            .overlay(RoundedRectangle(cornerRadius: 2).stroke(.black.opacity(0.8), lineWidth: 1))
+            .frame(width: edge && (handle == .top || handle == .bottom) ? 18 : 9,
+                   height: edge && (handle == .left || handle == .right) ? 18 : 9)
+            .contentShape(Rectangle().inset(by: -7))
+            .position(point)
+            .gesture(dragGesture(handle, size: size))
+            .help("Drag to resize the crop")
+    }
+
+    private func cropRect(in bounds: CGRect) -> CGRect {
+        CGRect(x: bounds.width * insets.left,
+               y: bounds.height * insets.top,
+               width: bounds.width * max(minimumSpan, 1 - insets.left - insets.right),
+               height: bounds.height * max(minimumSpan, 1 - insets.top - insets.bottom))
+    }
+
+    private func handlePoint(_ handle: Handle, crop: CGRect) -> CGPoint {
+        switch handle {
+        case .top: CGPoint(x: crop.midX, y: crop.minY)
+        case .bottom: CGPoint(x: crop.midX, y: crop.maxY)
+        case .left: CGPoint(x: crop.minX, y: crop.midY)
+        case .right: CGPoint(x: crop.maxX, y: crop.midY)
+        case .topLeft: CGPoint(x: crop.minX, y: crop.minY)
+        case .topRight: CGPoint(x: crop.maxX, y: crop.minY)
+        case .bottomLeft: CGPoint(x: crop.minX, y: crop.maxY)
+        case .bottomRight: CGPoint(x: crop.maxX, y: crop.maxY)
+        case .move: CGPoint(x: crop.midX, y: crop.midY)
+        }
+    }
+
+    private func dragGesture(_ handle: Handle, size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if dragStart == nil { dragStart = insets }
+                guard let start = dragStart else { return }
+                let dx = Double(value.translation.width / max(1, size.width))
+                let dy = Double(value.translation.height / max(1, size.height))
+                var next = start
+
+                if handle == .move {
+                    let horizontal = min(max(dx, -start.left), start.right)
+                    let vertical = min(max(dy, -start.top), start.bottom)
+                    next.left = start.left + horizontal; next.right = start.right - horizontal
+                    next.top = start.top + vertical; next.bottom = start.bottom - vertical
+                } else {
+                    if handle == .left || handle == .topLeft || handle == .bottomLeft {
+                        next.left = min(max(0, start.left + dx), 1 - start.right - minimumSpan)
+                    }
+                    if handle == .right || handle == .topRight || handle == .bottomRight {
+                        next.right = min(max(0, start.right - dx), 1 - start.left - minimumSpan)
+                    }
+                    if handle == .top || handle == .topLeft || handle == .topRight {
+                        next.top = min(max(0, start.top + dy), 1 - start.bottom - minimumSpan)
+                    }
+                    if handle == .bottom || handle == .bottomLeft || handle == .bottomRight {
+                        next.bottom = min(max(0, start.bottom - dy), 1 - start.top - minimumSpan)
+                    }
+                }
+                insets = next
+            }
+            .onEnded { _ in
+                dragStart = nil
+                didEndEditing()
+            }
     }
 }
 
@@ -3963,9 +4145,15 @@ private struct ExportPanel: View {
                     liveDisplay: liveDisplay,
                     usesMetalLivePreview: usesMetalLivePreview,
                     reviewImage: previewShowsReview ? exporter.reviewImage : nil,
-                    isLoading: previewShowsReview && exporter.reviewIsLoading
+                    isLoading: previewShowsReview && exporter.reviewIsLoading,
+                    outputSize: CGSize(width: max(1, exporter.configuration.width),
+                                       height: max(1, exporter.configuration.height)),
+                    framing: exporter.configuration.framing,
+                    cropInsets: cropInsets,
+                    cropIsEditable: !previewShowsReview,
+                    cropDidEndEditing: exporter.refreshReviewPreview
                 )
-                .frame(height: 170)
+                .frame(height: 260)
 
                 if previewShowsReview, exporter.reviewImage != nil {
                     if exporter.reviewFrameCount > 1 {
@@ -3988,7 +4176,7 @@ private struct ExportPanel: View {
                     Text("Continue creates a new take with the reviewed prefix, then appends new captures. The original remains untouched.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Live composed output. Completed exports are available under Review.")
+                    Text("Drag inside the crop to move it; drag an edge or corner to resize. Completed exports are available under Review.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -4052,7 +4240,7 @@ private struct ExportPanel: View {
 
         GroupBox("Output") {
             VStack(alignment: .leading, spacing: 8) {
-                Picker("Type", selection: config.outputKind) {
+                Picker("Type", selection: resolvedOutputKind) {
                     ForEach(ExportOutputKind.allCases) { Text(exportLabel($0)).tag($0) }
                 }
                 Picker("Render", selection: config.renderMode) {
@@ -4071,14 +4259,14 @@ private struct ExportPanel: View {
                     }
                 }
                 if exporter.configuration.outputKind == .still || exporter.configuration.outputKind == .imageSequence {
-                    Picker("Format", selection: config.imageFormat) {
+                    Picker("Format", selection: resolvedImageFormat) {
                         ForEach(ExportImageFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) }
                     }
                 } else if exporter.configuration.outputKind == .movie {
                     Picker("Codec", selection: config.movieCodec) {
                         ForEach(ExportMovieCodec.allCases) { Text(codecLabel($0)).tag($0) }
                     }
-                    Picker("Container", selection: config.container) {
+                    Picker("Container", selection: resolvedContainer) {
                         ForEach(ExportContainer.allCases) { Text($0.rawValue.uppercased()).tag($0) }
                     }
                 }
@@ -4283,6 +4471,30 @@ private struct ExportPanel: View {
         set: { exporter.configuration.liveInputMode = $0 }
     }
 
+    private var resolvedOutputKind: Binding<ExportOutputKind> {
+        Binding { exporter.configuration.outputKind }
+        set: { value in
+            exporter.configuration.outputKind = value
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var resolvedImageFormat: Binding<ExportImageFormat> {
+        Binding { exporter.configuration.imageFormat }
+        set: { value in
+            exporter.configuration.imageFormat = value
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var resolvedContainer: Binding<ExportContainer> {
+        Binding { exporter.configuration.container }
+        set: { value in
+            exporter.configuration.container = value
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
     private var resolvedCollisionPolicy: Binding<ExportCollisionPolicy> {
         Binding { exporter.configuration.resolvedCollisionPolicy }
         set: { exporter.configuration.collisionPolicy = $0 }
@@ -4301,6 +4513,22 @@ private struct ExportPanel: View {
     private var resolvedRotation: Binding<ExportRotation> {
         Binding { exporter.configuration.resolvedRotation }
         set: { exporter.configuration.rotation = $0; exporter.refreshReviewPreview() }
+    }
+
+    private var cropInsets: Binding<ExportCropInsets> {
+        Binding {
+            ExportCropInsets(
+                left: exporter.configuration.cropLeft ?? 0,
+                top: exporter.configuration.cropTop ?? 0,
+                right: exporter.configuration.cropRight ?? 0,
+                bottom: exporter.configuration.cropBottom ?? 0
+            )
+        } set: { value in
+            exporter.configuration.cropLeft = value.left
+            exporter.configuration.cropTop = value.top
+            exporter.configuration.cropRight = value.right
+            exporter.configuration.cropBottom = value.bottom
+        }
     }
 
     private var resolvedFlipHorizontal: Binding<Bool> {
@@ -4330,8 +4558,8 @@ private struct ExportPanel: View {
     }
 
     private func setCropAspect(_ target: CGFloat) {
-        guard let image = exporter.reviewImage else { return }
-        let source = CGFloat(image.width) / CGFloat(max(1, image.height))
+        let source = CGFloat(max(1, exporter.configuration.width)) /
+            CGFloat(max(1, exporter.configuration.height))
         exporter.configuration.cropLeft = 0; exporter.configuration.cropRight = 0
         exporter.configuration.cropTop = 0; exporter.configuration.cropBottom = 0
         if source > target {

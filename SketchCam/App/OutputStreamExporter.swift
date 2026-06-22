@@ -6,13 +6,17 @@ import SketchCamCore
 import UniformTypeIdentifiers
 
 enum ExporterError: LocalizedError {
-    case noDestination, cannotCreateWriter, cannotAddInput, encodingFailed, diskSpace
+    case noDestination, cannotCreateWriter, cannotAddInput, encodingFailed
+    case destinationExtension(expected: String), frameMaterializationFailed, diskSpace
     var errorDescription: String? {
         switch self {
         case .noDestination: "Choose an export file or folder first."
+        case let .destinationExtension(expected):
+            "Choose a destination ending in .\(expected) for this output type."
         case .cannotCreateWriter: "Could not create the output writer."
         case .cannotAddInput: "The selected codec cannot accept this output configuration."
         case .encodingFailed: "A frame could not be encoded."
+        case .frameMaterializationFailed: "The cropped frame could not be prepared for its output format."
         case .diskSpace: "Export stopped at the configured free-disk-space limit."
         }
     }
@@ -383,6 +387,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         }
         selectedBuiltInPreset = preset
         configuration = value
+        invalidateIncompatibleDestination()
         persistConfiguration()
     }
 
@@ -400,6 +405,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
     func applyPreset(_ preset: ExportPreset) {
         selectedBuiltInPreset = nil
         configuration = preset.configuration
+        invalidateIncompatibleDestination()
         persistConfiguration()
     }
 
@@ -417,6 +423,34 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: defaultsKey) }
     }
 
+    /// A file selected for one sink must never silently retain that suffix
+    /// when the user switches to another sink. Besides confusing Finder and
+    /// media players, a stale suffix can make downstream UTType dispatch pick
+    /// the wrong importer. Sequences target a folder and therefore have none.
+    func invalidateIncompatibleDestination() {
+        guard let destinationURL else { return }
+        if configuration.outputKind == .imageSequence {
+            let isDirectory = (try? destinationURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            guard !isDirectory else { return }
+            self.destinationURL = nil
+            statusText = "Choose an image-sequence folder"
+            return
+        }
+        let expected = expectedFileExtension(configuration)
+        guard destinationURL.pathExtension.caseInsensitiveCompare(expected) != .orderedSame else { return }
+        self.destinationURL = nil
+        statusText = "Choose a .\(expected) destination"
+    }
+
+    func expectedFileExtension(_ config: ExportConfiguration) -> String {
+        switch config.outputKind {
+        case .still: config.imageFormat.fileExtension
+        case .imageSequence: ""
+        case .gif: "gif"
+        case .movie: config.container.rawValue
+        }
+    }
+
     func start() { start(seedingReview: false) }
 
     private func start(seedingReview: Bool) {
@@ -424,6 +458,13 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
             statusText = ExporterError.noDestination.localizedDescription; return
         }
         var config = configuration; config.clamp(); configuration = config; persistConfiguration()
+        if config.outputKind != .imageSequence {
+            let expected = expectedFileExtension(config)
+            guard chosenURL.pathExtension.caseInsensitiveCompare(expected) == .orderedSame else {
+                fail(ExporterError.destinationExtension(expected: expected))
+                return
+            }
+        }
         do {
             let destinationURL = try prepareDestination(chosenURL, config: config)
             self.destinationURL = destinationURL
@@ -494,6 +535,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
                     if let restore = self.restoreConfigurationAfterSession {
                         self.configuration = restore
                         self.restoreConfigurationAfterSession = nil
+                        self.invalidateIncompatibleDestination()
                         self.persistConfiguration()
                     }
                 }
@@ -928,8 +970,15 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         }
         let colorSpace = config.colorSpace == .displayP3 ? CGColorSpace(name: CGColorSpace.displayP3)! : CGColorSpace(name: CGColorSpace.sRGB)!
         context.render(framed, to: output, bounds: target, colorSpace: colorSpace)
-        guard let cg = context.createCGImage(framed, from: target, format: .BGRA8, colorSpace: colorSpace) else {
-            throw ExporterError.encodingFailed
+        // The pixel buffer is the canonical encoded frame. Materializing the
+        // lazy pre-render crop graph separately can fail when its transformed
+        // extent contains fractional edges, even though CI rendered the exact
+        // integral output successfully. Build the CGImage from that finished
+        // buffer so still/GIF/sequence sinks see precisely the movie frame.
+        let rendered = CIImage(cvPixelBuffer: output)
+        guard let cg = context.createCGImage(rendered, from: target, format: .BGRA8,
+                                             colorSpace: colorSpace) else {
+            throw ExporterError.frameMaterializationFailed
         }
         return (output, cg)
     }
@@ -1047,6 +1096,7 @@ final class OutputStreamExporter: ObservableObject, @unchecked Sendable {
         if let restore = restoreConfigurationAfterSession {
             configuration = restore
             restoreConfigurationAfterSession = nil
+            invalidateIncompatibleDestination()
             persistConfiguration()
         }
     }

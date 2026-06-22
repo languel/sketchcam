@@ -67,6 +67,12 @@ Strokes are overlapping radial/capsule splats. Pigment adds as optical density,
 so repeated marks deepen naturally. Wetness uses max blending, so scrubbing an
 area makes it wet rather than accumulating unbounded water.
 
+Wash-loaded pigment uses bounded optical-density addition: ordinary marks are
+unchanged through the useful density range, while extreme repeated scrubbing
+soft-compresses further buildup. This prevents half-float/grid variations from
+turning into a digital-looking residue without flattening normal overlap,
+granulation, or fluid transport.
+
 The wash adds water and directional velocity. Brush Ink controls fresh pigment
 loading; Smear controls how strongly the wash remobilizes existing pigment.
 Fix transfers all mobile and settled density into `locked`; Unfix returns it to
@@ -130,6 +136,14 @@ Because densities add, overlapping translucent marks darken without ordinary
 alpha-stack artifacts. The final pass also applies paper fiber/tooth/grain,
 granulation, edge darkening, wet sheen, tint, contrast, saturation, and
 vignette.
+
+Paper tooth and density-edge enhancement roll off only inside exceptionally
+dense pigment pools. At those densities real pigment should obscure the paper;
+leaving both boosts fully active amplified tiny dye-grid differences into a
+solarized texture. White pigment uses the same dense-pool rolloff in its
+coverage channel. Wet-paper tint is composited beneath white pigment, so an
+active whiteout remains opaque rather than temporarily revealing the wetness
+field as grey pixelation.
 
 Paper has two roles. Its cached renderer supplies the visible substrate, while
 the physical-response fields can independently modulate absorbency, drag, and

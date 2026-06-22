@@ -74,6 +74,13 @@ Use the build-and-install script when you want a fresh build copied to `/Applica
 
 The script regenerates the Xcode project, builds `SketchCam.app`, copies it to `/Applications/SketchCam.app`, and opens it. The `/Applications` location matters because macOS system extensions must be activated from an app bundle in `/Applications`.
 
+Use `./script/build_and_run.sh install` to build and install without launching.
+Development installs preserve the existing `/Applications/SketchCam.app`
+bundle directory while replacing its signed contents, so macOS retains privacy
+metadata such as an already-granted Camera permission. SketchCam asks for Camera
+access only while AVFoundation reports the permission as not determined; the
+first launch still requires an explicit user choice.
+
 On a first run on a new Mac, allow Xcode to register the device while creating the development profiles:
 
 ```sh

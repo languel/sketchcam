@@ -63,7 +63,9 @@ Every destination has an explicit **Create new take** or **Replace** collision
 policy. Image sequences create a take directory and never mix frames into an
 existing non-empty take. Optional sidecars record timing,
 trigger, duplicate/drop state, and output indices. Optional poster frames are
-written beside the primary output.
+written beside the primary output. Changing output type, still format, or movie
+container clears a destination with an incompatible suffix; Start also rejects
+any stale mismatch, so encoded media is never disguised as another file type.
 
 ## Review, crop, and continuation
 
@@ -82,7 +84,11 @@ Normalized crop insets, quarter-turn rotation, and horizontal/vertical flips
 run in Core Image in final framed-output coordinates. This keeps the encoded
 crop identical to the review guide even when a 16:9 canvas is fitted into a
 square GIF. The transformed crop then fills the requested output frame. The
-preview offers centered 1:1, 4:3, and 16:9 presets.
+live preview uses that configured output aspect and Fit/Fill/Stretch mode. Its
+crop editor dims discarded pixels and keeps the selected region bright; drag
+inside the selection to move it, or drag any edge/corner handle to resize it.
+Those gestures and the four numeric inset fields edit the same normalized
+values. The preview also offers centered 1:1, 4:3, and 16:9 presets.
 **Re-export clip** transcodes the reviewed frames with the current output and
 transform settings into a new take.
 

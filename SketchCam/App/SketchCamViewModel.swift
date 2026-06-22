@@ -770,7 +770,7 @@ final class SketchCamViewModel: ObservableObject {
             settings.landmarks.sourceMode = mode == "synthetic" ? .synthetic : .camera
         }
         Task {
-            let granted = await CameraPermissionManager.requestAccess()
+            let granted = await CameraPermissionManager.requestAccessIfNeeded()
             DispatchQueue.main.async {
                 self.cameraPermissionState = CameraPermissionManager.state
                 if granted {

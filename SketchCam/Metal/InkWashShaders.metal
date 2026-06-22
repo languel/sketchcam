@@ -8,7 +8,7 @@ struct InkSplatParams {
     float pad0;
     float2 point;
     float radiusSq;
-    uint blendMode; // 0 = add, 1 = max
+    uint blendMode; // 0 = add, 1 = max, 2 = bounded optical-density add
     float4 color;
     float4 control; // paper influence, live influence, live resist, apply resist
 };
@@ -22,7 +22,7 @@ struct InkCapsuleParams {
     float2 b;         // segment end (uv)
     float ra;         // half-width at a (aspect-corrected uv)
     float rb;         // half-width at b
-    uint blendMode;   // 0 = add, 1 = max
+    uint blendMode;   // 0 = add, 1 = max, 2 = bounded optical-density add
     float pad0;
     float4 color;
     float4 control;
@@ -263,7 +263,17 @@ kernel void ink_splat(texture2d<float, access::read_write> target [[texture(0)]]
     float deposition = p.control.w > 0.5 ? 1.0 - clamp(resist, 0.0, 1.0) : 1.0;
     float4 mark = p.color * exp(-dot(d, d) / max(p.radiusSq, 1e-7)) * deposition;
     float4 old = target.read(px);
-    target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
+    float4 combined = old + mark;
+    if (p.blendMode == 1u) {
+        combined = max(old, mark);
+    } else if (p.blendMode == 2u) {
+        // Wash pigment is optical density, not an unbounded counter. Preserve
+        // ordinary marks exactly through density 4, then compress only the
+        // pathological buildup produced by repeatedly scrubbing one area.
+        float4 excess = max(combined - 4.0, 0.0);
+        combined = combined - excess + excess / (1.0 + excess * 0.25);
+    }
+    target.write(combined, px);
 }
 
 // A variable-width rounded segment (capsule). Stamping ONE of these per
@@ -542,28 +552,44 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float4 pw = pig(uv);
     float3 dens = pw.rgb;
     float c = dot(dens, float3(1.0));
-    float l = dot(pig(uv - float2(p.texel.x, 0.0)).rgb, float3(1.0));
-    float r = dot(pig(uv + float2(p.texel.x, 0.0)).rgb, float3(1.0));
-    float b = dot(pig(uv - float2(0.0, p.texel.y)).rgb, float3(1.0));
-    float t = dot(pig(uv + float2(0.0, p.texel.y)).rgb, float3(1.0));
+    // Compute edge enhancement from a tone-mapped density. At normal density
+    // this is effectively linear; in heavily scrubbed pools it prevents tiny
+    // dye-grid differences from exploding into a solarized/pixelated pattern.
+    auto displayDensity = [&](float2 q) {
+        float3 d = pig(q).rgb;
+        return dot(8.0 * (1.0 - exp(-d * 0.125)), float3(1.0));
+    };
+    float l = displayDensity(uv - float2(p.texel.x, 0.0));
+    float r = displayDensity(uv + float2(p.texel.x, 0.0));
+    float b = displayDensity(uv - float2(0.0, p.texel.y));
+    float t = displayDensity(uv + float2(0.0, p.texel.y));
     float edge = length(float2(r - l, t - b));
     float2 px = uv * p.res;
     float2 grainSeed = float2(p.grainScaleSeed.z * 17.41, p.grainScaleSeed.z * 7.23);
     float grain = fbm(px * p.grainScaleSeed.xy + 31.7 + grainSeed);
     float3 paper = paperTex.sample(s, uv).rgb;
     float3 absb = dens * p.inkStrength;
-    absb *= 1.0 + (grain - 0.5) * p.grain * clamp(c * 2.0, 0.0, 1.0);
+    // Tooth should articulate normal strokes, but a deep pigment pool should
+    // hide it rather than re-printing the procedural texture at full contrast.
+    float grainResponse = clamp(c * 2.0, 0.0, 1.0) * (1.0 - smoothstep(6.0, 12.0, c));
+    absb *= 1.0 + (grain - 0.5) * p.grain * grainResponse;
     absb *= 1.0 + edge * p.edge;
     float3 col = paper * exp(-absb);
     float cov = 1.0 - exp(-pw.a * 2.2);
-    cov = clamp(cov * (1.0 - (grain - 0.5) * 0.35), 0.0, 1.0);
-    float3 wcol = mix(float3(0.985, 0.982, 0.972), float3(0.945, 0.955, 1.0), p.whiteTint);
-    col = mix(col, wcol, cov);
+    // White pigment has its own coverage channel. Give ordinary white marks
+    // the same tooth as before, but let a dense white pool become opaque and
+    // smooth instead of re-printing grain at full contrast.
+    float whiteGrainResponse = 1.0 - smoothstep(2.0, 6.0, pw.a);
+    cov = clamp(cov * (1.0 - (grain - 0.5) * 0.35 * whiteGrainResponse), 0.0, 1.0);
     float wraw = wet.sample(s, uv).x;
     float ws = smoothstep(0.02, 0.6, wraw) * p.inkFade;
     // Wet paper transmits the wash tint (default ≈ (0.84,0.85,0.89) reproduces
-    // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Pick a colour for tinted washes.
+    // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Apply that to the substrate
+    // before white pigment: an opaque whiteout should not reveal the temporary
+    // wetness field as a dark, pixelated pattern while the brush is active.
     col *= mix(float3(1.0), p.washTint.rgb, ws * p.washTint.a);
+    float3 wcol = mix(float3(0.985, 0.982, 0.972), float3(0.945, 0.955, 1.0), p.whiteTint);
+    col = mix(col, wcol, cov);
     float densityAlpha = clamp(1.0 - exp(-(c + pw.a) * 1.4), 0.0, 1.0);
     float alpha = p.opacity * mix(densityAlpha, 1.0, p.paperOn);
     outTex.write(float4(col * alpha, alpha), gid);

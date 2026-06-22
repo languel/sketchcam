@@ -31,8 +31,19 @@ xcodebuild \
   "${XCODEBUILD_PROVISIONING_ARGS[@]}" \
   build
 
-rm -rf "$INSTALLED_APP"
-/usr/bin/ditto "$APP_BUNDLE" "$INSTALLED_APP"
+# Preserve the installed bundle directory itself. macOS privacy services attach
+# identity/consent metadata to the installed app; deleting the entire bundle on
+# every local build can make an otherwise stable signed identity look freshly
+# installed. Replace only Contents so obsolete build products are removed while
+# the /Applications bundle and its metadata survive across builds.
+if [[ -d "$INSTALLED_APP" ]]; then
+  rm -rf "$INSTALLED_APP/Contents"
+  /usr/bin/ditto "$APP_BUNDLE/Contents" "$INSTALLED_APP/Contents"
+  touch "$INSTALLED_APP"
+else
+  /usr/bin/ditto "$APP_BUNDLE" "$INSTALLED_APP"
+fi
+codesign --verify --deep --strict "$INSTALLED_APP"
 shopt -s nullglob
 for registered_app in \
   "$APP_BUNDLE" \
@@ -53,6 +64,8 @@ case "$MODE" in
   run)
     open_app
     ;;
+  --install|install)
+    ;;
   --debug|debug)
     lldb -- "$INSTALLED_APP/Contents/MacOS/$APP_NAME"
     ;;
@@ -70,7 +83,7 @@ case "$MODE" in
     pgrep -x "$APP_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|--install|--debug|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac

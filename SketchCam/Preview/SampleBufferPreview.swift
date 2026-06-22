@@ -46,15 +46,19 @@ final class SampleBufferDisplayController {
 /// SwiftUI wrapper hosting the display layer.
 struct SampleBufferDisplayView: NSViewRepresentable {
     let controller: SampleBufferDisplayController
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeNSView(context: Context) -> NSView {
         let view = LayerHostingView()
         view.wantsLayer = true
+        controller.displayLayer.videoGravity = videoGravity
         view.hostedLayer = controller.displayLayer
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        controller.displayLayer.videoGravity = videoGravity
+    }
 }
 
 /// Keeps the display layer sized to the view (CALayer doesn't autoresize).

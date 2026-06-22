@@ -150,6 +150,63 @@ final class OutputStreamExporterTests: XCTestCase {
         XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: sequence.path).count), 2)
     }
 
+    func testGIFCaptureWithInteractiveCrop() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exporter = OutputStreamExporter()
+        exporter.configuration = ExportConfiguration(
+            outputKind: .gif, width: 512, height: 512, framing: .fill,
+            trigger: .manual, minimumFreeDiskGB: 0, collisionPolicy: .replace,
+            cropLeft: 0.1, cropTop: 0.1, cropRight: 0.1, cropBottom: 0.1
+        )
+        exporter.destinationURL = root.appendingPathComponent("take.gif")
+        exporter.start(); exporter.captureNext()
+        exporter.offerFrame(try frame(width: 160, height: 90), frameIndex: 0)
+        try await waitUntil("cropped GIF frame") {
+            exporter.capturedFrames == 1 || exporter.state == .failed
+        }
+        XCTAssertEqual(exporter.state, .recording, exporter.statusText)
+        exporter.stop()
+        try await waitUntil("cropped GIF finalization") {
+            exporter.state == .idle || exporter.state == .failed
+        }
+        XCTAssertEqual(exporter.state, .idle, exporter.statusText)
+    }
+
+    func testMismatchedDestinationExtensionFailsBeforeCapture() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exporter = OutputStreamExporter()
+        exporter.configuration = ExportConfiguration(
+            outputKind: .movie, container: .mov, width: 64, height: 48,
+            trigger: .manual, minimumFreeDiskGB: 0, collisionPolicy: .replace
+        )
+        let stalePNG = root.appendingPathComponent("performance.png")
+        exporter.destinationURL = stalePNG
+        exporter.start()
+
+        XCTAssertEqual(exporter.state, .failed)
+        XCTAssertTrue(exporter.statusText.contains(".mov"), exporter.statusText)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stalePNG.path))
+    }
+
+    func testChangingOutputTypeClearsIncompatibleDestination() {
+        let exporter = OutputStreamExporter()
+        exporter.configuration.outputKind = .still
+        exporter.configuration.imageFormat = .png
+        exporter.destinationURL = URL(fileURLWithPath: "/tmp/performance.png")
+
+        exporter.configuration.outputKind = .movie
+        exporter.invalidateIncompatibleDestination()
+
+        XCTAssertNil(exporter.destinationURL)
+        XCTAssertTrue(exporter.statusText.contains(".mov"), exporter.statusText)
+    }
+
     func testReviewScrubAndContinueCreateNewGIFTake() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -1006,7 +1006,7 @@ final class MetalInkEngine {
                     splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                     splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
                     if loadedDensity > 0 {
-                        splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                        splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .boundedAdd, commandBuffer: commandBuffer)
                     }
                 }
                 brushStepCounter += 1
@@ -1143,7 +1143,7 @@ final class MetalInkEngine {
                     // hair-trigger.)
                     splat(texture: wet.read, point: current, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                     if loadedDensity > 0 {
-                        splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * subDtW * 5), blend: .add, commandBuffer: commandBuffer)
+                        splat(texture: ink.read, point: current, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity * subDtW * 5), blend: .boundedAdd, commandBuffer: commandBuffer)
                     }
                 } else {
                     let spacing = radius * 0.7
@@ -1154,7 +1154,7 @@ final class MetalInkEngine {
                         splat(texture: wet.read, point: p, radius: radius, color: SIMD4<Float>(wetAmount, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
                         splat(texture: velocity.read, point: p, radius: radius * 1.15, color: SIMD4<Float>(vel.x, vel.y, 0, 0), blend: .add, commandBuffer: commandBuffer)
                         if loadedDensity > 0 {
-                            splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .add, commandBuffer: commandBuffer)
+                            splat(texture: ink.read, point: p, radius: radius * 0.8, color: inkColor(kind: kind, base: color, density: loadedDensity), blend: .boundedAdd, commandBuffer: commandBuffer)
                         }
                     }
                 }
@@ -1209,7 +1209,7 @@ final class MetalInkEngine {
         return true
     }
 
-    private enum BlendMode: UInt32 { case add = 0, max = 1 }
+    private enum BlendMode: UInt32 { case add = 0, max = 1, boundedAdd = 2 }
 
     private func splat(texture: MTLTexture, point: SIMD2<Float>, radius: Float, color: SIMD4<Float>, blend: BlendMode, commandBuffer: MTLCommandBuffer) {
         let r = max(radius, 0.0005)
