@@ -3755,6 +3755,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
     var onScroll: (CGSize) -> Void
     var onMagnify: (CGFloat, CGPoint) -> Void
     var onNavigationActive: (Bool) -> Void
+    var onHover: ((CGPoint?) -> Void)? = nil
 
     func makeNSView(context: Context) -> EventView {
         // Deliver every mouse-dragged sample. By default macOS coalesces drag
@@ -3769,6 +3770,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         view.onScroll = onScroll
         view.onMagnify = onMagnify
         view.onNavigationActive = onNavigationActive
+        view.onHover = onHover
         return view
     }
 
@@ -3778,6 +3780,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         nsView.onScroll = onScroll
         nsView.onMagnify = onMagnify
         nsView.onNavigationActive = onNavigationActive
+        nsView.onHover = onHover
     }
 
     final class EventView: NSView {
@@ -3786,6 +3789,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         var onScroll: ((CGSize) -> Void)?
         var onMagnify: ((CGFloat, CGPoint) -> Void)?
         var onNavigationActive: ((Bool) -> Void)?
+        var onHover: ((CGPoint?) -> Void)?
         private var startLocation: CGPoint?
         private var secondaryDrag = false
         private var navigationDrag = false
@@ -3797,6 +3801,23 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         override var isFlipped: Bool { true }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        // Track the pointer for the brush-size cursor ring (SwiftUI .onHover is
+        // blocked by this view, so report moves directly).
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach { removeTrackingArea($0) }
+            addTrackingArea(NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self, userInfo: nil))
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            onHover?(convert(event.locationInWindow, from: nil))
+        }
+
+        override func mouseExited(with event: NSEvent) { onHover?(nil) }
 
         private static var spaceKeyDown: Bool {
             CGEventSource.keyState(.combinedSessionState, key: 49)
@@ -4047,7 +4068,8 @@ private struct InkPreviewDrawingLayer: View {
                     onMagnify: { factor, anchor in
                         onViewportZoom(factor, anchor)
                     },
-                    onNavigationActive: onNavigationActive
+                    onNavigationActive: onNavigationActive,
+                    onHover: { cursorLocation = $0 }
                 )
             }
             .contentShape(Rectangle())
