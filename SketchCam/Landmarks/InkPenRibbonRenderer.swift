@@ -81,8 +81,11 @@ final class InkPenRibbonRenderer {
             s.color = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
             return s
         }
+        // Smooth filled ribbon (miter strip + round end caps) — NOT the beaded
+        // per-segment quads+discs. Coverage is white, MAX-blended into the dye, so
+        // self-overlap reads as a single flat fill (no double-blend, no beading).
         guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: w, height: h)),
-              line.render(strokes: white, ribbon: false, into: buffer) else { return nil }
+              line.render(strokes: white, ribbon: true, roundCaps: true, into: buffer) else { return nil }
         return buffer
     }
 
@@ -92,30 +95,37 @@ final class InkPenRibbonRenderer {
     private func stroke(points: [CGPoint], times: [TimeInterval]?, uiSize: Float, space: CanvasBrushSpace,
                         color: RGBAColor, outW: Int, outH: Int, canvas: CanvasRenderContext) -> StrokeTessellator.Stroke? {
         guard points.count > 1 else { return nil }
-        // Path points are in WORLD coordinates; map each through the camera to
-        // viewport UV (same as the wash engine), then to output pixels. This is
-        // what makes committed strokes re-rasterize crisp at the current zoom.
-        let aspect = CGFloat(outW) / CGFloat(max(1, outH))
+        // The coverage buffer maps 1:1 onto the ink dye, which lives in NORMALIZED
+        // WORLD space [0,1]² (the full world); the engine's display applies the
+        // camera crop/zoom. So we deposit in that same space — NOT through the
+        // camera — exactly like the wash (whose live points are worldPoint /
+        // worldHeight). Camera-mapping here is what offset + rescaled the stroke.
+        // Path points are WORLD coords; live points arrive pre-un-normalized to
+        // world by the caller, so both divide by worldHeight here.
+        let worldHeight = Float(max(0.000_001, canvas.worldHeight))
+        let wh = CGFloat(worldHeight)
         let mapped = points.map { p -> CGPoint in
-            let uv = canvas.camera.viewportUV(fromWorldPoint: p, aspect: aspect)
-            // World y is up; output/Metal pixel y is down → flip.
-            return CGPoint(x: uv.x * CGFloat(outW), y: (1 - uv.y) * CGFloat(outH))
+            // normalized world (= dye uv); flip Y for the y-up line renderer so the
+            // coverage texel (uv) matches how the dye samples it.
+            return CGPoint(x: (p.x / wh) * CGFloat(outW), y: (1 - p.y / wh) * CGFloat(outH))
         }
         // Smooth the polyline into a flowing curve (Catmull-Rom resample) so the
         // stroke reads as a painterly line, not angular segments between samples.
         let (pts, times) = Self.smooth(mapped, times: times, subdivisions: 8)
 
-        // Width in OUTPUT pixels. Screen = literal apparent pixels (zoom-independent);
-        // World = world-backing pixels mapped through the camera (rescales on zoom).
+        // Width in COVERAGE pixels (the full-world buffer). The display's camera
+        // zoom (worldHeight / viewHeight) is applied later, so to land at the
+        // intended APPARENT size (matching the brush cursor ring) we pre-divide by
+        // it. World = world-backing px → fraction of the world; Screen = fixed
+        // apparent px, so compensate by the current zoom.
+        let viewHeight = Float(max(0.000_001, canvas.camera.viewHeight))
+        let extent = Float(max(1, canvas.worldPixelExtent))
         let baseWidthPx: Float
         switch space {
         case .screen:
-            baseWidthPx = max(0.5, uiSize)
+            baseWidthPx = max(0.5, uiSize * viewHeight / worldHeight)
         case .world:
-            let viewHeight = Float(max(0.000_001, canvas.camera.viewHeight))
-            let worldHeight = Float(max(0.000_001, canvas.worldHeight))
-            let extent = Float(max(1, canvas.worldPixelExtent))
-            baseWidthPx = max(0.5, uiSize * Float(outH) * worldHeight / (viewHeight * extent))
+            baseWidthPx = max(0.5, uiSize * Float(outH) / extent)
         }
 
         // Per-point speed (px/sec) → gentle, smoothed width modulation (fast =
