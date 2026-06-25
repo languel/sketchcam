@@ -1559,7 +1559,12 @@ final class MetalInkEngine {
     }
 
     private func directPenRadius(_ base: Float, pressure: Float, speed: Float) -> Float {
-        base * (0.72 + 0.56 * pressure) * min(max(1.12 - speed * 0.3, 0.55), 1.12)
+        // The old curve swung the width ~3.3× across the per-sample speed/pressure
+        // range; under jerky input that scallops the ribbon edge (the bead). Keep
+        // the width nearly uniform — gentle pressure for feel, only a very mild
+        // speed taper — and rely on the per-step EMA for the rest. Smooth ribbon.
+        let speedTaper = min(max(1.04 - speed * 0.08, 0.9), 1.04)
+        return base * (0.9 + 0.2 * pressure) * speedTaper
     }
 
     private func directBrushRadius(_ base: Float, pressure: Float, speed: Float) -> Float {
