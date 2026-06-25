@@ -16,6 +16,14 @@ final class InkPenRibbonRenderer {
     private let line = MetalLineRenderer()
     private let pool = PixelBufferPool()
 
+    // The live stroke accumulates across frames: the live channel only delivers
+    // the points captured since the last frame (a delta), so to re-tessellate the
+    // WHOLE growing stroke every frame (continuous, dynamic render) we keep the
+    // full in-progress path here, keyed by the live stroke id, and reset on end.
+    private var liveID: UUID?
+    private var liveAccumPoints: [CGPoint] = []
+    private var liveAccumTimes: [TimeInterval] = []
+
     /// Produce a transparent BGRA image with every pen stroke drawn as a ribbon,
     /// or nil if there is nothing to draw / on failure.
     func image(committed: [InkEditorPath], liveSample: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
@@ -34,18 +42,32 @@ final class InkPenRibbonRenderer {
                 strokes.append(s)
             }
         }
-        // The in-progress pen stroke (live), rendered every frame.
-        if let liveSample, liveSample.brushMode == .pen, livePoints.count > 1 {
-            if let s = stroke(points: livePoints.map { $0.point }, times: livePoints.map { $0.time },
+        // The in-progress pen stroke: accumulate the per-frame deltas into the
+        // full path and re-tessellate the WHOLE thing every frame (continuous,
+        // dynamic render — not just the latest segment).
+        if let liveSample, liveSample.brushMode == .pen {
+            if liveID != liveSample.id {
+                liveID = liveSample.id
+                liveAccumPoints = []
+                liveAccumTimes = []
+            }
+            liveAccumPoints.append(contentsOf: livePoints.map { $0.point })
+            liveAccumTimes.append(contentsOf: livePoints.map { $0.time })
+            if liveAccumPoints.count > 1,
+               let s = stroke(points: liveAccumPoints, times: liveAccumTimes,
                               uiSize: liveSample.width, space: liveSample.brushSpace,
                               color: liveSample.color, outW: w, outH: h, canvas: canvas) {
                 strokes.append(s)
             }
+        } else {
+            liveID = nil
+            liveAccumPoints = []
+            liveAccumTimes = []
         }
         guard !strokes.isEmpty else { return nil }
 
         guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-ribbon", width: w, height: h)),
-              line.render(strokes: strokes, ribbon: true, into: buffer) else { return nil }
+              line.render(strokes: strokes, ribbon: false, into: buffer) else { return nil }
         return CIImage(cvPixelBuffer: buffer).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
     }
 
@@ -61,7 +83,8 @@ final class InkPenRibbonRenderer {
         let aspect = CGFloat(outW) / CGFloat(max(1, outH))
         let pts = points.map { p -> CGPoint in
             let uv = canvas.camera.viewportUV(fromWorldPoint: p, aspect: aspect)
-            return CGPoint(x: uv.x * CGFloat(outW), y: uv.y * CGFloat(outH))
+            // World y is up; output/Metal pixel y is down → flip.
+            return CGPoint(x: uv.x * CGFloat(outW), y: (1 - uv.y) * CGFloat(outH))
         }
 
         // Width in OUTPUT pixels. Screen = literal apparent pixels (zoom-independent);
@@ -77,19 +100,32 @@ final class InkPenRibbonRenderer {
             baseWidthPx = max(0.5, uiSize * Float(outH) * worldHeight / (viewHeight * extent))
         }
 
-        // Per-point speed (px/sec) → gentle, smoothed width taper (fast = thinner).
-        var widths = [Float](repeating: baseWidthPx, count: pts.count)
-        if let times, times.count == pts.count {
+        // Per-point speed (px/sec) → gentle, smoothed width modulation (fast =
+        // thinner), like simulated pressure.
+        let n = pts.count
+        var widths = [Float](repeating: baseWidthPx, count: n)
+        if let times, times.count == n {
             var ema: Float = 0
-            for i in 1..<pts.count {
+            for i in 1..<n {
                 let dt = max(Float(times[i] - times[i - 1]), 1.0 / 240.0)
                 let d = Float(hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y))
                 let speed = d / dt / Float(max(1, outH))   // normalized by frame height
                 ema += (speed - ema) * 0.25
-                let taper = min(max(1.05 - ema * 0.6, 0.8), 1.05)
+                let taper = min(max(1.05 - ema * 0.6, 0.7), 1.05)
                 widths[i] = baseWidthPx * taper
             }
-            widths[0] = widths.count > 1 ? widths[1] : baseWidthPx
+            widths[0] = n > 1 ? widths[1] : baseWidthPx
+        }
+        // Painterly end taper: ease the width down toward the very start/end over
+        // a short run of points (perfect-freehand style) so the stroke has soft,
+        // rounded ends instead of a blunt slab.
+        let taperRun = max(1, min(n / 4, 6))
+        for i in 0..<n {
+            let dStart = Float(i) / Float(taperRun)
+            let dEnd = Float(n - 1 - i) / Float(taperRun)
+            let ends = min(1, min(dStart, dEnd))
+            let ease = 0.35 + 0.65 * sin(ends * .pi / 2)   // 0.35 at the tip → 1.0
+            widths[i] *= ease
         }
         return StrokeTessellator.Stroke(points: pts, color: color, baseWidth: baseWidthPx, widths: widths)
     }
