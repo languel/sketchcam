@@ -3993,6 +3993,7 @@ private struct InkPreviewDrawingLayer: View {
     @State private var currentDissolveWash = false
     @State private var dragStartPaths: [InkEditorPath] = []
     @State private var dragStartPoint: CGPoint?
+    @State private var cursorLocation: CGPoint?
 
     var body: some View {
         GeometryReader { geo in
@@ -4023,6 +4024,17 @@ private struct InkPreviewDrawingLayer: View {
                     strokedPath(rawCurrent, in: activeRect)
                         .stroke(inkColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round, dash: [4, 4]))
                 }
+                // Brush-size cursor: a circle outline the actual diameter of the
+                // current brush (pen/wash) at the current zoom, following the
+                // pointer while drawing or hovering.
+                if tool == .draw, let cursorLocation {
+                    let d = brushViewDiameter(in: activeRect)
+                    Circle()
+                        .stroke(Color.primary.opacity(0.55), lineWidth: 1)
+                        .frame(width: d, height: d)
+                        .position(cursorLocation)
+                        .allowsHitTesting(false)
+                }
                 InkCanvasEventOverlay(
                     onChanged: { value in
                         guard activeRect.contains(value.location) else { return }
@@ -4039,7 +4051,28 @@ private struct InkPreviewDrawingLayer: View {
                 )
             }
             .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p): cursorLocation = p
+                case .ended: cursorLocation = nil
+                }
+            }
         }
+    }
+
+    /// The current brush's diameter in VIEW points (matches the rendered stroke
+    /// width at the current zoom), for the cursor ring.
+    private func brushViewDiameter(in rect: CGRect) -> CGFloat {
+        let uiSize = CGFloat(max(0, currentStrokeMode == .brush || brushMode == .brush ? washWidth : width))
+        let outputPx: CGFloat
+        switch brushSpace {
+        case .screen:
+            outputPx = uiSize
+        case .world:
+            let extent = max(1, worldPixelExtent)
+            outputPx = uiSize * outputSize.height * worldHeight / (max(0.000_001, camera.viewHeight) * extent)
+        }
+        return max(2, outputPx * rect.height / max(1, outputSize.height))
     }
 
     private var showsEditorPaths: Bool {
@@ -4065,6 +4098,7 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func handleDragChanged(_ value: InkCanvasDragValue, in rect: CGRect) {
+        cursorLocation = value.location
         let p = worldPoint(value.location, in: rect)
         switch tool {
         case .draw:
