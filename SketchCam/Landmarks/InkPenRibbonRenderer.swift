@@ -72,8 +72,10 @@ final class InkPenRibbonRenderer {
         }
         guard !strokes.isEmpty else { return nil }
 
+        // Ribbon strip (clean continuous edges, no per-vertex seams) + round end
+        // caps, so the stroke is smooth at any size.
         guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-ribbon", width: w, height: h)),
-              line.render(strokes: strokes, ribbon: false, into: buffer) else { return nil }
+              line.render(strokes: strokes, ribbon: true, roundCaps: true, into: buffer) else { return nil }
         return CIImage(cvPixelBuffer: buffer).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
     }
 

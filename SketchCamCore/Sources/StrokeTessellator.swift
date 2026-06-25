@@ -48,12 +48,12 @@ public enum StrokeTessellator {
     ///   (two smooth miter-offset boundaries, no per-vertex discs) so
     ///   translucent strokes blend once — no visible beads/spine. `false` is the
     ///   legacy beads style (per-segment quads + round discs at every vertex).
-    public static func tessellate(_ strokes: [Stroke], ribbon: Bool = true) -> [Float] {
+    public static func tessellate(_ strokes: [Stroke], ribbon: Bool = true, roundCaps: Bool = false) -> [Float] {
         var out: [Float] = []
         let pointCount = strokes.reduce(0) { $0 + $1.points.count }
         out.reserveCapacity(pointCount * (6 + discSegments * 3) * floatsPerVertex)
         for stroke in strokes {
-            if ribbon { appendRibbon(stroke, into: &out) } else { appendBeads(stroke, into: &out) }
+            if ribbon { appendRibbon(stroke, roundCaps: roundCaps, into: &out) } else { appendBeads(stroke, into: &out) }
         }
         return out
     }
@@ -81,11 +81,12 @@ public enum StrokeTessellator {
 
     /// One filled ribbon: shared miter-offset boundaries, emitted as a triangle
     /// strip (no overlapping primitives → clean under alpha).
-    static func appendRibbon(_ stroke: Stroke, into out: inout [Float]) {
+    static func appendRibbon(_ stroke: Stroke, roundCaps: Bool = false, into out: inout [Float]) {
         let pts = stroke.points
         guard !pts.isEmpty else { return }
+        let half = halfWidthProfile(stroke)
         if pts.count == 1 {
-            appendDisc(center: pts[0], radius: halfWidthProfile(stroke)[0], color: stroke.color, into: &out)
+            appendDisc(center: pts[0], radius: half[0], color: stroke.color, into: &out)
             return
         }
         let (left, right) = ribbonBoundary(stroke)
@@ -93,6 +94,13 @@ public enum StrokeTessellator {
         for i in 0..<(pts.count - 1) {
             appendVertex(left[i], c, &out); appendVertex(right[i], c, &out); appendVertex(left[i + 1], c, &out)
             appendVertex(right[i], c, &out); appendVertex(right[i + 1], c, &out); appendVertex(left[i + 1], c, &out)
+        }
+        // Round end caps: a smooth disc at each endpoint so the stroke isn't a
+        // blunt slab. (Only the two ends — the body stays a single clean strip,
+        // so there are no per-vertex seams along the edges.)
+        if roundCaps {
+            appendDisc(center: pts[0], radius: half[0], color: c, into: &out)
+            appendDisc(center: pts[pts.count - 1], radius: half[pts.count - 1], color: c, into: &out)
         }
     }
 
@@ -165,8 +173,11 @@ public enum StrokeTessellator {
 
     private static func appendDisc(center: CGPoint, radius: CGFloat, color: RGBAColor, into out: inout [Float]) {
         guard radius > 0.05 else { return }
-        let step = (2 * Double.pi) / Double(discSegments)
-        for s in 0..<discSegments {
+        // Adaptive tessellation: keep the cap/join smooth (sub-pixel facets) at
+        // any brush size. ~1 segment per ~3px of circumference, clamped.
+        let segs = max(discSegments, min(96, Int((radius * 0.9).rounded())))
+        let step = (2 * Double.pi) / Double(segs)
+        for s in 0..<segs {
             let a0 = Double(s) * step
             let a1 = Double(s + 1) * step
             let p0 = CGPoint(x: center.x + radius * CGFloat(cos(a0)), y: center.y + radius * CGFloat(sin(a0)))
