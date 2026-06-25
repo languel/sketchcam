@@ -308,6 +308,25 @@ kernel void ink_splat_capsule(texture2d<float, access::read_write> target [[text
     target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
 }
 
+// Deposit a pre-rendered COVERAGE image (a tessellated pen ribbon, white-on-clear,
+// MSAA) into the ink dye: ink = max(ink, absorption * coverage). This is how a
+// rendered ribbon "becomes ink" — once deposited, the wash advects it like any
+// other pigment. Coverage is sampled (it may be a different resolution than the
+// dye). `color` is the pen absorption (rgb), alpha 0 (matching the splat dye).
+struct InkDepositParams { float4 color; };
+kernel void ink_deposit(texture2d<float, access::read_write> ink [[texture(0)]],
+                        texture2d<float, access::sample> coverage [[texture(1)]],
+                        constant InkDepositParams &p [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= ink.get_width() || gid.y >= ink.get_height()) return;
+    float2 uv = (float2(gid) + 0.5) / float2(ink.get_width(), ink.get_height());
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float cov = coverage.sample(s, uv).a;
+    if (cov <= 0.001) return;
+    float4 old = ink.read(gid);
+    ink.write(max(old, p.color * cov), gid);
+}
+
 kernel void ink_advect_velocity(texture2d<float, access::sample> velocityIn [[texture(0)]],
                                 texture2d<float, access::sample> wetIn [[texture(1)]],
                                 texture2d<float, access::sample> dragField [[texture(3)]],

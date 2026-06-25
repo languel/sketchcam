@@ -5,90 +5,85 @@ import Foundation
 import SketchCamCore
 import SketchCamShared
 
-/// Renders the PEN strokes as crisp, vector ribbons (tldraw-style filled polygon
-/// around the path) via `StrokeTessellator` + `MetalLineRenderer` (MSAA), instead
-/// of stamping nibs into the watercolor dye. ALL pen strokes — committed plus the
-/// one in progress — are re-tessellated every frame, so committed strokes stay
-/// crisp at any zoom (re-rasterized from the path, never baked) and the live
-/// stroke is just another path. The watercolor WASH still goes through the fluid
-/// engine; this only handles the pen.
+/// Turns PEN paths into smooth tessellated ribbons (tldraw-style filled outline,
+/// MSAA) and DEPOSITS them into the ink dye, so once drawn a ribbon "is ink" that
+/// the wash can push around. Committed strokes deposit ONCE (then the fluid sim
+/// owns that pigment); the in-progress stroke deposits its growing ribbon every
+/// frame. The watercolor WASH itself still runs in the engine.
 final class InkPenRibbonRenderer {
     private let line = MetalLineRenderer()
     private let pool = PixelBufferPool()
 
     // The live stroke accumulates across frames: the live channel only delivers
     // the points captured since the last frame (a delta), so to re-tessellate the
-    // WHOLE growing stroke every frame (continuous, dynamic render) we keep the
-    // full in-progress path here, keyed by the live stroke id, and reset on end.
+    // WHOLE growing stroke every frame we keep the full in-progress path here.
     private var liveID: UUID?
     private var liveAccumPoints: [CGPoint] = []
     private var liveAccumTimes: [TimeInterval] = []
+    /// Committed paths already deposited into the dye (deposit once, then the
+    /// wash owns the pigment — re-depositing would fight the wash's displacement).
+    private var depositedIDs: Set<UUID> = []
 
-    /// Produce a transparent BGRA image with every pen stroke drawn as a ribbon,
-    /// or nil if there is nothing to draw / on failure.
-    func image(committed: [InkEditorPath], liveSample: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
-               settings: ProcessingSettings, outputSize: CGSize, canvas: CanvasRenderContext) -> CIImage? {
-        guard let line else { return nil }
+    /// The pen-ribbon coverage images to deposit into the ink dye this frame.
+    func deposits(committed: [InkEditorPath], liveSample: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
+                  settings: ProcessingSettings, outputSize: CGSize, canvas: CanvasRenderContext) -> [MetalInkPenDeposit] {
+        guard line != nil else { return [] }
         let w = max(1, Int(outputSize.width.rounded()))
         let h = max(1, Int(outputSize.height.rounded()))
+        func isPen(_ p: InkEditorPath) -> Bool { (p.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .pen }
+        var result: [MetalInkPenDeposit] = []
 
-        var strokes: [StrokeTessellator.Stroke] = []
-        for path in committed where (path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .pen {
+        // Committed pen strokes: deposit each ONCE.
+        for path in committed where isPen(path) && !depositedIDs.contains(path.id) {
+            depositedIDs.insert(path.id)
             if let s = stroke(points: path.points, times: path.sampleTimes,
                               uiSize: path.width ?? settings.landmarks.inkWidth,
                               space: path.brushSpace ?? .screen,
                               color: path.color ?? settings.landmarks.inkColor,
-                              outW: w, outH: h, canvas: canvas) {
-                strokes.append(s)
+                              outW: w, outH: h, canvas: canvas),
+               let buf = coverageBuffer([s], w: w, h: h) {
+                result.append(MetalInkPenDeposit(coverage: buf, color: path.color ?? settings.landmarks.inkColor))
             }
         }
-        // The in-progress pen stroke: accumulate the per-frame deltas into the
-        // full path and re-tessellate the WHOLE thing every frame (continuous,
-        // dynamic render — not just the latest segment).
+        // Forget ids no longer present (clear / undo) so a re-added path re-deposits.
+        depositedIDs.formIntersection(Set(committed.map { $0.id }))
+
+        // In-progress pen stroke: accumulate the per-frame point deltas and deposit
+        // the whole growing ribbon every frame (re-depositing at the path while
+        // drawing is fine — no wash competes during a pen gesture).
         if let liveSample, liveSample.brushMode == .pen {
-            if liveID != liveSample.id {
-                liveID = liveSample.id
-                liveAccumPoints = []
-                liveAccumTimes = []
-            }
-            // Live points arrive normalized (worldPoint / worldHeight, clamped),
-            // but committed path points are raw WORLD coords. Un-normalize the
-            // live points to world space so BOTH map identically via the camera —
-            // otherwise the live stroke maps off-screen and only the committed
-            // path shows (the "only drawn at the end" bug).
+            if liveID != liveSample.id { liveID = liveSample.id; liveAccumPoints = []; liveAccumTimes = [] }
+            // Live points arrive normalized (worldPoint / worldHeight); un-normalize
+            // to world space so they map identically to committed paths.
             let wh = CGFloat(max(0.000_001, canvas.worldHeight))
             liveAccumPoints.append(contentsOf: livePoints.map { CGPoint(x: $0.point.x * wh, y: $0.point.y * wh) })
             liveAccumTimes.append(contentsOf: livePoints.map { $0.time })
             if liveAccumPoints.count > 1,
                let s = stroke(points: liveAccumPoints, times: liveAccumTimes,
                               uiSize: liveSample.width, space: liveSample.brushSpace,
-                              color: liveSample.color, outW: w, outH: h, canvas: canvas) {
-                strokes.append(s)
+                              color: liveSample.color, outW: w, outH: h, canvas: canvas),
+               let buf = coverageBuffer([s], w: w, h: h) {
+                result.append(MetalInkPenDeposit(coverage: buf, color: liveSample.color))
             }
         } else {
             liveID = nil
             liveAccumPoints = []
             liveAccumTimes = []
         }
-        guard !strokes.isEmpty else { return nil }
+        return result
+    }
 
-        // Render OPAQUE (per-vertex alpha forced to 1) as a union of discs+quads:
-        // robust at ANY brush size (no strip self-intersection) and no internal
-        // double-blend. The pen's real opacity is applied once to the whole image
-        // below, so overlaps within a stroke read as one flat fill.
-        let inkAlpha = max(0, min(1, settings.landmarks.inkColor.alpha))
-        let opaque = strokes.map { s -> StrokeTessellator.Stroke in
+    /// Render strokes WHITE (coverage = alpha) into a buffer for depositing.
+    private func coverageBuffer(_ strokes: [StrokeTessellator.Stroke], w: Int, h: Int) -> CVPixelBuffer? {
+        guard let line else { return nil }
+        let white = strokes.map { s -> StrokeTessellator.Stroke in
             var s = s
-            s.color = RGBAColor(red: s.color.red, green: s.color.green, blue: s.color.blue, alpha: 1)
+            s.color = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
             return s
         }
-        guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-ribbon", width: w, height: h)),
-              line.render(strokes: opaque, ribbon: false, into: buffer) else { return nil }
-        let image = CIImage(cvPixelBuffer: buffer).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
-        guard inkAlpha < 0.999 else { return image }
-        return image.applyingFilter("CIColorMatrix", parameters: [
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(inkAlpha))
-        ])
+        guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: w, height: h)),
+              line.render(strokes: white, ribbon: false, into: buffer) else { return nil }
+        return buffer
     }
 
     /// Build one tessellator stroke: path points → output pixels, with per-point

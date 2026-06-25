@@ -50,10 +50,19 @@ final class InkLayerCompositor {
                 (p.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .pen
             }
             let penPaths = sourcePaths.filter(isPen)
+            // The PEN's ink doesn't go through the engine's nib splat; instead it's
+            // rendered as a smooth ribbon and DEPOSITED into the dye (below) so the
+            // wash can push it. The engine still owns the WASH (and the dye/sim).
             renderSettings.landmarks.inkPaths = sourcePaths.filter { !isPen($0) }
             let livePen = live?.brushMode == .pen
             let engineLive = livePen ? nil : live
             let engineLivePoints = livePen ? [] : livePoints
+
+            // Render the pen ribbons to coverage images for this frame's deposit.
+            let penDeposits = penRenderer.deposits(
+                committed: penPaths, liveSample: livePen ? live : nil,
+                livePoints: livePen ? livePoints : [], settings: settings,
+                outputSize: outputSize, canvas: canvasContext)
 
             let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
             let hasRoutedTexture = textureInput != nil
@@ -65,37 +74,25 @@ final class InkLayerCompositor {
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
                                     controlFields: controlFields, fixedDeltaTime: fixedDeltaTime,
                                     advanceSimulation: advanceSimulation,
-                                    canvasContext: canvasContext)
+                                    canvasContext: canvasContext, penDeposits: penDeposits)
             let rect = CGRect(origin: .zero, size: outputSize)
 
-            // Wash + paper substrate (the existing logic), captured as a base.
-            let washBase: CIImage?
-            if let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 {
-                let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
-                let config = settings.landmarks.inkPaperConfig ?? .metalDefault
-                let substrate: CIImage
-                if mode == .none || paperRenderer == nil {
-                    substrate = routed
-                } else if let paper = paperRenderer?.image(config: config, rect: rect) {
-                    substrate = blend(paper: paper, over: routed, mode: mode).cropped(to: rect)
-                } else {
-                    substrate = routed
-                }
-                let visibleSubstrate = applyOpacity(paperOpacity, to: substrate)
-                washBase = ink.map { $0.composited(over: visibleSubstrate).cropped(to: rect) } ?? visibleSubstrate
+            // Wash + paper substrate — the engine output already contains the
+            // deposited pen ink (wash pushes it), so no separate pen composite.
+            guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
+            let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
+            let config = settings.landmarks.inkPaperConfig ?? .metalDefault
+            let substrate: CIImage
+            if mode == .none || paperRenderer == nil {
+                substrate = routed
+            } else if let paper = paperRenderer?.image(config: config, rect: rect) {
+                substrate = blend(paper: paper, over: routed, mode: mode).cropped(to: rect)
             } else {
-                washBase = ink
+                substrate = routed
             }
-
-            // PEN ribbons (committed + the in-progress one) over the wash.
-            let pen = penRenderer.image(committed: penPaths, liveSample: livePen ? live : nil,
-                                        livePoints: livePen ? livePoints : [], settings: settings,
-                                        outputSize: outputSize, canvas: canvasContext)
-            switch (pen, washBase) {
-            case let (p?, b?): return p.composited(over: b).cropped(to: rect)
-            case let (p?, nil): return p
-            case let (nil, b): return b
-            }
+            let visibleSubstrate = applyOpacity(paperOpacity, to: substrate)
+            guard let ink else { return visibleSubstrate }
+            return ink.composited(over: visibleSubstrate).cropped(to: rect)
         }
     }
 

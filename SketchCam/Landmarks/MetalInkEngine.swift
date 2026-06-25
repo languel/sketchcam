@@ -81,6 +81,14 @@ final class MetalInkStateSnapshot: @unchecked Sendable {
     }
 }
 
+/// A pre-rendered pen-ribbon coverage image to deposit into the ink dye this
+/// frame (so the wash can then push it). `coverage` is white-on-clear (MSAA);
+/// `color` is the pen colour whose absorption is written into the dye.
+struct MetalInkPenDeposit {
+    let coverage: CVPixelBuffer
+    let color: RGBAColor
+}
+
 final class MetalInkEngine {
     private static let dyeBase = 2048
     private static let simBase = 256
@@ -232,6 +240,7 @@ final class MetalInkEngine {
     private let clearPSO: MTLComputePipelineState
     private let copyPSO: MTLComputePipelineState
     private let injectWetPSO: MTLComputePipelineState
+    private let depositPSO: MTLComputePipelineState
     private let splatPSO: MTLComputePipelineState
     private let capsulePSO: MTLComputePipelineState
     private let accumulatePSO: MTLComputePipelineState
@@ -313,6 +322,19 @@ final class MetalInkEngine {
         return (resolved.field.texture, max(0, resolved.strength))
     }
 
+    /// Deposit a pre-rendered coverage image (a tessellated pen ribbon) into the
+    /// ink dye: ink = max(ink, absorption(color) * coverage). After this the
+    /// ribbon "is ink" and the wash sim advects it.
+    private func depositRibbon(_ deposit: MetalInkPenDeposit, commandBuffer: MTLCommandBuffer) {
+        guard let ink else { return }
+        let w = CVPixelBufferGetWidth(deposit.coverage), h = CVPixelBufferGetHeight(deposit.coverage)
+        guard let covTex = makeTexture(from: deposit.coverage, width: w, height: h) else { return }
+        let abs = absorption(for: deposit.color)
+        var params = SIMD4<Float>(abs.x, abs.y, abs.z, 0)
+        encode(depositPSO, textures: [ink.read, covTex], bytes: &params,
+               length: MemoryLayout<SIMD4<Float>>.stride, grid: ink.read, commandBuffer: commandBuffer)
+    }
+
     private func injectMotionWetness(amount: Float, commandBuffer: MTLCommandBuffer) {
         guard let resolved = controlFields.field(for: .ink, input: .wetness) else { return }
         injectWet(
@@ -357,6 +379,7 @@ final class MetalInkEngine {
               let injectWet = pso("ink_inject_wet"),
               let splat = pso("ink_splat"),
               let capsule = pso("ink_splat_capsule"),
+              let deposit = pso("ink_deposit"),
               let accumulate = pso("ink_accumulate"),
               let advectVelocity = pso("ink_advect_velocity"),
               let controlForce = pso("ink_add_control_force"),
@@ -379,6 +402,7 @@ final class MetalInkEngine {
         self.clearPSO = clear
         self.copyPSO = copy
         self.injectWetPSO = injectWet
+        self.depositPSO = deposit
         self.splatPSO = splat
         self.capsulePSO = capsule
         self.accumulatePSO = accumulate
@@ -437,7 +461,7 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true, canvasContext: CanvasRenderContext = CanvasRenderContext()) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true, canvasContext: CanvasRenderContext = CanvasRenderContext(), penDeposits: [MetalInkPenDeposit] = []) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
         self.renderCanvas = canvasContext
@@ -497,12 +521,13 @@ final class MetalInkEngine {
         // paths, but they leave pigment in the Metal textures; once the sim goes
         // idle, keep serving the last rendered image instead of declaring the
         // layer empty.
-        if paperOpacity <= 0.001, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild {
+        if paperOpacity <= 0.001, replayablePaths.isEmpty, live == nil, !evolving, !needRebuild, penDeposits.isEmpty {
             return cachedImage
         }
         // Idle and already rendered → reuse the cached image (no GPU work, no
         // synchronous wait). This is the steady state once ink has dried.
-        if !needRebuild, !pathsChanged, !fixRequested, !sigChanged, !evolving, let cachedImage {
+        // Pen deposits force a frame so the freshly-rendered ribbon enters the dye.
+        if !needRebuild, !pathsChanged, !fixRequested, !sigChanged, !evolving, penDeposits.isEmpty, let cachedImage {
             return cachedImage
         }
 
@@ -622,6 +647,11 @@ final class MetalInkEngine {
             let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
+            }
+            // Deposit rendered pen ribbons into the ink dye (before the sim, so a
+            // concurrent wash advects them). The ribbon "becomes ink" here.
+            for deposit in penDeposits {
+                depositRibbon(deposit, commandBuffer: commandBuffer)
             }
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
