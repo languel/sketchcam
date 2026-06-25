@@ -129,6 +129,12 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     public var colorSeparation: Float?
     public var brushInk: Float?
     public var color: RGBAColor?
+    /// Which space `width` was authored in (screen = zoom-independent apparent
+    /// pixels; world = fixed world-backing pixels). nil decodes as `.screen`.
+    /// The engine re-resolves the radius from `width` + this every frame against
+    /// the current camera, so a committed stroke matches the live stroke and a
+    /// world stroke rescales when you zoom.
+    public var brushSpace: CanvasBrushSpace?
 
     public init(
         id: UUID = UUID(),
@@ -143,7 +149,8 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
         dry: Float? = nil,
         colorSeparation: Float? = nil,
         brushInk: Float? = nil,
-        color: RGBAColor? = nil
+        color: RGBAColor? = nil,
+        brushSpace: CanvasBrushSpace? = nil
     ) {
         self.id = id
         self.points = points
@@ -158,6 +165,7 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
         self.colorSeparation = colorSeparation
         self.brushInk = brushInk
         self.color = color
+        self.brushSpace = brushSpace
     }
 }
 
@@ -683,8 +691,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaths: [InkEditorPath] = [],
         inkColor: RGBAColor = .ink,
         inkWashColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
-        inkWidth: Float = 0.5,
-        inkWashWidth: Float? = 0.5,
+        inkWidth: Float = 6,        // apparent pen diameter in pixels (screen space)
+        inkWashWidth: Float? = 48,  // apparent wash diameter in pixels (screen space)
         inkFlow: Float = 0.9,
         inkBleed: Float = 0.8,
         inkDry: Float = 0.25,

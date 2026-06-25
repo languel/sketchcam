@@ -1251,10 +1251,10 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .help("Screen keeps the brush the same apparent size while zooming. World measures Pen and Wash size in pixels on the large paper/world backing store.")
             SliderRow(title: "Pen size", value: inkSizeBinding, range: inkBrushSizeRange,
-                      precision: inkBrushSizePrecision, defaultValue: inkBrushDefaultSize,
+                      precision: inkBrushSizePrecision, defaultValue: inkPenDefaultSize,
                       hint: inkBrushSizeHint(kind: "Pen"))
             SliderRow(title: "Wash size", value: inkWashSizeBinding, range: inkBrushSizeRange,
-                      precision: inkBrushSizePrecision, defaultValue: inkBrushDefaultSize,
+                      precision: inkBrushSizePrecision, defaultValue: inkWashDefaultSize,
                       hint: inkBrushSizeHint(kind: "Wash"))
             SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength), defaultValue: 0.5,
                       hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.")
@@ -1361,12 +1361,12 @@ struct ContentView: View {
     }
 
     private func adjustInkWidth(by delta: Float) {
-        model.settings.landmarks.inkWidth = clampedInkBrushSize(model.settings.landmarks.inkWidth + inkBrushKeyboardDelta(delta))
+        model.settings.landmarks.inkWidth = max(0, model.settings.landmarks.inkWidth + inkBrushKeyboardDelta(delta))
     }
 
     private func adjustInkWashWidth(by delta: Float) {
-        let v = (model.settings.landmarks.inkWashWidth ?? 0.5) + inkBrushKeyboardDelta(delta)
-        model.settings.landmarks.inkWashWidth = clampedInkBrushSize(v)
+        let v = (model.settings.landmarks.inkWashWidth ?? 48) + inkBrushKeyboardDelta(delta)
+        model.settings.landmarks.inkWashWidth = max(0, v)
     }
 
     private func adjustInkBrushInk(by delta: Float) {
@@ -1427,46 +1427,43 @@ struct ContentView: View {
         )
     }
 
+    // Size is now a literal apparent DIAMETER in pixels (screen pixels in Screen
+    // space, world-backing pixels in World space). Bindings only floor at 0 — the
+    // slider range bounds the thumb, but typing a number larger than the range
+    // is preserved (it is NOT cropped to the slider's max).
     private var inkSizeBinding: Binding<Double> {
         Binding(
-            get: { Double(clampedInkBrushSize(model.settings.landmarks.inkWidth)) },
-            set: { model.settings.landmarks.inkWidth = clampedInkBrushSize(Float($0)) }
+            get: { Double(model.settings.landmarks.inkWidth) },
+            set: { model.settings.landmarks.inkWidth = max(0, Float($0)) }
         )
     }
 
     private var inkWashSizeBinding: Binding<Double> {
         Binding(
-            get: { Double(clampedInkBrushSize(model.settings.landmarks.inkWashWidth ?? 0.5)) },
-            set: { model.settings.landmarks.inkWashWidth = clampedInkBrushSize(Float($0)) }
+            get: { Double(model.settings.landmarks.inkWashWidth ?? 48) },
+            set: { model.settings.landmarks.inkWashWidth = max(0, Float($0)) }
         )
     }
 
+    /// Slider track extent (the thumb pins here; typed values may exceed it).
     private var inkBrushSizeRange: ClosedRange<Double> {
-        canvasBrushSpace == .world ? 1...128 : 0...2
+        canvasBrushSpace == .world ? 1...2048 : 0.25...256
     }
 
-    private var inkBrushDefaultSize: Double {
-        canvasBrushSpace == .world ? 6 : 0.5
-    }
+    private var inkPenDefaultSize: Double { canvasBrushSpace == .world ? 48 : 6 }
+    private var inkWashDefaultSize: Double { canvasBrushSpace == .world ? 384 : 48 }
 
-    private var inkBrushSizePrecision: Int {
-        canvasBrushSpace == .world ? 0 : 3
-    }
+    private var inkBrushSizePrecision: Int { canvasBrushSpace == .world ? 0 : 1 }
 
     private func inkBrushSizeHint(kind: String) -> String {
         if canvasBrushSpace == .world {
-            return "\(kind) size in pixels on the large world canvas. 1 is one world pixel; larger values stay fixed to the paper as you zoom. Default 6 is tuned for the initial HD viewport."
+            return "\(kind) diameter in world-canvas pixels — fixed to the paper, so it scales as you zoom. Type any value; the slider is just a convenient range."
         }
-        return "\(kind) size in screen/viewport space. This is an abstract HD-calibrated apparent-size scale, not pixels; 0 is a subpixel hairline, 0.5 is a thin default, and the brush keeps roughly the same apparent size while zooming."
-    }
-
-    private func clampedInkBrushSize(_ value: Float) -> Float {
-        let range = inkBrushSizeRange
-        return Float(min(range.upperBound, max(range.lowerBound, Double(value))))
+        return "\(kind) diameter in screen pixels — stays the same apparent size as you zoom over the world. Type any value; the slider is just a convenient range."
     }
 
     private func inkBrushKeyboardDelta(_ delta: Float) -> Float {
-        canvasBrushSpace == .world ? (delta >= 0 ? 1 : -1) : delta
+        canvasBrushSpace == .world ? (delta >= 0 ? 4 : -4) : (delta >= 0 ? 1 : -1)
     }
 
     private var inkColorSeparationBinding: Binding<Double> {
@@ -4111,13 +4108,14 @@ private struct InkPreviewDrawingLayer: View {
             strokeSeed: currentStrokeSeed,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
-            width: engineWidth(for: strokeMode),
+            width: uiBrushSize(for: strokeMode),
             flow: flow,
             bleed: bleed,
             dry: dry,
             colorSeparation: colorSeparation,
             brushInk: currentDissolveWash ? 1 : brushInk,
-            color: inkRGBA
+            color: inkRGBA,
+            brushSpace: brushSpace
         )
         // Immediate mode: the live ink is already baked onto the canvas — keep
         // it, but don't add an editable path (so the buffer doesn't grow).
@@ -4220,8 +4218,8 @@ private struct InkPreviewDrawingLayer: View {
             time: time,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
-            width: engineWidth(for: strokeMode),
-            directRadius: directBrushRadius(for: strokeMode),
+            width: uiBrushSize(for: strokeMode),
+            brushSpace: brushSpace,
             flow: flow * flowScale,
             brushInk: currentDissolveWash ? 1 : brushInk,
             color: inkRGBA,
@@ -4232,44 +4230,11 @@ private struct InkPreviewDrawingLayer: View {
         )
     }
 
-    private func directBrushRadius(for strokeMode: InkBrushMode) -> Float? {
-        let uiSize = max(0, CGFloat(strokeMode == .brush ? washWidth : width))
-        let pixelExtent = max(1, worldPixelExtent)
-        switch brushSpace {
-        case .world:
-            // Literal-ish diameter in world-backing pixels. The UI minimum is
-            // still labelled as 1 for now, but visually that was too chunky at
-            // the initial HD viewport; map it to a tenth-world-pixel hairline
-            // internally while preserving the rest of the range.
-            let diameterPixels = max(0.025, uiSize * 0.10)
-            return Float((diameterPixels * 0.5) / pixelExtent)
-        case .screen:
-            // Apparent viewport diameter in screen/output pixels. Convert that
-            // through the current camera scale so Screen mode does NOT get
-            // larger/smaller as the camera zooms over the world canvas.
-            let diameterPixels: CGFloat
-            if strokeMode == .brush {
-                diameterPixels = 0.15 + pow(min(uiSize, 2) / 2, 1.15) * 3.4
-            } else {
-                diameterPixels = 0.065 + pow(min(uiSize, 2) / 2, 1.35) * 0.435
-            }
-            let outputPixelsY = max(1, outputSize.height)
-            let radiusWorldUnits = (diameterPixels * 0.5) * camera.viewHeight / outputPixelsY
-            return Float(radiusWorldUnits / max(0.000_001, worldHeight))
-        }
-    }
-
-    private func engineWidth(for strokeMode: InkBrushMode) -> Float {
-        let uiSize = max(0, strokeMode == .brush ? washWidth : width)
-        guard brushSpace == .screen else { return uiSize }
-        // Screen mode is not literal pixels. It is an HD-calibrated apparent
-        // size that should look good at the default 1920×1080 viewport. The
-        // older direct 0…2 curve was tuned for zoomed-out/8K viewing and made
-        // the default viewport feel like a chunky marker. Compress it before it
-        // reaches the inkwash engine: 0 = subpixel hairline, 0.5 = thin pen,
-        // 1 = expressive pen, 2 = marker-ish but not a giant blob.
-        let normalized = min(1, uiSize / 2)
-        return 0.20 * sqrt(normalized)
+    /// The raw UI brush size (apparent pixel diameter) for the active stroke
+    /// kind. The engine resolves this against `brushSpace` + the live camera —
+    /// the UI no longer pre-bakes a radius, so live and committed strokes match.
+    private func uiBrushSize(for strokeMode: InkBrushMode) -> Float {
+        max(0, strokeMode == .brush ? washWidth : width)
     }
 
     private func normalizedWorldPoint(_ point: CGPoint) -> CGPoint {

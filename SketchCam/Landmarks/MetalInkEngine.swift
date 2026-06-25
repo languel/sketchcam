@@ -295,6 +295,9 @@ final class MetalInkEngine {
     private var cachedImage: CIImage?
     private var controlFields: ResolvedControlFields = .empty
     private var currentSettings = ProcessingSettings()
+    /// The camera/world context for the current frame — used to resolve brush
+    /// size against the live camera (set at the top of `layer(...)`).
+    private var renderCanvas = CanvasRenderContext()
     private var zeroScalar: MTLTexture!
     private var zeroVector: MTLTexture!
 
@@ -437,6 +440,7 @@ final class MetalInkEngine {
     func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true, canvasContext: CanvasRenderContext = CanvasRenderContext()) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
+        self.renderCanvas = canvasContext
         let l = settings.landmarks
         let width = max(1, Int(requested.width.rounded()))
         let height = max(1, Int(requested.height.rounded()))
@@ -943,7 +947,10 @@ final class MetalInkEngine {
         guard let ink, let wet, let velocity else { return }
         let mode = path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen
         let kind = path.inkKind ?? settings.landmarks.inkKind ?? .black
-        let size = normalizedSize(path.width ?? settings.landmarks.inkWidth)
+        // Re-resolve the base radius against the CURRENT camera so a committed
+        // stroke matches its live appearance (and world strokes rescale on zoom).
+        let baseRadius = resolveBaseRadius(uiSize: path.width ?? settings.landmarks.inkWidth,
+                                           space: path.brushSpace ?? .screen)
         let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
         let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
         let color = path.color ?? settings.landmarks.inkColor
@@ -973,7 +980,7 @@ final class MetalInkEngine {
             replayPressure += (targetPressure - replayPressure) * (1 - exp(-sampleDT * 6))
             let pressure = replayPressure
             if mode == .pen {
-                let radius = penRadius(pressure: pressure, speed: speed, size: size)
+                let radius = directPenRadius(baseRadius, pressure: pressure, speed: speed)
                 let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
                 let steps = min(max(1, Int(ceil(dist / max(radius * 0.6, 0.0008)))), 80)
                 var segmentStart = previous
@@ -1000,7 +1007,7 @@ final class MetalInkEngine {
                 }
                 previousPenRadius = radius
             } else {
-                let radius = brushRadius(pressure: pressure, speed: speed, size: size)
+                let radius = directBrushRadius(baseRadius, pressure: pressure, speed: speed)
                 brushNow = SIMD3<Float>(point.x, point.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
                 let force = 15 + flow * 95
@@ -1047,7 +1054,8 @@ final class MetalInkEngine {
         bakedLiveIDs.insert(sample.id)
         let mode = sample.brushMode
         let kind = sample.inkKind
-        let size = normalizedSize(sample.width)
+        // Same resolver the committed-stroke replay uses, so live == committed.
+        let liveBaseRadius = resolveBaseRadius(uiSize: sample.width, space: sample.brushSpace)
         let flow = clamp01(sample.flow)
         let brushInk = clamp01(sample.brushInk)
         let color = sample.color
@@ -1125,8 +1133,7 @@ final class MetalInkEngine {
                 state.simPressure += (targetP - state.simPressure) * (1 - exp(-subDtW * 6))
                 let pressure = state.simPressure
                 let speed = state.speed
-                let radius = sample.directRadius.map { directBrushRadius($0, pressure: pressure, speed: speed) }
-                    ?? brushRadius(pressure: pressure, speed: speed, size: size)
+                let radius = directBrushRadius(liveBaseRadius, pressure: pressure, speed: speed)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
                 let loadedDensity = sample.wetOnly ? 0 : brushInk * 0.10 * (0.4 + 0.6 * pressure)
@@ -1203,8 +1210,7 @@ final class MetalInkEngine {
             state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-eventDT * 6))
             let pressure = state.simPressure
             let speed = state.speed
-            let radius = sample.directRadius.map { directPenRadius($0, pressure: pressure, speed: speed) }
-                ?? penRadius(pressure: pressure, speed: speed, size: size)
+            let radius = directPenRadius(liveBaseRadius, pressure: pressure, speed: speed)
 
             let penDensity = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
             // Lay the stroke as a ribbon: one variable-width capsule per centerline
@@ -1517,32 +1523,30 @@ final class MetalInkEngine {
         return Float(outputSize.x) / Float(outputSize.y)
     }
 
-    private func normalizedSize(_ value: Float) -> Float {
-        // 0…1 is the normal slider range; values >1 make the brush bigger.
-        // Keep a safety cap: the UI exposes up to 2.0 in Screen space.
-        min(2.0, max(0, value))
-    }
-
-    private func sizeMult(_ size: Float) -> Float {
-        // Screen-space brush size is an abstract apparent-size scale, not
-        // pixels. 0.5 = 1×; 1 = 3×; 2 ≈ 27×. Below 0.5, use a separate
-        // perceptual ramp so 0 is a true hairline-ish endpoint instead of
-        // collapsing visually into the default brush.
-        let clamped = min(2.0, max(0, size))
-        if clamped <= 0.5 {
-            let t = clamped / 0.5
-            return 0.006 + 0.994 * pow(t, 2.35)
+    /// The single source of truth for brush size. Resolves a UI size (a literal
+    /// apparent DIAMETER in pixels — screen pixels in `.screen`, world-backing
+    /// pixels in `.world`) into a base splat radius in the engine's world-
+    /// normalized stroke space, against the CURRENT camera. Called identically by
+    /// live drawing and committed-stroke replay, so they always match — and a
+    /// `.world` stroke re-resolves against the live camera, so it rescales when
+    /// the user zooms after drawing. No clamps: typing a big number just works.
+    private func resolveBaseRadius(uiSize: Float, space: CanvasBrushSpace) -> Float {
+        let size = max(0, uiSize)
+        let canvas = renderCanvas
+        let worldHeight = Float(max(0.000_001, canvas.worldHeight))
+        switch space {
+        case .screen:
+            // Constant apparent pixels regardless of zoom: convert apparent
+            // viewport pixels → world units via the camera's view height.
+            let viewHeight = Float(canvas.camera.viewHeight)
+            let outputHeightPx = Float(max(1, outputTexture?.height ?? 1080))
+            let radiusWorldUnits = (size * 0.5) * viewHeight / outputHeightPx
+            return radiusWorldUnits / worldHeight
+        case .world:
+            // Fixed size in world-backing pixels (rescales with zoom).
+            let extent = Float(max(1, canvas.worldPixelExtent))
+            return (size * 0.5) / extent
         }
-        let curve = pow(3, (clamped - 0.5) * 2)
-        return curve
-    }
-
-    private func penRadius(pressure: Float, speed: Float, size: Float) -> Float {
-        (0.0016 + 0.0042 * pressure) * min(max(1.12 - speed * 0.3, 0.55), 1.12) * sizeMult(size)
-    }
-
-    private func brushRadius(pressure: Float, speed: Float, size: Float) -> Float {
-        (0.014 + 0.060 * pressure) * (1 + min(speed, 2.5) * 0.28) * sizeMult(size)
     }
 
     private func directPenRadius(_ base: Float, pressure: Float, speed: Float) -> Float {
@@ -1609,15 +1613,15 @@ extension MetalInkEngine {
         var settings = ProcessingSettings()
         settings.landmarks.inkEnabled = true
         settings.landmarks.inkPaperEnabled = true
-        settings.landmarks.inkWidth = 0.75
+        settings.landmarks.inkWidth = 8     // apparent pixels (new size units)
         settings.landmarks.inkFlow = 0.8
         settings.landmarks.inkBleed = 0.8
         settings.landmarks.inkDry = 0.25
         settings.landmarks.inkColorSeparation = 0.8
         settings.landmarks.inkBrushInk = 0.25
         settings.landmarks.inkPaths = [
-            InkEditorPath(points: [CGPoint(x: 0.12, y: 0.50), CGPoint(x: 0.88, y: 0.50)], brushMode: .pen, inkKind: .black, width: 0.75, flow: 1.0),
-            InkEditorPath(points: [CGPoint(x: 0.46, y: 0.34), CGPoint(x: 0.54, y: 0.66)], brushMode: .brush, inkKind: .black, width: 0.75, flow: 0.9, brushInk: 0.25)
+            InkEditorPath(points: [CGPoint(x: 0.12, y: 0.50), CGPoint(x: 0.88, y: 0.50)], brushMode: .pen, inkKind: .black, width: 8, flow: 1.0),
+            InkEditorPath(points: [CGPoint(x: 0.46, y: 0.34), CGPoint(x: 0.54, y: 0.66)], brushMode: .brush, inkKind: .black, width: 48, flow: 0.9, brushInk: 0.25)
         ]
         for frame in 0..<10 {
             _ = engine.layer(settings: settings, live: nil, livePoints: [], endedLiveID: nil, outputSize: CGSize(width: 192, height: 128), frameIndex: frame)
@@ -1637,7 +1641,7 @@ extension MetalInkEngine {
             points: [CGPoint(x: 0.22, y: 0.50), CGPoint(x: 0.78, y: 0.50)],
             brushMode: .pen,
             inkKind: .white,
-            width: 0.9,
+            width: 10,
             flow: 1.0
         ))
         settings.landmarks.inkFixRevision = 2

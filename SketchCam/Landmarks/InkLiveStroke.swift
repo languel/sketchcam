@@ -13,14 +13,11 @@ struct InkLiveStrokeSample: Equatable {
     var time: TimeInterval
     var brushMode: InkBrushMode
     var inkKind: InkKind
+    /// Apparent brush DIAMETER, interpreted in `brushSpace` (screen pixels, or
+    /// world-backing pixels). The engine resolves this to a splat radius against
+    /// the live camera, so live and committed strokes match.
     var width: Float
-    /// Optional direct radius in normalized world texture coordinates.
-    ///
-    /// When present, the engine treats `width` as UI metadata and uses this
-    /// physical radius instead of the abstract inkwash size curve. This is used
-    /// for World brush space so a "1 px" brush can really reach one pixel on the
-    /// world backing store.
-    var directRadius: Float?
+    var brushSpace: CanvasBrushSpace
     var flow: Float
     var brushInk: Float
     var color: RGBAColor
