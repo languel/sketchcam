@@ -13,6 +13,7 @@ import SketchCamShared
 final class InkPenRibbonRenderer {
     private let line = MetalLineRenderer()
     private let pool = PixelBufferPool()
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
 
     // The live stroke accumulates across frames: the live channel only delivers
     // the points captured since the last frame (a delta), so to re-tessellate the
@@ -28,8 +29,12 @@ final class InkPenRibbonRenderer {
     func deposits(committed: [InkEditorPath], liveSample: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
                   settings: ProcessingSettings, outputSize: CGSize, canvas: CanvasRenderContext) -> [MetalInkPenDeposit] {
         guard line != nil else { return [] }
-        let w = max(1, Int(outputSize.width.rounded()))
-        let h = max(1, Int(outputSize.height.rounded()))
+        // Render coverage at the DYE resolution so the deposit into the dye is 1:1
+        // (no downsample → no bead-chain aliasing on thin strokes).
+        let dye = MetalInkEngine.dyePixelSize(forOutput: outputSize)
+        let w = max(1, Int(dye.width.rounded()))
+        let h = max(1, Int(dye.height.rounded()))
+        let outH = max(1, Int(outputSize.height.rounded()))
         func isPen(_ p: InkEditorPath) -> Bool { (p.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .pen }
         var result: [MetalInkPenDeposit] = []
 
@@ -40,7 +45,7 @@ final class InkPenRibbonRenderer {
                               uiSize: path.width ?? settings.landmarks.inkWidth,
                               space: path.brushSpace ?? .screen,
                               color: path.color ?? settings.landmarks.inkColor,
-                              outW: w, outH: h, canvas: canvas),
+                              bufW: w, bufH: h, outH: outH, canvas: canvas),
                let buf = coverageBuffer([s], w: w, h: h) {
                 result.append(MetalInkPenDeposit(coverage: buf, color: path.color ?? settings.landmarks.inkColor))
             }
@@ -61,7 +66,7 @@ final class InkPenRibbonRenderer {
             if liveAccumPoints.count > 1,
                let s = stroke(points: liveAccumPoints, times: liveAccumTimes,
                               uiSize: liveSample.width, space: liveSample.brushSpace,
-                              color: liveSample.color, outW: w, outH: h, canvas: canvas),
+                              color: liveSample.color, bufW: w, bufH: h, outH: outH, canvas: canvas),
                let buf = coverageBuffer([s], w: w, h: h) {
                 result.append(MetalInkPenDeposit(coverage: buf, color: liveSample.color))
             }
@@ -81,19 +86,28 @@ final class InkPenRibbonRenderer {
             s.color = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
             return s
         }
-        // Smooth filled ribbon (miter strip + round end caps) — NOT the beaded
-        // per-segment quads+discs. Coverage is white, MAX-blended into the dye, so
-        // self-overlap reads as a single flat fill (no double-blend, no beading).
-        guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: w, height: h)),
-              line.render(strokes: white, ribbon: true, roundCaps: true, into: buffer) else { return nil }
-        return buffer
+        // Smooth filled ribbon (miter strip + round end caps), rendered hard.
+        guard let hard = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage-hard", width: w, height: h)),
+              line.render(strokes: white, ribbon: true, roundCaps: true, into: hard) else { return nil }
+        // FEATHER the edge. The watercolor display edge-enhances density gradients;
+        // a hard thin ink line is gradient-everywhere → a "pixelated caterpillar".
+        // Spreading the edge over a few dye texels (small per-texel gradient) makes
+        // a thin stroke read as a smooth ink mark instead. ~1px sigma is enough.
+        guard let soft = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: w, height: h)) else { return hard }
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        let blurred = CIImage(cvPixelBuffer: hard)
+            .clampedToExtent()
+            .applyingGaussianBlur(sigma: 0.8)
+            .cropped(to: rect)
+        ciContext.render(blurred, to: soft)
+        return soft
     }
 
     /// Build one tessellator stroke: path points → output pixels, with per-point
     /// width from the brush size (literal pixels) modulated by a smoothed speed
     /// taper for a little life.
     private func stroke(points: [CGPoint], times: [TimeInterval]?, uiSize: Float, space: CanvasBrushSpace,
-                        color: RGBAColor, outW: Int, outH: Int, canvas: CanvasRenderContext) -> StrokeTessellator.Stroke? {
+                        color: RGBAColor, bufW: Int, bufH: Int, outH: Int, canvas: CanvasRenderContext) -> StrokeTessellator.Stroke? {
         guard points.count > 1 else { return nil }
         // The coverage buffer maps 1:1 onto the ink dye, which lives in NORMALIZED
         // WORLD space [0,1]² (the full world); the engine's display applies the
@@ -107,55 +121,93 @@ final class InkPenRibbonRenderer {
         let mapped = points.map { p -> CGPoint in
             // normalized world (= dye uv); flip Y for the y-up line renderer so the
             // coverage texel (uv) matches how the dye samples it.
-            return CGPoint(x: (p.x / wh) * CGFloat(outW), y: (1 - p.y / wh) * CGFloat(outH))
+            return CGPoint(x: (p.x / wh) * CGFloat(bufW), y: (1 - p.y / wh) * CGFloat(bufH))
         }
-        // Smooth the polyline into a flowing curve (Catmull-Rom resample) so the
-        // stroke reads as a painterly line, not angular segments between samples.
-        let (pts, times) = Self.smooth(mapped, times: times, subdivisions: 8)
+        // Low-pass the centerline FIRST. Raw drag samples carry ~sub-pixel jitter;
+        // a thin ribbon (~1px) around a jittery path serrates because the jitter
+        // amplitude ≈ the half-width (it's swamped only at large widths). A few
+        // binomial [0.25,0.5,0.25] passes remove the jitter so the thin ribbon is
+        // a clean line, then Catmull-Rom resamples it into a flowing curve.
+        let lp = Self.lowPass(mapped, passes: 3)
+        let (smoothPts, _) = Self.smooth(lp, times: times, subdivisions: 8)
 
-        // Width in COVERAGE pixels (the full-world buffer). The display's camera
-        // zoom (worldHeight / viewHeight) is applied later, so to land at the
-        // intended APPARENT size (matching the brush cursor ring) we pre-divide by
-        // it. World = world-backing px → fraction of the world; Screen = fixed
-        // apparent px, so compensate by the current zoom.
+        // Width: first the intended APPARENT diameter in OUTPUT pixels (identical
+        // to the brush cursor ring), then convert to dye-buffer pixels. The display
+        // magnifies the buffer by outH·worldHeight/(viewHeight·bufH), so divide by
+        // that = multiply by (bufH/outH)·viewHeight/worldHeight.
         let viewHeight = Float(max(0.000_001, canvas.camera.viewHeight))
         let extent = Float(max(1, canvas.worldPixelExtent))
-        let baseWidthPx: Float
+        let apparentOutPx: Float
         switch space {
         case .screen:
-            baseWidthPx = max(0.5, uiSize * viewHeight / worldHeight)
+            apparentOutPx = uiSize
         case .world:
-            baseWidthPx = max(0.5, uiSize * Float(outH) / extent)
+            apparentOutPx = uiSize * Float(outH) * worldHeight / (viewHeight * extent)
         }
+        let dyeScale = Float(bufH) / Float(max(1, outH))
+        // Floor at a few dye px: a sub-~3px diagonal ink line aliases into a dashed
+        // core even with MSAA (it's below the dye's representable line width). The
+        // feather smooths the rest.
+        let baseWidthPx = max(3, apparentOutPx * dyeScale * viewHeight / worldHeight)
 
-        // Per-point speed (px/sec) → gentle, smoothed width modulation (fast =
-        // thinner), like simulated pressure.
+        // Decimate to a segment spacing >= the stroke width. The miter ribbon goes
+        // unstable (each tiny segment renders as a separate lozenge → bead-chain)
+        // when segments are shorter than the width; this keeps them longer so the
+        // strip stays a clean continuous band at any width.
+        let pts = Self.decimate(smoothPts, minGap: CGFloat(max(2, baseWidthPx)))
+        guard pts.count > 1 else { return nil }
+
+        // CONSTANT width along the body. (A per-point speed→width taper was keyed
+        // to the Catmull-Rom resampled points, whose spacing is non-uniform — the
+        // curve slows at each original sample — so the width oscillated once per
+        // segment and pinched a thin ribbon into a regular bead-chain. A uniform
+        // width keeps the thin ribbon continuous; the wash adds organic variation.)
         let n = pts.count
         var widths = [Float](repeating: baseWidthPx, count: n)
-        if let times, times.count == n {
-            var ema: Float = 0
-            for i in 1..<n {
-                let dt = max(Float(times[i] - times[i - 1]), 1.0 / 240.0)
-                let d = Float(hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y))
-                let speed = d / dt / Float(max(1, outH))   // normalized by frame height
-                ema += (speed - ema) * 0.25
-                let taper = min(max(1.05 - ema * 0.6, 0.7), 1.05)
-                widths[i] = baseWidthPx * taper
-            }
-            widths[0] = n > 1 ? widths[1] : baseWidthPx
-        }
-        // Painterly end taper: ease the width down toward the very start/end over
-        // a short run of points (perfect-freehand style) so the stroke has soft,
-        // rounded ends instead of a blunt slab.
+        // Painterly end taper only: ease the width down toward the very start/end
+        // over a short run of points so the stroke has soft, rounded ends. This is
+        // monotonic at the ends (no mid-stroke oscillation → no beading).
         let taperRun = max(1, min(n / 4, 6))
         for i in 0..<n {
             let dStart = Float(i) / Float(taperRun)
             let dEnd = Float(n - 1 - i) / Float(taperRun)
             let ends = min(1, min(dStart, dEnd))
-            let ease = 0.35 + 0.65 * sin(ends * .pi / 2)   // 0.35 at the tip → 1.0
+            let ease = 0.55 + 0.45 * sin(ends * .pi / 2)   // 0.55 at the tip → 1.0
             widths[i] *= ease
         }
         return StrokeTessellator.Stroke(points: pts, color: color, baseWidth: baseWidthPx, widths: widths)
+    }
+
+    /// Keep points spaced at least `minGap` apart (always keeping the last), so
+    /// the ribbon's segments stay longer than its width.
+    private static func decimate(_ p: [CGPoint], minGap: CGFloat) -> [CGPoint] {
+        guard p.count > 2, minGap > 0 else { return p }
+        var out: [CGPoint] = [p[0]]
+        let gap2 = minGap * minGap
+        for i in 1..<(p.count - 1) {
+            let last = out[out.count - 1]
+            let dx = p[i].x - last.x, dy = p[i].y - last.y
+            if dx * dx + dy * dy >= gap2 { out.append(p[i]) }
+        }
+        out.append(p[p.count - 1])
+        return out
+    }
+
+    /// Iterated binomial [0.25, 0.5, 0.25] low-pass that removes sub-pixel jitter
+    /// from raw input samples (endpoints fixed). Keeps a thin ribbon from
+    /// serrating without rounding the stroke's overall shape.
+    private static func lowPass(_ p: [CGPoint], passes: Int) -> [CGPoint] {
+        guard p.count > 2, passes > 0 else { return p }
+        var pts = p
+        for _ in 0..<passes {
+            var next = pts
+            for i in 1..<(pts.count - 1) {
+                next[i] = CGPoint(x: pts[i - 1].x * 0.25 + pts[i].x * 0.5 + pts[i + 1].x * 0.25,
+                                  y: pts[i - 1].y * 0.25 + pts[i].y * 0.5 + pts[i + 1].y * 0.25)
+            }
+            pts = next
+        }
+        return pts
     }
 
     /// Uniform Catmull-Rom resample: turns a sparse polyline into a smooth,

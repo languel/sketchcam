@@ -774,6 +774,18 @@ final class MetalInkEngine {
         return true
     }
 
+    /// The ink-dye pixel dimensions for a given output size (matches `configure`).
+    /// Pen coverage is rendered at THIS resolution so its deposit into the dye is
+    /// 1:1 — no downsample aliasing that would bead a thin stroke.
+    static func dyePixelSize(forOutput size: CGSize) -> CGSize {
+        let w = max(1, Int(size.width.rounded()))
+        let h = max(1, Int(size.height.rounded()))
+        let shortSide = max(1, min(w, h))
+        let dyeScale = Float(min(dyeBase, shortSide)) / Float(shortSide)
+        return CGSize(width: max(1, Int((Float(w) * dyeScale).rounded())),
+                      height: max(1, Int((Float(h) * dyeScale).rounded())))
+    }
+
     private func configure(width: Int, height: Int) -> Bool {
         let out = SIMD2(Int32(width), Int32(height))
         if outputSize == out, outputBuffer != nil, outputTexture != nil { return true }
