@@ -108,3 +108,41 @@ convention (trace `normalizedWorldPoint` / `canvasActions.replayPaths` and the
 engine's `worldPixelRect`/`visibleWorldRect`), OR settle the world-point
 convention as part of the world-canvas redesign. Then: round end-caps, per-nib
 pressure in the schema (Phase 1), wash-as-renderer (Phase 3).
+
+## CLARIFIED PIPELINE (the target) — "render to ink, then wash pushes ink"
+Confirmed intent:
+
+    mouse → PATHS (data, editable) → rendered as RIBBONS → ribbons DEPOSIT INTO INK
+    → WASH pushes the ink around (and optionally injects more if inkBrushInk > 0)
+
+The ribbon is NOT a separate layer composited over the wash (current state) — it
+is a SOURCE that writes into the engine's ink dye, which the wash fluid sim then
+advects. The separation "something → ink" is deliberate and reusable: later other
+sources (webcam, generative, …) also render into ink to be washed.
+
+### Why the current state is wrong for this
+`InkPenRibbonRenderer` produces a CIImage composited OVER the wash output, so the
+wash can never touch the pen ("ribbon is unaffected by wash"). `inkBrushInk`
+defaults to 0 BY DESIGN (wash = water that moves existing ink; pigment wash is a
+separate opt-in), so over blank paper a wash does nothing — it needs ink in the
+dye to push, which today there is none of (the pen lives elsewhere).
+
+### Implementation plan (next session — needs CUA verify)
+1. Deposit the ribbon INTO the engine's `ink` dye instead of compositing over it.
+   The engine already has the `ink` DoubleTexture (rgba16Float, dye res) that the
+   wash advects; render the tessellated ribbon (MSAA) and ADD/blend it into that
+   texture — a reusable "render-to-ink" pass.
+2. INCREMENTAL deposit (the crux): re-depositing the whole ribbon every frame
+   would overwrite the wash's displacement (wash could never move it). Deposit
+   only the NEW portion each frame (the live delta) — the smooth-ribbon equivalent
+   of the engine's old per-frame capsule splat. Once deposited, the ink belongs to
+   the fluid sim; the path is kept only for editing/re-render.
+3. Re-render = re-deposit (editing a path re-bakes its ink, resetting any wash
+   displacement of that stroke) — acceptable.
+4. Generalize (1) into a reusable "source → ink" stage for webcam/other inputs.
+
+This restores the ORIGINAL pen-into-dye pipeline (pen ink, wash pushes) but
+replaces the BEADED capsule splat with the smooth tessellated ribbon deposit —
+keeping the painterly smoothness AND the wash interaction. Commits 1f77246…472e6e4
+(ribbon + smoothing + opaque union + caps) are reusable for the deposit; only the
+COMPOSITE-vs-DEPOSIT wiring in InkLayerCompositor changes.
