@@ -1250,7 +1250,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .help("Screen keeps the brush the same apparent size while zooming. World measures Pen and Wash size in pixels on the large paper/world backing store.")
-            SliderRow(title: "Pen size", value: inkSizeBinding, range: inkBrushSizeRange,
+            SliderRow(title: "Pen size", value: inkSizeBinding, range: inkPenSizeRange,
                       precision: inkBrushSizePrecision, defaultValue: inkPenDefaultSize,
                       hint: inkBrushSizeHint(kind: "Pen"))
             SliderRow(title: "Wash size", value: inkWashSizeBinding, range: inkBrushSizeRange,
@@ -1448,6 +1448,13 @@ struct ContentView: View {
     /// Slider track extent (the thumb pins here; typed values may exceed it).
     private var inkBrushSizeRange: ClosedRange<Double> {
         canvasBrushSpace == .world ? 1...2048 : 0.25...256
+    }
+
+    /// The PEN goes far thinner than the wash (true sub-pixel hairline) and tops
+    /// out much lower (a pen is a line, not a flood). Type any value — the slider
+    /// is just a convenient range.
+    private var inkPenSizeRange: ClosedRange<Double> {
+        canvasBrushSpace == .world ? 0.2...320 : 0.05...40
     }
 
     private var inkPenDefaultSize: Double { canvasBrushSpace == .world ? 48 : 6 }

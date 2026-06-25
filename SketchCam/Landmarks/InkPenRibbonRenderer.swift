@@ -101,14 +101,17 @@ final class InkPenRibbonRenderer {
         // Smooth filled ribbon (miter strip + round end caps), rendered hard at ss res.
         guard let hard = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage-hard", width: sw, height: sh)),
               line.render(strokes: white, ribbon: true, roundCaps: true, into: hard) else { return nil }
-        // FEATHER lightly (the watercolor display edge-enhances density gradients;
-        // a hard thin ink line would read as a "pixelated caterpillar"). Sigma is in
-        // ss-pixels → ~0.6 dye px, just enough to soften the per-texel gradient.
+        // FEATHER, proportional to stroke width: a thin hairline gets almost none
+        // (so it stays thin and sharp — the ridge-gated display already stops it
+        // caterpillaring), a mid/heavy stroke gets more to soften its edge. Sigma
+        // is in ss-pixels.
+        let widthDye = Double(strokes.map { $0.baseWidth }.max() ?? 1)
+        let sigma = max(0.35, min(Double(ss) * 0.9, widthDye * Double(ss) * 0.28))
         guard let soft = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: sw, height: sh)) else { return hard }
         let rect = CGRect(x: 0, y: 0, width: sw, height: sh)
         let blurred = CIImage(cvPixelBuffer: hard)
             .clampedToExtent()
-            .applyingGaussianBlur(sigma: Double(ss) * 0.9)
+            .applyingGaussianBlur(sigma: sigma)
             .cropped(to: rect)
         ciContext.render(blurred, to: soft)
         return soft
@@ -156,10 +159,10 @@ final class InkPenRibbonRenderer {
             apparentOutPx = uiSize * Float(outH) * worldHeight / (viewHeight * extent)
         }
         let dyeScale = Float(bufH) / Float(max(1, outH))
-        // Floor at ~1 dye px (a true hairline). The coverage is supersampled +
-        // lightly feathered (see coverageBuffer) so even a 1px line stays smooth
-        // instead of aliasing into a dashed core.
-        let baseWidthPx = max(1, apparentOutPx * dyeScale * viewHeight / worldHeight)
+        // No real floor (just guard against 0): the supersample + ridge-gated
+        // display let a sub-pixel width render as a faint true hairline. The
+        // tessellator/feather handle the rest.
+        let baseWidthPx = max(0.05, apparentOutPx * dyeScale * viewHeight / worldHeight)
 
         // Keep the DENSE smoothed centerline: at dense spacing the angle between
         // consecutive segments is tiny (cosA≈1), so the miter offset never bumps
