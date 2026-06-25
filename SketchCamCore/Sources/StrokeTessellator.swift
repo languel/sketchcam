@@ -24,13 +24,19 @@ public enum StrokeTessellator {
         public var baseWidth: Float
         public var widthVariation: Float
         public var seed: Int
+        /// Optional explicit per-point FULL widths (same count as `points`). When
+        /// present these drive the ribbon directly — used by the ink pen, whose
+        /// width comes from the path's per-nib expression (pressure/speed) rather
+        /// than the calligraphic taper/noise profile. nil → the taper profile.
+        public var widths: [Float]?
 
-        public init(points: [CGPoint], color: RGBAColor, baseWidth: Float, widthVariation: Float = 0, seed: Int = 0) {
+        public init(points: [CGPoint], color: RGBAColor, baseWidth: Float, widthVariation: Float = 0, seed: Int = 0, widths: [Float]? = nil) {
             self.points = points
             self.color = color
             self.baseWidth = baseWidth
             self.widthVariation = widthVariation
             self.seed = seed
+            self.widths = widths
         }
     }
 
@@ -124,6 +130,10 @@ public enum StrokeTessellator {
     /// matching the look of the CPU `strokeVariableWidth`.
     static func halfWidthProfile(_ stroke: Stroke) -> [CGFloat] {
         let n = stroke.points.count
+        // Explicit per-point widths (ink pen): use them directly as half-widths.
+        if let widths = stroke.widths, widths.count == n {
+            return widths.map { CGFloat(max(0.1, $0)) / 2 }
+        }
         let base = CGFloat(max(0.2, stroke.baseWidth))
         guard n > 1 else { return [base / 2] }
         var widths = [CGFloat](repeating: 0, count: n)

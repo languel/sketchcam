@@ -29,6 +29,7 @@
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E64E4D8A8372D03B42373B1 /* CanvasActionLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11527CED2B1176DBD497CA /* CanvasActionLedger.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
+		2EF7BAFDEDC3CBCABA1EF783 /* InkPenRibbonRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8324CBA70A80BC1D86D9E38C /* InkPenRibbonRenderer.swift */; };
 		34FE163B36F97ECD02BD4C25 /* LayerGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5219B099618056834D2AEF4C /* LayerGraphTests.swift */; };
 		3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */; };
 		3FE07685151D87A934F97FD3 /* DebugStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */; };
@@ -231,6 +232,7 @@
 		77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportConfigurationTests.swift; sourceTree = "<group>"; };
 		7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessor.swift; sourceTree = "<group>"; };
 		7FB2F3D00BEAD83EF07A7A34 /* MoviePlaybackSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoviePlaybackSource.swift; sourceTree = "<group>"; };
+		8324CBA70A80BC1D86D9E38C /* InkPenRibbonRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkPenRibbonRenderer.swift; sourceTree = "<group>"; };
 		85F10111FD7F23C099A99795 /* ControlFieldGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlFieldGraphTests.swift; sourceTree = "<group>"; };
 		8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandmarkOverlayCompositor.swift; sourceTree = "<group>"; };
 		899FA7D13C6CB19A855B1642 /* SketchCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SketchCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -536,6 +538,7 @@
 				4A8A09E5CE62B8CDC41F0F3E /* AcrylicLayerCompositor.swift */,
 				ADAEECC2AB1268ED9E01D3B1 /* InkLayerCompositor.swift */,
 				F1865C4CA0788A2B3FF4E5BB /* InkLiveStroke.swift */,
+				8324CBA70A80BC1D86D9E38C /* InkPenRibbonRenderer.swift */,
 				C411DE4ABE0CF55977A00FCB /* LandmarkDetectionService.swift */,
 				B5AF60D4B3ADDC24675F61CA /* LandmarkObservation.swift */,
 				8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */,
@@ -819,6 +822,7 @@
 				FFBBD15157D1674733BD39A0 /* GPUControlFieldStore.swift in Sources */,
 				272C963F431C2E68DC7B75C6 /* InkLayerCompositor.swift in Sources */,
 				580729A8AFF47997B30CF672 /* InkLiveStroke.swift in Sources */,
+				2EF7BAFDEDC3CBCABA1EF783 /* InkPenRibbonRenderer.swift in Sources */,
 				9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */,
 				57BB5AC7A4FB446DD21ADE14 /* LandmarkDetectionService.swift in Sources */,
 				1CC41F980E96D4B16EF21681 /* LandmarkObservation.swift in Sources */,

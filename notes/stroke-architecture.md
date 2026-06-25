@@ -85,3 +85,26 @@ Also: a stray bug — pen size persisted to 0.2 (sub-pixel → isolated dots); t
 sizing is literal px, so just set a sane default/clamp-floor for display.
 
 Biggest immediate win = Phases 1–2 (schema + ribbon pen). Wash stays as-is until 3.
+
+## Progress (Phase 2 started — ribbon pen)
+DONE & PROVEN: pen now renders through a vector ribbon, not the dye.
+- `StrokeTessellator.Stroke` gained optional per-point `widths` (pen drives width
+  from path expression).
+- `InkPenRibbonRenderer` (app): re-tessellates ALL pen strokes (committed + live)
+  every frame via `MetalLineRenderer` (MSAA) → crisp CIImage; never baked.
+- `InkLayerCompositor.layer` splits pen↔wash: wash → fluid engine, pen → ribbon,
+  pen composited over wash. `handleDragEnded` now always commits pen as a path
+  (immediate-bake was dye-only; obsolete for the ribbon).
+- Verified live: a drawn stroke renders as a SMOOTH, crisp vector ribbon (no
+  beading) — the architecture works and looks right.
+
+REMAINING (next): **coordinate alignment.** Stored path points are in WORLD
+coords (debug showed ~3.4 for a 1920-wide frame). The renderer maps them with
+`camera.viewportUV(fromWorldPoint:aspect:)`, which brings the stroke on-screen
+but with a vertical OFFSET from the cursor (suspect a y-axis convention / camera
+center|viewHeight mismatch in the WIP "world canvas recovery" coords). Fix =
+match the renderer's world→viewport map to the editor's exact point-storage
+convention (trace `normalizedWorldPoint` / `canvasActions.replayPaths` and the
+engine's `worldPixelRect`/`visibleWorldRect`), OR settle the world-point
+convention as part of the world-canvas redesign. Then: round end-caps, per-nib
+pressure in the schema (Phase 1), wash-as-renderer (Phase 3).

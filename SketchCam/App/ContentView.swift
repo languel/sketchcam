@@ -4100,7 +4100,11 @@ private struct InkPreviewDrawingLayer: View {
 
     private func handleDragEnded(committed: Bool) {
         let strokeMode = currentStrokeMode ?? brushMode
-        let immediate = (strokeMode == .pen && immediatePen) || (strokeMode == .brush && immediateWash)
+        // Pen now renders as a vector ribbon re-drawn from the path every frame
+        // (cheap), so it ALWAYS commits as an editable path — there's no dye to
+        // "bake" into, and immediate-bake would make the stroke vanish on mouse-up.
+        // Only the wash uses the immediate (dye-baked) path.
+        let immediate = strokeMode == .brush && immediateWash
         let completedPath = InkEditorPath(
             id: currentPathID ?? UUID(),
             points: current,

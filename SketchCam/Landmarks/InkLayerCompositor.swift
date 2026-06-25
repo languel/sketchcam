@@ -10,6 +10,7 @@ final class InkLayerCompositor {
     private let lock = NSLock()
     private var engine: MetalInkEngine? = MetalInkEngine()
     private let paperRenderer = MetalPaperRenderer.shared
+    private let penRenderer = InkPenRibbonRenderer()
 
     var activitySnapshot: InkActivitySnapshot {
         lock.withLock { engine?.activitySnapshot ?? InkActivitySnapshot() }
@@ -42,35 +43,59 @@ final class InkLayerCompositor {
         return lock.withLock {
             if engine == nil { engine = MetalInkEngine() }
             var renderSettings = settings
-            if let actionPaths {
-                renderSettings.landmarks.inkPaths = actionPaths
+            let sourcePaths = actionPaths ?? settings.landmarks.inkPaths
+            // PEN strokes render as crisp vector ribbons (below); only the WASH
+            // goes through the fluid engine. Split committed + live by mode.
+            func isPen(_ p: InkEditorPath) -> Bool {
+                (p.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .pen
             }
+            let penPaths = sourcePaths.filter(isPen)
+            renderSettings.landmarks.inkPaths = sourcePaths.filter { !isPen($0) }
+            let livePen = live?.brushMode == .pen
+            let engineLive = livePen ? nil : live
+            let engineLivePoints = livePen ? [] : livePoints
+
             let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
             let hasRoutedTexture = textureInput != nil
             renderSettings.landmarks.inkPaperEnabled = paperOpacity > 0.001
             if hasRoutedTexture {
                 renderSettings.landmarks.inkPaperEnabled = false
             }
-            let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
+            let ink = engine?.layer(settings: renderSettings, live: engineLive, livePoints: engineLivePoints,
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
                                     controlFields: controlFields, fixedDeltaTime: fixedDeltaTime,
                                     advanceSimulation: advanceSimulation,
                                     canvasContext: canvasContext)
             let rect = CGRect(origin: .zero, size: outputSize)
-            guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
-            let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
-            let config = settings.landmarks.inkPaperConfig ?? .metalDefault
-            let substrate: CIImage
-            if mode == .none || paperRenderer == nil {
-                substrate = routed
-            } else if let paper = paperRenderer?.image(config: config, rect: rect) {
-                substrate = blend(paper: paper, over: routed, mode: mode).cropped(to: rect)
+
+            // Wash + paper substrate (the existing logic), captured as a base.
+            let washBase: CIImage?
+            if let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 {
+                let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply
+                let config = settings.landmarks.inkPaperConfig ?? .metalDefault
+                let substrate: CIImage
+                if mode == .none || paperRenderer == nil {
+                    substrate = routed
+                } else if let paper = paperRenderer?.image(config: config, rect: rect) {
+                    substrate = blend(paper: paper, over: routed, mode: mode).cropped(to: rect)
+                } else {
+                    substrate = routed
+                }
+                let visibleSubstrate = applyOpacity(paperOpacity, to: substrate)
+                washBase = ink.map { $0.composited(over: visibleSubstrate).cropped(to: rect) } ?? visibleSubstrate
             } else {
-                substrate = routed
+                washBase = ink
             }
-            let visibleSubstrate = applyOpacity(paperOpacity, to: substrate)
-            guard let ink else { return visibleSubstrate }
-            return ink.composited(over: visibleSubstrate).cropped(to: rect)
+
+            // PEN ribbons (committed + the in-progress one) over the wash.
+            let pen = penRenderer.image(committed: penPaths, liveSample: livePen ? live : nil,
+                                        livePoints: livePen ? livePoints : [], settings: settings,
+                                        outputSize: outputSize, canvas: canvasContext)
+            switch (pen, washBase) {
+            case let (p?, b?): return p.composited(over: b).cropped(to: rect)
+            case let (p?, nil): return p
+            case let (nil, b): return b
+            }
         }
     }
 
