@@ -72,11 +72,23 @@ final class InkPenRibbonRenderer {
         }
         guard !strokes.isEmpty else { return nil }
 
-        // Ribbon strip (clean continuous edges, no per-vertex seams) + round end
-        // caps, so the stroke is smooth at any size.
+        // Render OPAQUE (per-vertex alpha forced to 1) as a union of discs+quads:
+        // robust at ANY brush size (no strip self-intersection) and no internal
+        // double-blend. The pen's real opacity is applied once to the whole image
+        // below, so overlaps within a stroke read as one flat fill.
+        let inkAlpha = max(0, min(1, settings.landmarks.inkColor.alpha))
+        let opaque = strokes.map { s -> StrokeTessellator.Stroke in
+            var s = s
+            s.color = RGBAColor(red: s.color.red, green: s.color.green, blue: s.color.blue, alpha: 1)
+            return s
+        }
         guard let buffer = try? pool.makeBuffer(format: FrameFormat(id: "pen-ribbon", width: w, height: h)),
-              line.render(strokes: strokes, ribbon: true, roundCaps: true, into: buffer) else { return nil }
-        return CIImage(cvPixelBuffer: buffer).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+              line.render(strokes: opaque, ribbon: false, into: buffer) else { return nil }
+        let image = CIImage(cvPixelBuffer: buffer).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+        guard inkAlpha < 0.999 else { return image }
+        return image.applyingFilter("CIColorMatrix", parameters: [
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(inkAlpha))
+        ])
     }
 
     /// Build one tessellator stroke: path points → output pixels, with per-point
