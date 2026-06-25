@@ -100,6 +100,10 @@ final class MetalInkEngine {
         var opacity: Float
         var colorSep: Float
         var washTint: SIMD4<Float>
+        var canvasCenterX: Float
+        var canvasCenterY: Float
+        var canvasViewHeight: Float
+        var canvasWorldExtent: Int
     }
 
     private struct LivePointerState {
@@ -205,6 +209,7 @@ final class MetalInkEngine {
         var inkFade: Float
         var washTint: SIMD4<Float>
         var grainScaleSeed: SIMD4<Float>
+        var worldView: SIMD4<Float>
     }
 
     private final class DoubleTexture {
@@ -429,7 +434,7 @@ final class MetalInkEngine {
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty, fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true, canvasContext: CanvasRenderContext = CanvasRenderContext()) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
         let l = settings.landmarks
@@ -465,7 +470,11 @@ final class MetalInkEngine {
             paper: paperConfig.resolved,
             opacity: clamp01(l.inkOpacity),
             colorSep: clamp01(l.inkColorSeparation ?? 0.5),
-            washTint: Self.washTint(l.inkWashColor)
+            washTint: Self.washTint(l.inkWashColor),
+            canvasCenterX: Float(canvasContext.camera.center.x),
+            canvasCenterY: Float(canvasContext.camera.center.y),
+            canvasViewHeight: Float(canvasContext.camera.viewHeight),
+            canvasWorldExtent: canvasContext.worldPixelExtent
         )
         let sigChanged = renderSig != lastRenderSig
         // A routed motion field is an ongoing physical input, just like a held
@@ -613,7 +622,7 @@ final class MetalInkEngine {
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
             }
-            if advanceSimulation, !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
+            if advanceSimulation, !canvasContext.navigationActive, !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
@@ -625,7 +634,7 @@ final class MetalInkEngine {
         if endedLiveID != nil {
             captureState(for: replayablePaths, commandBuffer: commandBuffer)
         }
-        render(settings: settings, paperConfig: paperConfig, commandBuffer: commandBuffer)
+        render(settings: settings, paperConfig: paperConfig, canvasContext: canvasContext, commandBuffer: commandBuffer)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         lastRenderSig = renderSig
@@ -1116,7 +1125,8 @@ final class MetalInkEngine {
                 state.simPressure += (targetP - state.simPressure) * (1 - exp(-subDtW * 6))
                 let pressure = state.simPressure
                 let speed = state.speed
-                let radius = brushRadius(pressure: pressure, speed: speed, size: size)
+                let radius = sample.directRadius.map { directBrushRadius($0, pressure: pressure, speed: speed) }
+                    ?? brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(current.x, current.y, radius)
                 let wetAmount = 0.5 + 0.5 * pressure
                 let loadedDensity = sample.wetOnly ? 0 : brushInk * 0.10 * (0.4 + 0.6 * pressure)
@@ -1193,7 +1203,8 @@ final class MetalInkEngine {
             state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-eventDT * 6))
             let pressure = state.simPressure
             let speed = state.speed
-            let radius = penRadius(pressure: pressure, speed: speed, size: size)
+            let radius = sample.directRadius.map { directPenRadius($0, pressure: pressure, speed: speed) }
+                ?? penRadius(pressure: pressure, speed: speed, size: size)
 
             let penDensity = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
             // Lay the stroke as a ribbon: one variable-width capsule per centerline
@@ -1201,7 +1212,12 @@ final class MetalInkEngine {
             // overlapping additive discs). The first step has no prior radius.
             let rPrev = state.penRadius < 0 ? radius : state.penRadius
             splatCapsule(texture: ink.read, a: previous, b: current, ra: rPrev, rb: radius, color: inkColor(kind: kind, base: color, density: penDensity), blend: .max, commandBuffer: commandBuffer)
-            splatCapsule(texture: wet.read, a: previous, b: current, ra: rPrev * 2.8, rb: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+            // The wet halo is part of what you see while drawing. A fixed 2.8×
+            // halo made hairline pens look chunky and pixelated even when the
+            // pigment radius was tiny, so taper the halo for subpixel/thin pens.
+            let haloScale: Float = radius < 0.001 ? 1.15 : 2.8
+            let haloPrev: Float = rPrev < 0.001 ? 1.15 : 2.8
+            splatCapsule(texture: wet.read, a: previous, b: current, ra: rPrev * haloPrev, rb: radius * haloScale, color: SIMD4<Float>(0.10, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
             state.penRadius = radius
         }
 
@@ -1212,7 +1228,12 @@ final class MetalInkEngine {
     private enum BlendMode: UInt32 { case add = 0, max = 1, boundedAdd = 2 }
 
     private func splat(texture: MTLTexture, point: SIMD2<Float>, radius: Float, color: SIMD4<Float>, blend: BlendMode, commandBuffer: MTLCommandBuffer) {
-        let r = max(radius, 0.0005)
+        // Radius is stored in normalized y/world-texture units. The old fixed
+        // 0.0005 floor is ~4 px on the 8192 world canvas, so the thinnest
+        // possible line was already a marker. Use a subpixel floor instead: it
+        // keeps the compute dispatch numerically safe without imposing a visible
+        // brush minimum.
+        let r = max(radius, 0.05 / Float(max(texture.height, 1)))
         let extent = Int(ceil(r * 4.5 * Float(texture.height))) + 2
         let cx = Int(round(point.x * Float(texture.width)))
         let cy = Int(round(point.y * Float(texture.height)))
@@ -1224,7 +1245,7 @@ final class MetalInkEngine {
         var params = SplatParams(
             targetSize: SIMD2(Float(texture.width), Float(texture.height)),
             origin: SIMD2(UInt32(ox), UInt32(oy)),
-            aspect: aspect,
+            aspect: 1,
             point: point,
             radiusSq: r * r,
             blendMode: blend.rawValue,
@@ -1241,7 +1262,10 @@ final class MetalInkEngine {
     /// + max blend yields a smooth ribbon (no beading), unlike overlapping discs.
     private func splatCapsule(texture: MTLTexture, a: SIMD2<Float>, b: SIMD2<Float>, ra: Float, rb: Float, color: SIMD4<Float>, blend: BlendMode, commandBuffer: MTLCommandBuffer) {
         let w = texture.width, h = texture.height
-        let rA = max(ra, 0.0005), rB = max(rb, 0.0005)
+        let pixel = 1 / Float(max(h, 1))
+        let radiusFloor = 0.05 * pixel
+        let rA = max(ra, radiusFloor), rB = max(rb, radiusFloor)
+        let feather = min(0.70 * pixel, max(0.12 * pixel, max(rA, rB) * 0.55))
         // Half-widths are in y-uv units (the splat metric), so a pixel margin of
         // r * height bounds the swept region on both axes.
         let ext = Int(ceil(max(rA, rB) * 1.4 * Float(h))) + 3
@@ -1253,8 +1277,8 @@ final class MetalInkEngine {
         var params = CapsuleParams(
             targetSize: SIMD2(Float(w), Float(h)),
             origin: SIMD2(UInt32(ox), UInt32(oy)),
-            aspect: aspect,
-            edge: 1.4 / Float(h),
+            aspect: 1,
+            edge: feather,
             a: a, b: b, ra: rA, rb: rB,
             blendMode: blend.rawValue,
             color: color,
@@ -1374,12 +1398,21 @@ final class MetalInkEngine {
         ink.swap()
     }
 
-    private func render(settings: ProcessingSettings, paperConfig: PaperConfig, commandBuffer: MTLCommandBuffer) {
+    private func render(settings: ProcessingSettings, paperConfig: PaperConfig, canvasContext: CanvasRenderContext, commandBuffer: MTLCommandBuffer) {
         guard let ink, let fixed, let wet, let locked, let outputTexture else { return }
         let l = settings.landmarks
-        guard let paperTexture = paperRenderer.texture(config: paperConfig, size: CGSize(width: outputTexture.width, height: outputTexture.height), commandBuffer: commandBuffer) else { return }
+        let outputAspect = CGFloat(outputTexture.width) / CGFloat(max(1, outputTexture.height))
+        let worldRect = canvasContext.worldPixelRect(aspect: outputAspect, includeGuard: false)
+        guard let paperTexture = paperRenderer.texture(
+            config: paperConfig,
+            size: CGSize(width: outputTexture.width, height: outputTexture.height),
+            commandBuffer: commandBuffer,
+            worldPixelRect: worldRect
+        ) else { return }
         let resolvedPaper = paperConfig.resolved
         let texel = SIMD2<Float>(1 / Float(ink.read.width), 1 / Float(ink.read.height))
+        let visibleWorldRect = canvasContext.camera.visibleWorldRect(aspect: outputAspect)
+        let worldHeight = max(0.000_001, canvasContext.worldHeight)
         var params = DisplayParams(
             texel: texel,
             res: SIMD2(Float(outputTexture.width), Float(outputTexture.height)),
@@ -1393,7 +1426,13 @@ final class MetalInkEngine {
             // fully opaque — so a fade-out doesn't show through to the camera.
             inkFade: clearFadeActive ? clearFade : 1,
             washTint: Self.washTint(l.inkWashColor),
-            grainScaleSeed: SIMD4(resolvedPaper.grainScaleX, resolvedPaper.grainScaleY, Float(resolvedPaper.seed), 0)
+            grainScaleSeed: SIMD4(resolvedPaper.grainScaleX, resolvedPaper.grainScaleY, Float(resolvedPaper.seed), 0),
+            worldView: SIMD4(
+                Float(visibleWorldRect.minX / worldHeight),
+                Float(visibleWorldRect.minY / worldHeight),
+                Float(visibleWorldRect.width / worldHeight),
+                Float(visibleWorldRect.height / worldHeight)
+            )
         )
         encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, paperTexture, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }
@@ -1479,15 +1518,23 @@ final class MetalInkEngine {
     }
 
     private func normalizedSize(_ value: Float) -> Float {
-        // 0…1 is the normal slider range; values >1 (typed into the editable
-        // field) make the brush bigger, capped at 1.5 so it stays usable/safe.
-        min(1.5, max(0, value))
+        // 0…1 is the normal slider range; values >1 make the brush bigger.
+        // Keep a safety cap: the UI exposes up to 2.0 in Screen space.
+        min(2.0, max(0, value))
     }
 
     private func sizeMult(_ size: Float) -> Float {
-        // size 0.5 = 1×; 0 ≈ 0.33×; 1 = 3×; 1.5 ≈ 11× (don't clamp the top so the
-        // override past 1 actually enlarges the brush).
-        pow(3, (min(1.5, max(0, size)) - 0.5) * 2)
+        // Screen-space brush size is an abstract apparent-size scale, not
+        // pixels. 0.5 = 1×; 1 = 3×; 2 ≈ 27×. Below 0.5, use a separate
+        // perceptual ramp so 0 is a true hairline-ish endpoint instead of
+        // collapsing visually into the default brush.
+        let clamped = min(2.0, max(0, size))
+        if clamped <= 0.5 {
+            let t = clamped / 0.5
+            return 0.006 + 0.994 * pow(t, 2.35)
+        }
+        let curve = pow(3, (clamped - 0.5) * 2)
+        return curve
     }
 
     private func penRadius(pressure: Float, speed: Float, size: Float) -> Float {
@@ -1496,6 +1543,14 @@ final class MetalInkEngine {
 
     private func brushRadius(pressure: Float, speed: Float, size: Float) -> Float {
         (0.014 + 0.060 * pressure) * (1 + min(speed, 2.5) * 0.28) * sizeMult(size)
+    }
+
+    private func directPenRadius(_ base: Float, pressure: Float, speed: Float) -> Float {
+        base * (0.72 + 0.56 * pressure) * min(max(1.12 - speed * 0.3, 0.55), 1.12)
+    }
+
+    private func directBrushRadius(_ base: Float, pressure: Float, speed: Float) -> Float {
+        base * (0.85 + 0.45 * pressure) * (1 + min(speed, 2.5) * 0.28)
     }
 
     private func inkColor(kind: InkKind, base: RGBAColor, density: Float) -> SIMD4<Float> {

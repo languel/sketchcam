@@ -103,6 +103,7 @@ struct InkDisplayParams {
     float inkFade;   // scales pigment + wet tint (1 = normal, 0 = cleared); paper unaffected
     float4 washTint; // wet field's transmission colour (rgb)
     float4 grainScaleSeed;
+    float4 worldView; // origin x/y, size x/y in normalized world coordinates
 };
 
 struct InkPaperParams {
@@ -154,7 +155,7 @@ kernel void ink_generate_paper(texture2d<float, access::write> outTex [[texture(
                                uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
     float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
-    float2 px = uv * p.resolution;
+    float2 px = p.padding + uv * p.resolution;
     float angle = p.fiber.w;
     float cs = cos(angle), sn = sin(angle);
     float2 rotated = float2(cs * px.x - sn * px.y, sn * px.x + cs * px.y);
@@ -187,7 +188,7 @@ kernel void ink_generate_paper_material(
 ) {
     if (gid.x >= absorbencyOut.get_width() || gid.y >= absorbencyOut.get_height()) return;
     float2 uv = uv_for(gid, absorbencyOut.get_width(), absorbencyOut.get_height());
-    float2 px = uv * p.resolution;
+    float2 px = p.padding + uv * p.resolution;
     float angle = p.fiber.w;
     float cs = cos(angle), sn = sin(angle);
     float2 rotated = float2(cs * px.x - sn * px.y, sn * px.x + cs * px.y);
@@ -547,9 +548,16 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 uv = uv_for(gid, outTex.get_width(), outTex.get_height());
+    float2 worldUV = p.worldView.xy + uv * p.worldView.zw;
+    bool insideWorld = all(worldUV >= float2(0.0)) && all(worldUV <= float2(1.0));
     // locked = pigment baked permanent by Fix (the wash lift never touches it).
-    auto pig = [&](float2 q) { return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade; };
-    float4 pw = pig(uv);
+    auto pig = [&](float2 q) {
+        if (!all(q >= float2(0.0)) || !all(q <= float2(1.0))) {
+            return float4(0.0);
+        }
+        return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade;
+    };
+    float4 pw = pig(worldUV);
     float3 dens = pw.rgb;
     float c = dot(dens, float3(1.0));
     // Compute edge enhancement from a tone-mapped density. At normal density
@@ -559,10 +567,11 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
         float3 d = pig(q).rgb;
         return dot(8.0 * (1.0 - exp(-d * 0.125)), float3(1.0));
     };
-    float l = displayDensity(uv - float2(p.texel.x, 0.0));
-    float r = displayDensity(uv + float2(p.texel.x, 0.0));
-    float b = displayDensity(uv - float2(0.0, p.texel.y));
-    float t = displayDensity(uv + float2(0.0, p.texel.y));
+    float2 worldTexel = p.texel;
+    float l = displayDensity(worldUV - float2(worldTexel.x, 0.0));
+    float r = displayDensity(worldUV + float2(worldTexel.x, 0.0));
+    float b = displayDensity(worldUV - float2(0.0, worldTexel.y));
+    float t = displayDensity(worldUV + float2(0.0, worldTexel.y));
     float edge = length(float2(r - l, t - b));
     float2 px = uv * p.res;
     float2 grainSeed = float2(p.grainScaleSeed.z * 17.41, p.grainScaleSeed.z * 7.23);
@@ -573,7 +582,12 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     // hide it rather than re-printing the procedural texture at full contrast.
     float grainResponse = clamp(c * 2.0, 0.0, 1.0) * (1.0 - smoothstep(6.0, 12.0, c));
     absb *= 1.0 + (grain - 0.5) * p.grain * grainResponse;
-    absb *= 1.0 + edge * p.edge;
+    // Edge enhancement gives normal ink its lovely crisp/dark rim, but on
+    // subpixel hairlines it quantizes the one-texel gradient and reads as a
+    // pixelated caterpillar. Fade the boost in only once there is enough pigment
+    // coverage for an actual edge.
+    float hairlineEdgeGate = smoothstep(0.18, 1.2, c + pw.a);
+    absb *= 1.0 + edge * p.edge * hairlineEdgeGate;
     float3 col = paper * exp(-absb);
     float cov = 1.0 - exp(-pw.a * 2.2);
     // White pigment has its own coverage channel. Give ordinary white marks
@@ -581,7 +595,7 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     // smooth instead of re-printing grain at full contrast.
     float whiteGrainResponse = 1.0 - smoothstep(2.0, 6.0, pw.a);
     cov = clamp(cov * (1.0 - (grain - 0.5) * 0.35 * whiteGrainResponse), 0.0, 1.0);
-    float wraw = wet.sample(s, uv).x;
+    float wraw = insideWorld ? wet.sample(s, worldUV).x : 0.0;
     float ws = smoothstep(0.02, 0.6, wraw) * p.inkFade;
     // Wet paper transmits the wash tint (default ≈ (0.84,0.85,0.89) reproduces
     // the built-in blue-grey: 1 - (0.16,0.15,0.11)). Apply that to the substrate

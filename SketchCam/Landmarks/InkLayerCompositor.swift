@@ -30,7 +30,8 @@ final class InkLayerCompositor {
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
                actionPaths: [InkEditorPath]? = nil,
                controlFields: ResolvedControlFields = .empty,
-               fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true) -> CIImage? {
+               fixedDeltaTime: Float? = nil, advanceSimulation: Bool = true,
+               canvasContext: CanvasRenderContext = CanvasRenderContext()) -> CIImage? {
         let l = settings.landmarks
         guard l.inkEnabled else {
             return lock.withLock {
@@ -53,7 +54,8 @@ final class InkLayerCompositor {
             let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
                                     endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
                                     controlFields: controlFields, fixedDeltaTime: fixedDeltaTime,
-                                    advanceSimulation: advanceSimulation)
+                                    advanceSimulation: advanceSimulation,
+                                    canvasContext: canvasContext)
             let rect = CGRect(origin: .zero, size: outputSize)
             guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
             let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply

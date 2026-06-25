@@ -55,6 +55,7 @@
 		89EBEF89BCCC6E1D80FFA504 /* StrokeTessellator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C69066333DBFA2348E74580 /* StrokeTessellator.swift */; };
 		8A3EEEC2DC51B02895E0C64F /* SketchCamApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CAB8AA2E40F3CC7D62B9F35 /* SketchCamApp.swift */; };
 		8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F2A2598E845123A35AB7F0C /* MetalEffects.swift */; };
+		8E420470BCAEDD5006A48B27 /* CanvasRenderContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD7497AF6D158B193432A54 /* CanvasRenderContext.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
 		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
 		9929C7F801705C184CEFB01F /* TrackedMotionFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */; };
@@ -85,10 +86,12 @@
 		D4573A47D80FD6C10D3FA006 /* SketchCamCameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 145E6CB4A5E66BFBC094A32D /* SketchCamCameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2836CF880DAF3F0A8928640F /* LineWalk.swift */; };
 		D6A9D79D025FABA7FCE16864 /* WrapDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */; };
+		D928D03204FB092039B51FFA /* CanvasCameraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B8059D4C2261A095177E551 /* CanvasCameraTests.swift */; };
 		D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */; };
 		D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */; };
 		DA1A3E848CEBC834A79564F8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96EBEE96DC987956AD1E458A /* ContentView.swift */; };
 		DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9650741F0600AA39A4B9BE /* CameraCaptureService.swift */; };
+		DC17BE9C9FF3758B8199CDDE /* CanvasCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4FD032201675CE87A8ADE92 /* CanvasCamera.swift */; };
 		DC1AD4420A3047544009C546 /* OpticalFlowFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A63B02550B658217469650 /* OpticalFlowFieldProviderSelfCheck.swift */; };
 		DC243E3B79A14A1FE624C935 /* PerformanceEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53CC0D22F039EDD469473E8D /* PerformanceEventLog.swift */; };
 		DEB84A185E52E975B0D4F74E /* AcrylicConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */; };
@@ -221,6 +224,7 @@
 		63BB49EC0702E794CFC3F079 /* CameraExtensionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraExtensionProvider.swift; sourceTree = "<group>"; };
 		69372C0E7B99EADDD8731E11 /* SketchCamState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchCamState.swift; sourceTree = "<group>"; };
 		6A11527CED2B1176DBD497CA /* CanvasActionLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasActionLedger.swift; sourceTree = "<group>"; };
+		6AD7497AF6D158B193432A54 /* CanvasRenderContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasRenderContext.swift; sourceTree = "<group>"; };
 		6E8BB4B6F01B92714B79263F /* MetalLineRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLineRenderer.swift; sourceTree = "<group>"; };
 		70FEBC997416DB5AB24CF46C /* SampleBufferPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferPreview.swift; sourceTree = "<group>"; };
 		774FD946761DCD2975E64F1B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -235,6 +239,7 @@
 		91B7D05AFAB10AD93682AF30 /* MetalLayerCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalLayerCompositor.swift; sourceTree = "<group>"; };
 		96EBEE96DC987956AD1E458A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		9928D60CE013EFE2FE189993 /* MetalInkStateSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalInkStateSnapshotTests.swift; sourceTree = "<group>"; };
+		9B8059D4C2261A095177E551 /* CanvasCameraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCameraTests.swift; sourceTree = "<group>"; };
 		9BDA9EB67442012D2BB37697 /* CameraPermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPermissionManager.swift; sourceTree = "<group>"; };
 		9FEFA95803D72040CC30B087 /* chaplin-dance.mp4 */ = {isa = PBXFileReference; path = "chaplin-dance.mp4"; sourceTree = "<group>"; };
 		A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRegistry.swift; sourceTree = "<group>"; };
@@ -259,6 +264,7 @@
 		CEAB9229D624BE20FB261892 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkDrawing.swift; sourceTree = "<group>"; };
 		D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingAlgorithm.swift; sourceTree = "<group>"; };
+		D4FD032201675CE87A8ADE92 /* CanvasCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCamera.swift; sourceTree = "<group>"; };
 		D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackTestPatternGenerator.swift; sourceTree = "<group>"; };
 		D92A8604968462AFE800148A /* LineShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = LineShaders.metal; sourceTree = "<group>"; };
 		E5BF560B2E181B993DFA640F /* OutputStreamExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputStreamExporterTests.swift; sourceTree = "<group>"; };
@@ -407,6 +413,7 @@
 			children = (
 				2753C9CB7E23B4A4208B342D /* BodyHullTests.swift */,
 				0ABB67374102E461263FC61A /* CanvasActionLedgerTests.swift */,
+				9B8059D4C2261A095177E551 /* CanvasCameraTests.swift */,
 				85F10111FD7F23C099A99795 /* ControlFieldGraphTests.swift */,
 				01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */,
 				77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */,
@@ -565,6 +572,8 @@
 				25F72EC0A81E15AA65463C69 /* AcrylicConfig.swift */,
 				177F3E230DF6259E3ECAE346 /* BodyHull.swift */,
 				6A11527CED2B1176DBD497CA /* CanvasActionLedger.swift */,
+				D4FD032201675CE87A8ADE92 /* CanvasCamera.swift */,
+				6AD7497AF6D158B193432A54 /* CanvasRenderContext.swift */,
 				1B76938CF9C16060A016345E /* ControlFieldGraph.swift */,
 				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
 				C1A2ADF99B728A98F5A906B2 /* ExportConfiguration.swift */,
@@ -856,6 +865,8 @@
 				DEB84A185E52E975B0D4F74E /* AcrylicConfig.swift in Sources */,
 				57FAE07661D9F3FC0B182669 /* BodyHull.swift in Sources */,
 				2E64E4D8A8372D03B42373B1 /* CanvasActionLedger.swift in Sources */,
+				DC17BE9C9FF3758B8199CDDE /* CanvasCamera.swift in Sources */,
+				8E420470BCAEDD5006A48B27 /* CanvasRenderContext.swift in Sources */,
 				EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */,
 				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
 				C5971C8CB4E97DDA4AD79C3D /* ExportConfiguration.swift in Sources */,
@@ -884,6 +895,7 @@
 			files = (
 				E5383731BB4BFCECB3CC7913 /* BodyHullTests.swift in Sources */,
 				C09D440065D650F8709BA319 /* CanvasActionLedgerTests.swift in Sources */,
+				D928D03204FB092039B51FFA /* CanvasCameraTests.swift in Sources */,
 				105F4A2BFDBC46CB4A634777 /* ControlFieldGraphTests.swift in Sources */,
 				117DB3A16183D008A0806277 /* CoreImageFrameProcessorTests.swift in Sources */,
 				F7F153CEC156E1593CD068A6 /* ExportConfigurationTests.swift in Sources */,

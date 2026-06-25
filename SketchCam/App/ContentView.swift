@@ -112,6 +112,11 @@ struct ContentView: View {
     @State private var debugOverlayOffset = CGSize.zero
     @State private var exportPointerDown = false
     @State private var exportPointerDragging = false
+    @State private var canvasCamera = CanvasCamera()
+    @State private var canvasNavigationActive = false
+    @AppStorage("canvas.pixelExtent") private var canvasPixelExtent = 8192.0
+    @AppStorage("canvas.brushSpace") private var canvasBrushSpaceRaw = CanvasBrushSpace.screen.rawValue
+    @AppStorage("export.auxPreviewEnabled") private var exportAuxPreviewEnabled = true
 
     var body: some View {
         Group {
@@ -135,10 +140,20 @@ struct ContentView: View {
         .onAppear {
             model.start()
             model.replaceEditableCanvasPaths(model.settings.landmarks.inkPaths)
+            publishCanvasRenderContext()
+            updateExportPreviewActive()
             registerShortcuts()
             ShortcutRegistry.shared.start()
         }
         .onDisappear { model.stop() }
+        .onChange(of: canvasCamera) { _, _ in publishCanvasRenderContext() }
+        .onChange(of: canvasPixelExtent) { _, _ in publishCanvasRenderContext() }
+        .onChange(of: canvasNavigationActive) { _, _ in publishCanvasRenderContext() }
+        .onChange(of: canvasBrushSpaceRaw) { _, _ in publishCanvasRenderContext() }
+        .onChange(of: model.outputFormat) { _, _ in publishCanvasRenderContext() }
+        .onChange(of: tab) { _, _ in updateExportPreviewActive() }
+        .onChange(of: exportAuxPreviewEnabled) { _, _ in updateExportPreviewActive() }
+        .onChange(of: canvasNavigationActive) { _, _ in updateExportPreviewActive() }
     }
 
     private var contentWithOverlayPanel: some View {
@@ -182,6 +197,7 @@ struct ContentView: View {
 
     private var previewPane: some View {
         GeometryReader { geo in
+            let viewportRect = fittedPreviewRect(container: geo.size, content: model.outputFormat.size)
             ZStack {
                 // Checkerboard backdrop so an Alpha background (or ink-only
                 // threshold) is visibly transparent in the preview instead of
@@ -190,17 +206,42 @@ struct ContentView: View {
                 if !windowMode.transparent {
                     CheckerboardBackground()
                 }
+                ZStack {
+                    CanvasWorldSurface(
+                        fill: canvasBackdropColor,
+                        visible: model.settings.previewEnabled
+                    )
+                    .frame(width: viewportRect.width, height: viewportRect.height)
+                    if model.settings.previewEnabled {
+                        if model.settings.useMetalPreview, model.settings.previewMode != .split {
+                            // Zero-readback GPU display (also the presentation-mode output).
+                            SampleBufferDisplayView(controller: model.previewDisplay)
+                                .frame(width: viewportRect.width, height: viewportRect.height)
+                                .transaction { $0.animation = nil }
+                        } else {
+                            // Observes the live store, so the ~4 Hz image updates don't
+                            // re-evaluate the whole ContentView body.
+                            LivePreviewImage(live: model.live)
+                                .frame(width: viewportRect.width, height: viewportRect.height)
+                                .transaction { $0.animation = nil }
+                        }
+                    }
+                }
+                .frame(width: viewportRect.width, height: viewportRect.height)
+                .clipped()
+                .position(x: viewportRect.midX, y: viewportRect.midY)
+                .allowsHitTesting(false)
                 if !model.settings.previewEnabled {
                     Text("Preview off — still publishing")
                         .foregroundStyle(.secondary)
-                } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
-                    // Zero-readback GPU display (also the presentation-mode output).
-                    SampleBufferDisplayView(controller: model.previewDisplay)
-                } else {
-                    // Observes the live store, so the ~4 Hz image updates don't
-                    // re-evaluate the whole ContentView body.
-                    LivePreviewImage(live: model.live)
                 }
+                PreviewNavigationEventOverlay(
+                    onPan: { delta in panCanvasViewport(by: delta, container: geo.size) },
+                    onZoom: { factor, anchor in zoomCanvasViewport(by: factor, anchor: anchor, container: geo.size) },
+                    onNavigationActive: setCanvasNavigationActive,
+                    plainDragPans: !inkCanvasInputActive
+                )
+                .zIndex(10)
                 if inkCanvasInputActive {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
@@ -215,7 +256,7 @@ struct ContentView: View {
                         outputSize: model.outputFormat.size,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
-                        tool: inkTool,
+                        tool: .draw,
                         brushMode: currentInkMode,
                         inkKind: currentInkKind,
                         width: Float(inkSizeBinding.wrappedValue),
@@ -225,6 +266,13 @@ struct ContentView: View {
                         dry: model.settings.landmarks.inkDry,
                         colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
                         brushInk: Float(inkBrushInkBinding.wrappedValue),
+                        camera: currentCanvasCamera,
+                        worldHeight: canvasWorldHeight,
+                        worldPixelExtent: CGFloat(canvasPixelExtent),
+                        onViewportPan: { delta in panCanvasViewport(by: delta, container: geo.size) },
+                        onViewportZoom: { factor, anchor in zoomCanvasViewport(by: factor, anchor: anchor, container: geo.size) },
+                        onNavigationActive: setCanvasNavigationActive,
+                        brushSpace: canvasBrushSpace,
                         selectedPathID: $selectedInkPathID,
                         selectedPointIndex: $selectedInkPointIndex
                     )
@@ -285,6 +333,203 @@ struct ContentView: View {
                     exportPointerDragging = false
                 }
         )
+    }
+
+    private func panCanvasViewport(by delta: CGSize, container: CGSize) {
+        let rect = fittedPreviewRect(container: container, content: model.outputFormat.size)
+        let base = max(1, rect.height)
+        var camera = currentCanvasCamera
+        let worldDelta = CGSize(
+            width: -delta.width / base * camera.viewHeight,
+            height: -delta.height / base * camera.viewHeight
+        )
+        camera.center.x += worldDelta.width
+        camera.center.y += worldDelta.height
+        setCanvasCamera(clamped(camera))
+    }
+
+    private func zoomCanvasViewport(by factor: CGFloat, anchor: CGPoint, container: CGSize) {
+        guard factor.isFinite, factor > 0, container.width > 0, container.height > 0 else { return }
+        let before = worldPoint(fromView: anchor, container: container)
+        var camera = currentCanvasCamera
+        camera.viewHeight = max(0.08, camera.viewHeight / factor)
+        let after = worldPoint(fromView: anchor, container: container, camera: camera)
+        camera.center.x += before.x - after.x
+        camera.center.y += before.y - after.y
+        setCanvasCamera(clamped(camera))
+    }
+
+    private func setCanvasNavigationActive(_ active: Bool) {
+        guard canvasNavigationActive != active else { return }
+        canvasNavigationActive = active
+    }
+
+    private func updateExportPreviewActive() {
+        model.setExportPreviewActive(tab == .export && exportAuxPreviewEnabled && !canvasNavigationActive)
+    }
+
+    private func resetCanvasViewport() {
+        setCanvasCamera(homeCanvasCamera)
+    }
+
+    private var currentCanvasCamera: CanvasCamera {
+        // `CanvasCamera()` used to mean "the normalized 0...1 output frame".
+        // In the larger world it should mean "home": a one-frame-tall camera
+        // centered in the staging canvas. Treat the default value as that
+        // migration/default state so launch is centered, not clamped to the
+        // top-left-ish legal edge of a 16:9 viewport.
+        canvasCamera == CanvasCamera() ? homeCanvasCamera : clamped(canvasCamera)
+    }
+
+    private var homeCanvasCamera: CanvasCamera {
+        clamped(CanvasCamera(center: CGPoint(x: canvasWorldHeight * 0.5, y: canvasWorldHeight * 0.5), viewHeight: 1))
+    }
+
+    private var canvasWorldHeight: CGFloat {
+        let outputHeight = max(1, model.outputFormat.size.height)
+        return CGFloat(max(1, min(64, canvasPixelExtent / outputHeight)))
+    }
+
+    private var canvasDisplayZoom: CGFloat {
+        1 / max(0.000_001, currentCanvasCamera.viewHeight)
+    }
+
+    private var canvasBrushSpace: CanvasBrushSpace {
+        get { CanvasBrushSpace(rawValue: canvasBrushSpaceRaw) ?? .screen }
+        nonmutating set { canvasBrushSpaceRaw = newValue.rawValue }
+    }
+
+    private func publishCanvasRenderContext() {
+        model.canvasRenderContext = CanvasRenderContext(
+            camera: currentCanvasCamera,
+            worldPixelExtent: Int(canvasPixelExtent.rounded()),
+            worldHeight: canvasWorldHeight,
+            navigationActive: canvasNavigationActive,
+            brushSpace: canvasBrushSpace
+        )
+    }
+
+    private func setCanvasCamera(_ camera: CanvasCamera) {
+        var next = camera
+        next.rotation = 0
+        canvasCamera = clamped(next)
+    }
+
+    private var canvasPixelExtentBinding: Binding<Double> {
+        Binding(
+            get: { canvasPixelExtent },
+            set: {
+                canvasPixelExtent = max(1024, min(65536, $0))
+                setCanvasCamera(clamped(currentCanvasCamera))
+            }
+        )
+    }
+
+    private var canvasBackdropColor: Color {
+        if model.settings.landmarks.inkPaperEnabled {
+            let paper = model.settings.landmarks.inkPaperColor
+            let alpha = max(0, min(1, Double(paper.alpha)))
+            let r = Double(paper.red) * alpha + (1 - alpha)
+            let g = Double(paper.green) * alpha + (1 - alpha)
+            let b = Double(paper.blue) * alpha + (1 - alpha)
+            return Color(red: r, green: g, blue: b)
+        }
+        if model.settings.backgroundMode == .solid {
+            return rgbaColor(model.settings.backgroundColor)
+        }
+        return Color(nsColor: .textBackgroundColor)
+    }
+
+    private func fittedPreviewRect(container: CGSize, content: CGSize) -> CGRect {
+        guard container.width > 0, container.height > 0, content.width > 0, content.height > 0 else {
+            return CGRect(origin: .zero, size: container)
+        }
+        let scale = min(container.width / content.width, container.height / content.height)
+        let size = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(
+            x: (container.width - size.width) / 2,
+            y: (container.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func clamped(_ camera: CanvasCamera) -> CanvasCamera {
+        var next = camera
+        let world = canvasWorldHeight
+        let aspect = outputAspect
+        next.viewHeight = min(world, max(0.08, next.viewHeight))
+        let marginX = min(world * 0.5, next.viewHeight * aspect * 0.5)
+        let marginY = min(world * 0.5, next.viewHeight * 0.5)
+        next.center.x = min(world - marginX, max(marginX, next.center.x))
+        next.center.y = min(world - marginY, max(marginY, next.center.y))
+        if world <= next.viewHeight || world <= next.viewHeight * aspect {
+            next.center = CGPoint(x: world * 0.5, y: world * 0.5)
+        }
+        return next
+    }
+
+    private var outputAspect: CGFloat {
+        max(0.000_001, model.outputFormat.size.width / max(1, model.outputFormat.size.height))
+    }
+
+    private func worldPoint(fromView point: CGPoint, container: CGSize, camera: CanvasCamera? = nil) -> CGPoint {
+        let camera = camera ?? currentCanvasCamera
+        let rect = fittedPreviewRect(container: container, content: model.outputFormat.size)
+        let base = max(1, rect.height)
+        return CGPoint(
+            x: camera.center.x + (point.x - rect.midX) / base * camera.viewHeight,
+            y: camera.center.y + (point.y - rect.midY) / base * camera.viewHeight
+        )
+    }
+
+    @ViewBuilder private func canvasViewControls(includeMiniMap: Bool = true) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                resetCanvasViewport()
+            } label: {
+                Label("Reset view", systemImage: "scope")
+            }
+            Text("\(Int(canvasDisplayZoom * 100))%")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("4K") { canvasPixelExtentBinding.wrappedValue = 4096 }
+            Button("8K") { canvasPixelExtentBinding.wrappedValue = 8192 }
+        }
+        .controlSize(.small)
+        .help("Pan with the trackpad or mouse wheel. Pinch, or Command-scroll, to zoom around the pointer. This changes only the working view; export and the virtual camera stay at the configured output frame.")
+
+        SliderRow(title: "Canvas", value: canvasPixelExtentBinding, range: 1024...16384, precision: 0, defaultValue: 8192,
+                  hint: "Square world canvas extent in pixels. The fixed output frame acts as a camera into this world.")
+        Picker("Brush space", selection: Binding(
+            get: { canvasBrushSpace },
+            set: { canvasBrushSpace = $0 }
+        )) {
+            Text("Screen").tag(CanvasBrushSpace.screen)
+            Text("World").tag(CanvasBrushSpace.world)
+        }
+        .pickerStyle(.segmented)
+        .help("Screen keeps the brush the same apparent size while zooming. World makes the brush a fixed physical size on the paper.")
+        Text("\(Int(canvasPixelExtent)) × \(Int(canvasPixelExtent)) px world · active viewport \(Int(model.outputFormat.size.width)) × \(Int(model.outputFormat.size.height)) px · \(canvasWorldHeight, specifier: "%.1f") viewport-heights tall")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+        if includeMiniMap {
+            CanvasMiniMap(
+                camera: Binding(
+                    get: { currentCanvasCamera },
+                    set: { setCanvasCamera($0) }
+                ),
+            worldHeight: canvasWorldHeight,
+            aspect: outputAspect,
+            paths: [],
+            selectedPathID: nil
+            )
+            .frame(height: 150)
+            .help("Whole-canvas navigator. The white rectangle is the fixed output viewport/camera; drag inside the minimap to move the working view.")
+        }
     }
 
     // MARK: - Controls
@@ -399,7 +644,16 @@ struct ContentView: View {
             proxyRecorder: model.inputProxyRecorder,
             live: model.live,
             liveDisplay: model.exportPreviewDisplay,
-            usesMetalLivePreview: model.settings.useMetalPreview && model.settings.previewMode != .split,
+            usesMetalLivePreview: exportAuxPreviewEnabled && model.settings.useMetalPreview && model.settings.previewMode != .split,
+            auxPreviewEnabled: $exportAuxPreviewEnabled,
+            camera: Binding(
+                get: { currentCanvasCamera },
+                set: { setCanvasCamera($0) }
+            ),
+            worldHeight: canvasWorldHeight,
+            outputAspect: model.outputFormat.size.width / max(1, model.outputFormat.size.height),
+            paths: model.settings.landmarks.inkPaths,
+            selectedPathID: selectedInkPathID,
             currentSize: model.outputFormat.size,
             currentFPS: Double(model.outputFormat.frameRate),
             metricLayers: exportMetricLayers,
@@ -448,6 +702,9 @@ struct ContentView: View {
         }
         .help("Capture resolution requested from the camera. Higher = more detail into effects/detection but more bandwidth.")
 
+        SectionHeader("Canvas view")
+        canvasViewControls()
+
         SectionHeader("Frame")
         Toggle("Mirror", isOn: $model.settings.mirror)
             .help("Mirror the source (selfie view). For a creative per-layer flip, add a Mirror effect to a layer instead.")
@@ -491,6 +748,9 @@ struct ContentView: View {
         }
         .pickerStyle(.segmented)
         .help("Resolution the effect chain renders at, then upscaled to Output. Lower (540p) = cheaper effects, softer detail. Detection uses its own input size and is unaffected by this.")
+
+        SectionHeader("Canvas")
+        canvasViewControls(includeMiniMap: false)
 
         SectionHeader("Preview")
         Picker("Mode", selection: $model.settings.previewMode) {
@@ -908,29 +1168,15 @@ struct ContentView: View {
             }
 
             SectionHeader("Editor")
-            Picker("Tool", selection: $inkTool) {
-                ForEach(InkTool.allCases) { tool in
-                    Label(tool.rawValue, systemImage: tool.icon).tag(tool)
-                }
+            Text("Path editing is paused for the fixed-viewport world canvas recovery. Legacy paths are preserved in settings but hidden until the world-path layer is redesigned.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Picker("Tool", selection: Binding(get: { InkTool.draw }, set: { _ in inkTool = .draw })) {
+                Label("Draw", systemImage: InkTool.draw.icon).tag(InkTool.draw)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            InkEditorCanvas(
-                paths: inkPathsBinding,
-                paperColor: rgbaColor(model.settings.landmarks.inkPaperColor),
-                inkColor: rgbaColor(model.settings.landmarks.inkColor),
-                inkRGBA: model.settings.landmarks.inkColor,
-                brushMode: currentInkMode,
-                inkKind: currentInkKind,
-                width: Float(inkSizeBinding.wrappedValue),
-                flow: model.settings.landmarks.inkFlow,
-                bleed: model.settings.landmarks.inkBleed,
-                dry: model.settings.landmarks.inkDry,
-                colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
-                brushInk: Float(inkBrushInkBinding.wrappedValue)
-            )
-                .frame(height: 180)
-                .help("Scratchpad view of the same full-canvas strokes. You can also draw directly on the preview while this tab is selected.")
 
             HStack {
                 Button {
@@ -944,14 +1190,14 @@ struct ContentView: View {
                 } label: {
                     Label("Delete", systemImage: "delete.left")
                 }
-                .disabled(selectedInkPathID == nil)
+                .disabled(true)
                 Button {
                     rerenderInk()
                 } label: {
                     Label("Rerender", systemImage: "arrow.clockwise")
                 }
-                .disabled(model.settings.landmarks.inkPaths.isEmpty)
-                .help("Clear and re-simulate every committed path from scratch (with the current curve/params). Immediate-mode marks are not re-simulated.")
+                .disabled(true)
+                .help("Path rerender is disabled while the world canvas foundation is being recovered.")
                 Text("\(model.settings.landmarks.inkPaths.count) paths")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -995,10 +1241,21 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
-            SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5,
-                      hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.")
-            SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5,
-                      hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.")
+            Picker("Brush space", selection: Binding(
+                get: { canvasBrushSpace },
+                set: { canvasBrushSpace = $0 }
+            )) {
+                Text("Screen").tag(CanvasBrushSpace.screen)
+                Text("World").tag(CanvasBrushSpace.world)
+            }
+            .pickerStyle(.segmented)
+            .help("Screen keeps the brush the same apparent size while zooming. World measures Pen and Wash size in pixels on the large paper/world backing store.")
+            SliderRow(title: "Pen size", value: inkSizeBinding, range: inkBrushSizeRange,
+                      precision: inkBrushSizePrecision, defaultValue: inkBrushDefaultSize,
+                      hint: inkBrushSizeHint(kind: "Pen"))
+            SliderRow(title: "Wash size", value: inkWashSizeBinding, range: inkBrushSizeRange,
+                      precision: inkBrushSizePrecision, defaultValue: inkBrushDefaultSize,
+                      hint: inkBrushSizeHint(kind: "Wash"))
             SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength), defaultValue: 0.5,
                       hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.")
             SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow), defaultValue: 0.9,
@@ -1104,12 +1361,12 @@ struct ContentView: View {
     }
 
     private func adjustInkWidth(by delta: Float) {
-        model.settings.landmarks.inkWidth = min(1.5, max(0, model.settings.landmarks.inkWidth + delta))
+        model.settings.landmarks.inkWidth = clampedInkBrushSize(model.settings.landmarks.inkWidth + inkBrushKeyboardDelta(delta))
     }
 
     private func adjustInkWashWidth(by delta: Float) {
-        let v = (model.settings.landmarks.inkWashWidth ?? 0.5) + delta
-        model.settings.landmarks.inkWashWidth = min(1.5, max(0, v))
+        let v = (model.settings.landmarks.inkWashWidth ?? 0.5) + inkBrushKeyboardDelta(delta)
+        model.settings.landmarks.inkWashWidth = clampedInkBrushSize(v)
     }
 
     private func adjustInkBrushInk(by delta: Float) {
@@ -1172,18 +1429,44 @@ struct ContentView: View {
 
     private var inkSizeBinding: Binding<Double> {
         Binding(
-            // No upper clamp: the slider stays 0…1, but the editable field can
-            // type past 1 for a bigger pen (engine caps it safely).
-            get: { Double(max(0, model.settings.landmarks.inkWidth)) },
-            set: { model.settings.landmarks.inkWidth = Float($0) }
+            get: { Double(clampedInkBrushSize(model.settings.landmarks.inkWidth)) },
+            set: { model.settings.landmarks.inkWidth = clampedInkBrushSize(Float($0)) }
         )
     }
 
     private var inkWashSizeBinding: Binding<Double> {
         Binding(
-            get: { Double(max(0, model.settings.landmarks.inkWashWidth ?? 0.5)) },
-            set: { model.settings.landmarks.inkWashWidth = Float($0) }
+            get: { Double(clampedInkBrushSize(model.settings.landmarks.inkWashWidth ?? 0.5)) },
+            set: { model.settings.landmarks.inkWashWidth = clampedInkBrushSize(Float($0)) }
         )
+    }
+
+    private var inkBrushSizeRange: ClosedRange<Double> {
+        canvasBrushSpace == .world ? 1...128 : 0...2
+    }
+
+    private var inkBrushDefaultSize: Double {
+        canvasBrushSpace == .world ? 6 : 0.5
+    }
+
+    private var inkBrushSizePrecision: Int {
+        canvasBrushSpace == .world ? 0 : 3
+    }
+
+    private func inkBrushSizeHint(kind: String) -> String {
+        if canvasBrushSpace == .world {
+            return "\(kind) size in pixels on the large world canvas. 1 is one world pixel; larger values stay fixed to the paper as you zoom. Default 6 is tuned for the initial HD viewport."
+        }
+        return "\(kind) size in screen/viewport space. This is an abstract HD-calibrated apparent-size scale, not pixels; 0 is a subpixel hairline, 0.5 is a thin default, and the brush keeps roughly the same apparent size while zooming."
+    }
+
+    private func clampedInkBrushSize(_ value: Float) -> Float {
+        let range = inkBrushSizeRange
+        return Float(min(range.upperBound, max(range.lowerBound, Double(value))))
+    }
+
+    private func inkBrushKeyboardDelta(_ delta: Float) -> Float {
+        canvasBrushSpace == .world ? (delta >= 0 ? 1 : -1) : delta
     }
 
     private var inkColorSeparationBinding: Binding<Double> {
@@ -3230,9 +3513,251 @@ private struct InkCanvasDragValue {
     var charge: Float
 }
 
+private struct CanvasMiniMap: View {
+    @Binding var camera: CanvasCamera
+    let worldHeight: CGFloat
+    let aspect: CGFloat
+    let paths: [InkEditorPath]
+    let selectedPathID: UUID?
+
+    var body: some View {
+        GeometryReader { geo in
+            let rect = mapRect(in: geo.size)
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(0.16))
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                Canvas { context, _ in
+                    var world = Path()
+                    world.addRect(rect)
+                    context.fill(world, with: .color(Color(nsColor: .textBackgroundColor).opacity(0.09)))
+
+                    for path in paths {
+                        guard let first = path.points.first else { continue }
+                        var p = Path()
+                        p.move(to: viewPoint(first, in: rect))
+                        for point in path.points.dropFirst() {
+                            p.addLine(to: viewPoint(point, in: rect))
+                        }
+                        let selected = path.id == selectedPathID
+                        context.stroke(
+                            p,
+                            with: .color(selected ? Color.accentColor.opacity(0.95) : Color.white.opacity(0.42)),
+                            style: StrokeStyle(lineWidth: selected ? 2 : 1.2, lineCap: .round, lineJoin: .round)
+                        )
+                    }
+
+                    var frame = Path()
+                    frame.addRect(viewportRect(in: rect))
+                    context.stroke(frame, with: .color(.white.opacity(0.92)), style: StrokeStyle(lineWidth: 1.4, dash: [5, 3]))
+
+                    var guardFrame = Path()
+                    guardFrame.addRect(guardRect(in: rect))
+                    context.stroke(guardFrame, with: .color(.white.opacity(0.25)), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                }
+                VStack {
+                    HStack {
+                        Text("Whole canvas")
+                        Spacer()
+                        Text("\(Int(1 / max(0.000_001, camera.viewHeight) * 100))%")
+                            .monospacedDigit()
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    Spacer()
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard rect.contains(value.location) else { return }
+                        var next = camera
+                        next.center = worldPoint(value.location, in: rect)
+                        camera = clamped(next)
+                    }
+            )
+        }
+    }
+
+    private func mapRect(in size: CGSize) -> CGRect {
+        let inset: CGFloat = 12
+        let side = max(1, min(size.width, size.height) - inset * 2)
+        return CGRect(
+            x: (size.width - side) * 0.5,
+            y: (size.height - side) * 0.5,
+            width: side,
+            height: side
+        )
+    }
+
+    private func viewPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        let maxCoord = max(1, worldHeight)
+        return CGPoint(
+            x: rect.minX + point.x / maxCoord * rect.width,
+            y: rect.minY + point.y / maxCoord * rect.height
+        )
+    }
+
+    private func worldPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        let maxCoord = max(1, worldHeight)
+        return CGPoint(
+            x: min(maxCoord, max(0, (point.x - rect.minX) / max(1, rect.width) * maxCoord)),
+            y: min(maxCoord, max(0, (point.y - rect.minY) / max(1, rect.height) * maxCoord))
+        )
+    }
+
+    private func viewportRect(in rect: CGRect) -> CGRect {
+        let maxCoord = max(1, worldHeight)
+        let viewHeight = min(maxCoord, max(0.08, camera.viewHeight))
+        let viewWidth = min(maxCoord, viewHeight * max(0.000_001, aspect))
+        return CGRect(
+            x: rect.minX + (camera.center.x - viewWidth * 0.5) / maxCoord * rect.width,
+            y: rect.minY + (camera.center.y - viewHeight * 0.5) / maxCoord * rect.height,
+            width: viewWidth / maxCoord * rect.width,
+            height: viewHeight / maxCoord * rect.height
+        )
+    }
+
+    private func guardRect(in rect: CGRect) -> CGRect {
+        viewportRect(in: rect).insetBy(
+            dx: -rect.width * camera.guardFraction * camera.viewHeight / max(1, worldHeight),
+            dy: -rect.height * camera.guardFraction * camera.viewHeight / max(1, worldHeight)
+        )
+    }
+
+    private func clamped(_ camera: CanvasCamera) -> CanvasCamera {
+        let maxCoord = max(1, worldHeight)
+        let aspect = max(0.000_001, aspect)
+        var next = camera
+        next.rotation = 0
+        next.viewHeight = min(maxCoord, max(0.08, next.viewHeight))
+        let marginX = min(maxCoord * 0.5, next.viewHeight * aspect * 0.5)
+        let marginY = min(maxCoord * 0.5, next.viewHeight * 0.5)
+        next.center.x = min(maxCoord - marginX, max(marginX, next.center.x))
+        next.center.y = min(maxCoord - marginY, max(marginY, next.center.y))
+        if maxCoord <= next.viewHeight || maxCoord <= next.viewHeight * aspect {
+            next.center = CGPoint(x: maxCoord * 0.5, y: maxCoord * 0.5)
+        }
+        return next
+    }
+}
+
+private struct CanvasWorldSurface: View {
+    let fill: Color
+    let visible: Bool
+
+    var body: some View {
+        if visible {
+            ZStack {
+                Rectangle()
+                    .fill(fill)
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.035), .black.opacity(0.025)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Rectangle()
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+        }
+    }
+}
+
+private struct PreviewNavigationEventOverlay: NSViewRepresentable {
+    var onPan: (CGSize) -> Void
+    var onZoom: (CGFloat, CGPoint) -> Void
+    var onNavigationActive: (Bool) -> Void
+    var plainDragPans: Bool
+
+    func makeNSView(context: Context) -> EventView {
+        let view = EventView()
+        view.onPan = onPan
+        view.onZoom = onZoom
+        view.onNavigationActive = onNavigationActive
+        view.plainDragPans = plainDragPans
+        return view
+    }
+
+    func updateNSView(_ nsView: EventView, context: Context) {
+        nsView.onPan = onPan
+        nsView.onZoom = onZoom
+        nsView.onNavigationActive = onNavigationActive
+        nsView.plainDragPans = plainDragPans
+    }
+
+    final class EventView: NSView {
+        var onPan: ((CGSize) -> Void)?
+        var onZoom: ((CGFloat, CGPoint) -> Void)?
+        var onNavigationActive: ((Bool) -> Void)?
+        var plainDragPans = false
+        private var lastDragLocation: CGPoint?
+
+        override var isFlipped: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        private static var spaceKeyDown: Bool {
+            CGEventSource.keyState(.combinedSessionState, key: 49)
+        }
+
+        override func scrollWheel(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 8
+            let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 8
+            if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+                onNavigationActive?(true)
+                onZoom?(exp(CGFloat(dy) * 0.01), point)
+                onNavigationActive?(false)
+            } else {
+                onNavigationActive?(true)
+                onPan?(CGSize(width: dx, height: dy))
+                onNavigationActive?(false)
+            }
+        }
+
+        override func magnify(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            onNavigationActive?(true)
+            onZoom?(max(0.05, 1 + event.magnification), point)
+            onNavigationActive?(false)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard plainDragPans || Self.spaceKeyDown else {
+                lastDragLocation = nil
+                return
+            }
+            lastDragLocation = convert(event.locationInWindow, from: nil)
+            onNavigationActive?(true)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard plainDragPans || Self.spaceKeyDown else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            if let lastDragLocation {
+                onPan?(CGSize(width: point.x - lastDragLocation.x, height: point.y - lastDragLocation.y))
+            }
+            lastDragLocation = point
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            lastDragLocation = nil
+            onNavigationActive?(false)
+        }
+    }
+}
+
 private struct InkCanvasEventOverlay: NSViewRepresentable {
     var onChanged: (InkCanvasDragValue) -> Void
     var onEnded: (Bool) -> Void
+    var onScroll: (CGSize) -> Void
+    var onMagnify: (CGFloat, CGPoint) -> Void
+    var onNavigationActive: (Bool) -> Void
 
     func makeNSView(context: Context) -> EventView {
         // Deliver every mouse-dragged sample. By default macOS coalesces drag
@@ -3244,19 +3769,30 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         let view = EventView()
         view.onChanged = onChanged
         view.onEnded = onEnded
+        view.onScroll = onScroll
+        view.onMagnify = onMagnify
+        view.onNavigationActive = onNavigationActive
         return view
     }
 
     func updateNSView(_ nsView: EventView, context: Context) {
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
+        nsView.onScroll = onScroll
+        nsView.onMagnify = onMagnify
+        nsView.onNavigationActive = onNavigationActive
     }
 
     final class EventView: NSView {
         var onChanged: ((InkCanvasDragValue) -> Void)?
         var onEnded: ((Bool) -> Void)?
+        var onScroll: ((CGSize) -> Void)?
+        var onMagnify: ((CGFloat, CGPoint) -> Void)?
+        var onNavigationActive: ((Bool) -> Void)?
         private var startLocation: CGPoint?
         private var secondaryDrag = false
+        private var navigationDrag = false
+        private var lastNavigationLocation: CGPoint?
         private var downTimestamp: TimeInterval = 0
         private var dragCharge: Float = 0
         private var chargeLocked = false
@@ -3265,7 +3801,15 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+        private static var spaceKeyDown: Bool {
+            CGEventSource.keyState(.combinedSessionState, key: 49)
+        }
+
         override func mouseDown(with event: NSEvent) {
+            if Self.spaceKeyDown {
+                beginNavigation(event)
+                return
+            }
             // Ctrl-drag smears like a right-drag (wash), without needing a second
             // mouse button. (If the system already promoted ctrl-click to a
             // rightMouseDown, that path handles it; otherwise we see it here.)
@@ -3273,23 +3817,93 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         }
 
         override func mouseDragged(with event: NSEvent) {
+            if navigationDrag {
+                updateNavigation(event)
+                return
+            }
             update(event)
         }
 
         override func mouseUp(with event: NSEvent) {
+            if navigationDrag {
+                finishNavigation()
+                return
+            }
             finish(event)
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            if Self.spaceKeyDown {
+                beginNavigation(event)
+                return
+            }
             begin(event, secondary: true)
         }
 
         override func rightMouseDragged(with event: NSEvent) {
+            if navigationDrag {
+                updateNavigation(event)
+                return
+            }
             update(event)
         }
 
         override func rightMouseUp(with event: NSEvent) {
+            if navigationDrag {
+                finishNavigation()
+                return
+            }
             finish(event)
+        }
+
+        override func scrollWheel(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let flags = event.modifierFlags
+            let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 8
+            let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 8
+            if flags.contains(.command) || flags.contains(.control) {
+                let factor = exp(CGFloat(dy) * 0.01)
+                onNavigationActive?(true)
+                onMagnify?(factor, point)
+                onNavigationActive?(false)
+            } else {
+                onNavigationActive?(true)
+                onScroll?(CGSize(width: dx, height: dy))
+                onNavigationActive?(false)
+            }
+        }
+
+        override func magnify(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            onNavigationActive?(true)
+            onMagnify?(max(0.05, 1 + event.magnification), point)
+            onNavigationActive?(false)
+        }
+
+        override func smartMagnify(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            onMagnify?(event.clickCount > 1 ? 0.5 : 2, point)
+        }
+
+        private func beginNavigation(_ event: NSEvent) {
+            navigationDrag = true
+            let point = convert(event.locationInWindow, from: nil)
+            lastNavigationLocation = point
+            onNavigationActive?(true)
+        }
+
+        private func updateNavigation(_ event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            if let lastNavigationLocation {
+                onScroll?(CGSize(width: point.x - lastNavigationLocation.x, height: point.y - lastNavigationLocation.y))
+            }
+            lastNavigationLocation = point
+        }
+
+        private func finishNavigation() {
+            navigationDrag = false
+            lastNavigationLocation = nil
+            onNavigationActive?(false)
         }
 
         private func begin(_ event: NSEvent, secondary: Bool) {
@@ -3362,6 +3976,13 @@ private struct InkPreviewDrawingLayer: View {
     let dry: Float
     let colorSeparation: Float
     let brushInk: Float
+    let camera: CanvasCamera
+    let worldHeight: CGFloat
+    let worldPixelExtent: CGFloat
+    let onViewportPan: (CGSize) -> Void
+    let onViewportZoom: (CGFloat, CGPoint) -> Void
+    let onNavigationActive: (Bool) -> Void
+    let brushSpace: CanvasBrushSpace
     @Binding var selectedPathID: UUID?
     @Binding var selectedPointIndex: Int?
     @State private var current: [CGPoint] = []
@@ -3378,23 +3999,23 @@ private struct InkPreviewDrawingLayer: View {
 
     var body: some View {
         GeometryReader { geo in
-            let rect = fittedRect(container: geo.size, content: outputSize)
+            let activeRect = fittedRect(container: geo.size, content: outputSize)
             ZStack {
                 Color.black.opacity(0.001)
                 if showsEditorPaths {
                     ForEach(paths) { path in
-                        strokedPath(path.points, in: rect)
+                        strokedPath(path.points, in: activeRect)
                             .stroke(path.id == selectedPathID ? Color.accentColor.opacity(0.8) : editorColor(for: path).opacity(0.24),
                                     style: StrokeStyle(lineWidth: path.id == selectedPathID ? 3 : 2, lineCap: .round, lineJoin: .round))
                         if path.id == selectedPathID {
-                            selectionBounds(path.points, in: rect)
+                            selectionBounds(path.points, in: activeRect)
                                 .stroke(Color.accentColor.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                             ForEach(path.points.indices, id: \.self) { index in
                                 Circle()
                                     .fill(index == selectedPointIndex ? Color.accentColor : Color(nsColor: .windowBackgroundColor))
                                     .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
                                     .frame(width: 9, height: 9)
-                                    .position(viewPoint(path.points[index], in: rect))
+                                    .position(viewPoint(path.points[index], in: activeRect))
                             }
                         }
                     }
@@ -3402,17 +4023,22 @@ private struct InkPreviewDrawingLayer: View {
                 // Thin dashed guide for the live cursor path (the rendered ink
                 // lags behind). Off by default — the engine's mark is the truth.
                 if showLivePath, !rawCurrent.isEmpty {
-                    strokedPath(rawCurrent, in: rect)
+                    strokedPath(rawCurrent, in: activeRect)
                         .stroke(inkColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round, dash: [4, 4]))
                 }
                 InkCanvasEventOverlay(
                     onChanged: { value in
-                        guard rect.contains(value.location) else { return }
-                        handleDragChanged(value, in: rect)
+                        guard activeRect.contains(value.location) else { return }
+                        handleDragChanged(value, in: activeRect)
                     },
                     onEnded: { ended in
                         handleDragEnded(committed: ended)
-                    }
+                    },
+                    onScroll: onViewportPan,
+                    onMagnify: { factor, anchor in
+                        onViewportZoom(factor, anchor)
+                    },
+                    onNavigationActive: onNavigationActive
                 )
             }
             .contentShape(Rectangle())
@@ -3434,33 +4060,39 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func viewPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
-        CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
+        let scale = rect.height / max(0.000_001, camera.viewHeight)
+        return CGPoint(
+            x: rect.midX + (point.x - camera.center.x) * scale,
+            y: rect.midY + (point.y - camera.center.y) * scale
+        )
     }
 
     private func handleDragChanged(_ value: InkCanvasDragValue, in rect: CGRect) {
-        let p = normalized(value.location, in: rect)
+        let p = worldPoint(value.location, in: rect)
         switch tool {
         case .draw:
             selectedPathID = nil
             selectedPointIndex = nil
             updateLiveStroke(with: p, secondary: value.secondary, combined: value.combined, dissolveWash: value.dissolveWash, shift: value.shift, charge: value.charge)
         case .select:
+            let threshold = 0.025 * max(0.08, camera.viewHeight)
             if dragStartPaths.isEmpty {
                 dragStartPaths = paths
                 selectedPointIndex = nil
                 if selectedPathID == nil || !hitSelectedPath(at: p) {
-                    selectedPathID = nearestPath(to: p, threshold: 0.025)?.id
+                    selectedPathID = nearestPath(to: p, threshold: threshold)?.id
                 }
             }
-            moveSelectedPath(from: normalized(value.startLocation, in: rect), to: p)
+            moveSelectedPath(from: worldPoint(value.startLocation, in: rect), to: p)
         case .points:
+            let threshold = 0.025 * max(0.08, camera.viewHeight)
             if dragStartPaths.isEmpty {
                 dragStartPaths = paths
-                let hit = nearestPoint(to: p, threshold: 0.025)
-                selectedPathID = hit?.pathID ?? nearestPath(to: p, threshold: 0.025)?.id
+                let hit = nearestPoint(to: p, threshold: threshold)
+                selectedPathID = hit?.pathID ?? nearestPath(to: p, threshold: threshold)?.id
                 selectedPointIndex = hit?.pointIndex
                 if selectedPointIndex == nil, let selectedPathID {
-                    selectedPointIndex = insertPoint(on: selectedPathID, near: p, threshold: 0.028)
+                    selectedPointIndex = insertPoint(on: selectedPathID, near: p, threshold: 0.028 * max(0.08, camera.viewHeight))
                     dragStartPaths = paths
                 }
                 dragStartPoint = selectedPoint()
@@ -3479,7 +4111,7 @@ private struct InkPreviewDrawingLayer: View {
             strokeSeed: currentStrokeSeed,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
-            width: strokeMode == .brush ? washWidth : width,
+            width: engineWidth(for: strokeMode),
             flow: flow,
             bleed: bleed,
             dry: dry,
@@ -3577,7 +4209,6 @@ private struct InkPreviewDrawingLayer: View {
         point: CGPoint,
         time: TimeInterval,
         mode strokeMode: InkBrushMode,
-        widthScale: Float = 1,
         flowScale: Float = 1,
         shift: Bool,
         charge: Float
@@ -3585,11 +4216,12 @@ private struct InkPreviewDrawingLayer: View {
         return InkLiveStrokeSample(
             id: id,
             seed: currentStrokeSeed ?? 0,
-            point: point,
+            point: normalizedWorldPoint(point),
             time: time,
             brushMode: strokeMode,
             inkKind: currentDissolveWash ? .white : inkKind,
-            width: (strokeMode == .brush ? washWidth : width) * widthScale,
+            width: engineWidth(for: strokeMode),
+            directRadius: directBrushRadius(for: strokeMode),
             flow: flow * flowScale,
             brushInk: currentDissolveWash ? 1 : brushInk,
             color: inkRGBA,
@@ -3597,6 +4229,54 @@ private struct InkPreviewDrawingLayer: View {
             destructive: strokeMode == .brush && immediateWash && !currentWetOnly,
             wetOnly: currentWetOnly,
             charge: charge
+        )
+    }
+
+    private func directBrushRadius(for strokeMode: InkBrushMode) -> Float? {
+        let uiSize = max(0, CGFloat(strokeMode == .brush ? washWidth : width))
+        let pixelExtent = max(1, worldPixelExtent)
+        switch brushSpace {
+        case .world:
+            // Literal-ish diameter in world-backing pixels. The UI minimum is
+            // still labelled as 1 for now, but visually that was too chunky at
+            // the initial HD viewport; map it to a tenth-world-pixel hairline
+            // internally while preserving the rest of the range.
+            let diameterPixels = max(0.025, uiSize * 0.10)
+            return Float((diameterPixels * 0.5) / pixelExtent)
+        case .screen:
+            // Apparent viewport diameter in screen/output pixels. Convert that
+            // through the current camera scale so Screen mode does NOT get
+            // larger/smaller as the camera zooms over the world canvas.
+            let diameterPixels: CGFloat
+            if strokeMode == .brush {
+                diameterPixels = 0.15 + pow(min(uiSize, 2) / 2, 1.15) * 3.4
+            } else {
+                diameterPixels = 0.065 + pow(min(uiSize, 2) / 2, 1.35) * 0.435
+            }
+            let outputPixelsY = max(1, outputSize.height)
+            let radiusWorldUnits = (diameterPixels * 0.5) * camera.viewHeight / outputPixelsY
+            return Float(radiusWorldUnits / max(0.000_001, worldHeight))
+        }
+    }
+
+    private func engineWidth(for strokeMode: InkBrushMode) -> Float {
+        let uiSize = max(0, strokeMode == .brush ? washWidth : width)
+        guard brushSpace == .screen else { return uiSize }
+        // Screen mode is not literal pixels. It is an HD-calibrated apparent
+        // size that should look good at the default 1920×1080 viewport. The
+        // older direct 0…2 curve was tuned for zoomed-out/8K viewing and made
+        // the default viewport feel like a chunky marker. Compress it before it
+        // reaches the inkwash engine: 0 = subpixel hairline, 0.5 = thin pen,
+        // 1 = expressive pen, 2 = marker-ish but not a giant blob.
+        let normalized = min(1, uiSize / 2)
+        return 0.20 * sqrt(normalized)
+    }
+
+    private func normalizedWorldPoint(_ point: CGPoint) -> CGPoint {
+        let world = max(0.000_001, worldHeight)
+        return CGPoint(
+            x: min(1, max(0, point.x / world)),
+            y: min(1, max(0, point.y / world))
         )
     }
 
@@ -3614,21 +4294,50 @@ private struct InkPreviewDrawingLayer: View {
         )
     }
 
+    private func worldPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        let scale = max(1, rect.height)
+        let p = CGPoint(
+            x: camera.center.x + (point.x - rect.midX) / scale * camera.viewHeight,
+            y: camera.center.y + (point.y - rect.midY) / scale * camera.viewHeight
+        )
+        return clampToWorld(p)
+    }
+
+    private func liveRasterPoint(fromWorld point: CGPoint) -> CGPoint {
+        viewportPoint(fromWorld: point)
+    }
+
+    private func viewportPoint(fromWorld point: CGPoint) -> CGPoint {
+        let aspect = max(0.000_001, outputSize.width / max(1, outputSize.height))
+        let viewHeight = max(0.000_001, camera.viewHeight)
+        return CGPoint(
+            x: (point.x - camera.center.x) / (viewHeight * aspect) + 0.5,
+            y: (point.y - camera.center.y) / viewHeight + 0.5
+        )
+    }
+
+    private func clampToWorld(_ point: CGPoint) -> CGPoint {
+        let maxCoord = max(1, worldHeight)
+        return CGPoint(x: min(maxCoord, max(0, point.x)),
+                       y: min(maxCoord, max(0, point.y)))
+    }
+
     private func selectionBounds(_ points: [CGPoint], in rect: CGRect) -> Path {
         var path = Path()
         guard !points.isEmpty else { return path }
-        let xs = points.map(\.x)
-        let ys = points.map(\.y)
-        let minX = xs.min() ?? 0
-        let maxX = xs.max() ?? 0
-        let minY = ys.min() ?? 0
-        let maxY = ys.max() ?? 0
-        let inset: CGFloat = 0.008
+        let viewPoints = points.map { viewPoint($0, in: rect) }
+        let xs = viewPoints.map(\.x)
+        let ys = viewPoints.map(\.y)
+        let minX = xs.min() ?? rect.minX
+        let maxX = xs.max() ?? rect.minX
+        let minY = ys.min() ?? rect.minY
+        let maxY = ys.max() ?? rect.minY
+        let inset: CGFloat = 8
         path.addRect(CGRect(
-            x: rect.minX + (minX - inset) * rect.width,
-            y: rect.minY + (minY - inset) * rect.height,
-            width: (maxX - minX + inset * 2) * rect.width,
-            height: (maxY - minY + inset * 2) * rect.height
+            x: minX - inset,
+            y: minY - inset,
+            width: maxX - minX + inset * 2,
+            height: maxY - minY + inset * 2
         ))
         return path
     }
@@ -3657,7 +4366,7 @@ private struct InkPreviewDrawingLayer: View {
     private func hitSelectedPath(at point: CGPoint) -> Bool {
         guard let selectedPathID,
               let path = paths.first(where: { $0.id == selectedPathID }) else { return false }
-        return distanceToPath(point, path.points) <= 0.025
+        return distanceToPath(point, path.points) <= 0.025 * max(0.08, camera.viewHeight)
     }
 
     private func moveSelectedPath(from start: CGPoint, to end: CGPoint) {
@@ -3666,7 +4375,7 @@ private struct InkPreviewDrawingLayer: View {
               let index = paths.firstIndex(where: { $0.id == selectedPathID }) else { return }
         let delta = CGPoint(x: end.x - start.x, y: end.y - start.y)
         paths[index].points = original.points.map {
-            CGPoint(x: min(1, max(0, $0.x + delta.x)), y: min(1, max(0, $0.y + delta.y)))
+            clampToWorld(CGPoint(x: $0.x + delta.x, y: $0.y + delta.y))
         }
     }
 
@@ -3683,7 +4392,7 @@ private struct InkPreviewDrawingLayer: View {
               let selectedPointIndex,
               let index = paths.firstIndex(where: { $0.id == selectedPathID }),
               paths[index].points.indices.contains(selectedPointIndex) else { return }
-        paths[index].points[selectedPointIndex] = point
+        paths[index].points[selectedPointIndex] = clampToWorld(point)
     }
 
     private func insertPoint(on pathID: UUID, near point: CGPoint, threshold: CGFloat) -> Int? {
@@ -3993,6 +4702,388 @@ private struct ExportPreviewImage: View {
     }
 }
 
+private struct ExportWorldPreviewCanvas: View {
+    @ObservedObject var live: LiveReadouts
+    let liveDisplay: SampleBufferDisplayController
+    let usesMetalLivePreview: Bool
+    let reviewImage: CGImage?
+    let isLoading: Bool
+    let outputSize: CGSize
+    let framing: ExportFraming
+    @Binding var camera: CanvasCamera
+    let worldHeight: CGFloat
+    let outputAspect: CGFloat
+    let paths: [InkEditorPath]
+    let selectedPathID: UUID?
+    @Binding var cropInsets: ExportCropInsets
+    let cropIsEditable: Bool
+    let cropDidEndEditing: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let world = worldRect(in: proxy.size)
+            let viewport = viewportRect(in: world)
+            let crop = cropRect(in: viewport)
+
+            ZStack {
+                Color.black.opacity(0.30)
+
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.12))
+                    .frame(width: world.width, height: world.height)
+                    .position(x: world.midX, y: world.midY)
+
+                ForEach(paths) { path in
+                    PreviewPathShape(points: path.points, worldHeight: worldHeight)
+                        .stroke(path.id == selectedPathID ? Color.accentColor.opacity(0.9) : Color.white.opacity(0.30),
+                                style: StrokeStyle(lineWidth: path.id == selectedPathID ? 1.4 : 0.9,
+                                                   lineCap: .round,
+                                                   lineJoin: .round))
+                        .frame(width: world.width, height: world.height)
+                        .position(x: world.midX, y: world.midY)
+                }
+
+                ZStack {
+                    if let reviewImage {
+                        ExportPreviewImage(image: reviewImage, framing: .stretch)
+                    } else if usesMetalLivePreview {
+                        SampleBufferDisplayView(
+                            controller: liveDisplay,
+                            videoGravity: framing.videoGravity
+                        )
+                    } else if let image = live.previewImage {
+                        ExportPreviewImage(image: image, framing: framing)
+                    } else {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(nsColor: .textBackgroundColor).opacity(0.18))
+                        ProgressView().controlSize(.small)
+                    }
+                    if isLoading { ProgressView().controlSize(.small) }
+                }
+                .frame(width: viewport.width, height: viewport.height)
+                .position(x: viewport.midX, y: viewport.midY)
+                .clipped()
+
+                Canvas { context, size in
+                    var outsideCrop = Path(CGRect(origin: .zero, size: size))
+                    outsideCrop.addRect(crop)
+                    context.fill(outsideCrop, with: .color(.black.opacity(0.42)),
+                                 style: FillStyle(eoFill: true))
+
+                    var worldPath = Path()
+                    worldPath.addRect(world)
+                    context.stroke(worldPath, with: .color(.white.opacity(0.16)), lineWidth: 1)
+
+                    var guardPath = Path()
+                    guardPath.addRect(guardRect(in: world))
+                    context.stroke(guardPath,
+                                   with: .color(.white.opacity(0.20)),
+                                   style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+
+                    var viewportPath = Path()
+                    viewportPath.addRect(viewport)
+                    context.stroke(viewportPath,
+                                   with: .color(.white.opacity(0.90)),
+                                   style: StrokeStyle(lineWidth: 1.3, dash: [5, 4]))
+
+                    if cropIsEditable {
+                        drawCropFrame(crop, in: &context)
+                    }
+                }
+                .allowsHitTesting(false)
+
+                if cropIsEditable {
+                    ExportWorldPreviewInteractionOverlay(
+                        camera: $camera,
+                        cropInsets: $cropInsets,
+                        worldRect: world,
+                        viewportRect: viewport,
+                        worldHeight: worldHeight,
+                        outputAspect: outputAspect,
+                        cropDidEndEditing: cropDidEndEditing
+                    )
+                } else {
+                    ExportWorldPreviewInteractionOverlay(
+                        camera: $camera,
+                        cropInsets: .constant(cropInsets),
+                        worldRect: world,
+                        viewportRect: viewport,
+                        worldHeight: worldHeight,
+                        outputAspect: outputAspect,
+                        cropDidEndEditing: {}
+                    )
+                }
+
+                VStack {
+                    HStack {
+                        Text("Whole canvas")
+                        Spacer()
+                        Text("\(Int(1 / max(0.000_001, camera.viewHeight) * 100))%")
+                            .monospacedDigit()
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(8)
+                    Spacer()
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .help("Drag to move the viewport. Shift-drag inside the crop or its handles to adjust export crop.")
+            .accessibilityLabel("Whole canvas preview")
+        }
+    }
+
+    private func worldRect(in size: CGSize) -> CGRect {
+        let inset: CGFloat = 8
+        let available = CGSize(width: max(1, size.width - inset * 2),
+                               height: max(1, size.height - inset * 2))
+        let side = max(1, min(available.width, available.height))
+        return CGRect(x: (size.width - side) * 0.5,
+                      y: (size.height - side) * 0.5,
+                      width: side,
+                      height: side)
+    }
+
+    private func viewportRect(in world: CGRect) -> CGRect {
+        let maxCoord = max(1, worldHeight)
+        let viewHeight = min(maxCoord, max(0.08, camera.viewHeight))
+        let viewWidth = min(maxCoord, viewHeight * max(0.000_001, outputAspect))
+        return CGRect(
+            x: world.minX + (camera.center.x - viewWidth * 0.5) / maxCoord * world.width,
+            y: world.minY + (camera.center.y - viewHeight * 0.5) / maxCoord * world.height,
+            width: viewWidth / maxCoord * world.width,
+            height: viewHeight / maxCoord * world.height
+        )
+    }
+
+    private func guardRect(in world: CGRect) -> CGRect {
+        viewportRect(in: world).insetBy(
+            dx: -world.width * camera.guardFraction * camera.viewHeight / max(1, worldHeight) * max(0.000_001, outputAspect),
+            dy: -world.height * camera.guardFraction * camera.viewHeight / max(1, worldHeight)
+        )
+    }
+
+    private func cropRect(in viewport: CGRect) -> CGRect {
+        CGRect(x: viewport.minX + viewport.width * cropInsets.left,
+               y: viewport.minY + viewport.height * cropInsets.top,
+               width: viewport.width * max(0.02, 1 - cropInsets.left - cropInsets.right),
+               height: viewport.height * max(0.02, 1 - cropInsets.top - cropInsets.bottom))
+    }
+
+    private func drawCropFrame(_ crop: CGRect, in context: inout GraphicsContext) {
+        var cropPath = Path()
+        cropPath.addRect(crop)
+        context.stroke(cropPath,
+                       with: .color(.white.opacity(0.96)),
+                       style: StrokeStyle(lineWidth: 1.6, dash: [5, 3]))
+
+        for handle in ExportWorldPreviewInteractionOverlay.Handle.allCases where handle != .move {
+            let point = ExportWorldPreviewInteractionOverlay.handlePoint(handle, crop: crop)
+            let edge = handle == .top || handle == .bottom || handle == .left || handle == .right
+            let size = CGSize(width: edge && (handle == .top || handle == .bottom) ? 18 : 9,
+                              height: edge && (handle == .left || handle == .right) ? 18 : 9)
+            let rect = CGRect(x: point.x - size.width * 0.5,
+                              y: point.y - size.height * 0.5,
+                              width: size.width,
+                              height: size.height)
+            let handlePath = Path(roundedRect: rect, cornerRadius: 2)
+            context.fill(handlePath, with: .color(.white))
+            context.stroke(handlePath, with: .color(.black.opacity(0.85)), lineWidth: 1)
+        }
+    }
+}
+
+private struct PreviewPathShape: Shape {
+    let points: [CGPoint]
+    let worldHeight: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: viewPoint(first, in: rect))
+        for point in points.dropFirst() {
+            path.addLine(to: viewPoint(point, in: rect))
+        }
+        return path
+    }
+
+    private func viewPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+        let maxCoord = max(1, worldHeight)
+        return CGPoint(
+            x: rect.minX + point.x / maxCoord * rect.width,
+            y: rect.minY + point.y / maxCoord * rect.height
+        )
+    }
+}
+
+private struct ExportWorldPreviewInteractionOverlay: NSViewRepresentable {
+    enum Handle: CaseIterable {
+        case move, top, bottom, left, right, topLeft, topRight, bottomLeft, bottomRight
+    }
+
+    @Binding var camera: CanvasCamera
+    @Binding var cropInsets: ExportCropInsets
+    let worldRect: CGRect
+    let viewportRect: CGRect
+    let worldHeight: CGFloat
+    let outputAspect: CGFloat
+    let cropDidEndEditing: () -> Void
+
+    static func handlePoint(_ handle: Handle, crop: CGRect) -> CGPoint {
+        switch handle {
+        case .top: CGPoint(x: crop.midX, y: crop.minY)
+        case .bottom: CGPoint(x: crop.midX, y: crop.maxY)
+        case .left: CGPoint(x: crop.minX, y: crop.midY)
+        case .right: CGPoint(x: crop.maxX, y: crop.midY)
+        case .topLeft: CGPoint(x: crop.minX, y: crop.minY)
+        case .topRight: CGPoint(x: crop.maxX, y: crop.minY)
+        case .bottomLeft: CGPoint(x: crop.minX, y: crop.maxY)
+        case .bottomRight: CGPoint(x: crop.maxX, y: crop.maxY)
+        case .move: CGPoint(x: crop.midX, y: crop.midY)
+        }
+    }
+
+    func makeNSView(context: Context) -> EventView {
+        let view = EventView()
+        view.onCamera = { camera = $0 }
+        view.onCrop = { cropInsets = $0 }
+        view.cropDidEndEditing = cropDidEndEditing
+        return view
+    }
+
+    func updateNSView(_ nsView: EventView, context: Context) {
+        nsView.camera = camera
+        nsView.cropInsets = cropInsets
+        nsView.worldRect = worldRect
+        nsView.viewportRect = viewportRect
+        nsView.worldHeight = worldHeight
+        nsView.outputAspect = outputAspect
+        nsView.onCamera = { camera = $0 }
+        nsView.onCrop = { cropInsets = $0 }
+        nsView.cropDidEndEditing = cropDidEndEditing
+    }
+
+    final class EventView: NSView {
+        var camera = CanvasCamera()
+        var cropInsets = ExportCropInsets(left: 0, top: 0, right: 0, bottom: 0)
+        var worldRect = CGRect.zero
+        var viewportRect = CGRect.zero
+        var worldHeight: CGFloat = 1
+        var outputAspect: CGFloat = 16.0 / 9.0
+        var onCamera: ((CanvasCamera) -> Void)?
+        var onCrop: ((ExportCropInsets) -> Void)?
+        var cropDidEndEditing: (() -> Void)?
+        private var dragMode: DragMode?
+
+        override var isFlipped: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let shift = event.modifierFlags.contains(.shift)
+            if shift, viewportRect.contains(point) {
+                dragMode = .crop(handle: hitCropHandle(point), startPoint: point, startInsets: cropInsets)
+            } else if worldRect.contains(point) {
+                dragMode = .viewport(startPoint: point, startCamera: camera)
+            } else {
+                dragMode = nil
+            }
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let dragMode else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            switch dragMode {
+            case let .viewport(startPoint, startCamera):
+                var next = startCamera
+                let dx = (point.x - startPoint.x) / max(1, worldRect.width) * max(1, worldHeight)
+                let dy = (point.y - startPoint.y) / max(1, worldRect.height) * max(1, worldHeight)
+                next.center.x -= dx
+                next.center.y -= dy
+                onCamera?(clamped(next))
+            case let .crop(handle, startPoint, startInsets):
+                let dx = Double((point.x - startPoint.x) / max(1, viewportRect.width))
+                let dy = Double((point.y - startPoint.y) / max(1, viewportRect.height))
+                onCrop?(updatedCrop(handle: handle, start: startInsets, dx: dx, dy: dy))
+            }
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            if case .crop = dragMode {
+                cropDidEndEditing?()
+            }
+            dragMode = nil
+        }
+
+        private enum DragMode {
+            case viewport(startPoint: CGPoint, startCamera: CanvasCamera)
+            case crop(handle: Handle, startPoint: CGPoint, startInsets: ExportCropInsets)
+        }
+
+        private func cropRect() -> CGRect {
+            CGRect(x: viewportRect.minX + viewportRect.width * cropInsets.left,
+                   y: viewportRect.minY + viewportRect.height * cropInsets.top,
+                   width: viewportRect.width * max(0.02, 1 - cropInsets.left - cropInsets.right),
+                   height: viewportRect.height * max(0.02, 1 - cropInsets.top - cropInsets.bottom))
+        }
+
+        private func hitCropHandle(_ point: CGPoint) -> Handle {
+            let crop = cropRect()
+            let hitRadius: CGFloat = 12
+            for handle in Handle.allCases where handle != .move {
+                let p = ExportWorldPreviewInteractionOverlay.handlePoint(handle, crop: crop)
+                if abs(point.x - p.x) <= hitRadius, abs(point.y - p.y) <= hitRadius {
+                    return handle
+                }
+            }
+            return .move
+        }
+
+        private func updatedCrop(handle: Handle, start: ExportCropInsets, dx: Double, dy: Double) -> ExportCropInsets {
+            let minimumSpan = 0.02
+            var next = start
+            if handle == .move {
+                let horizontal = min(max(dx, -start.left), start.right)
+                let vertical = min(max(dy, -start.top), start.bottom)
+                next.left = start.left + horizontal
+                next.right = start.right - horizontal
+                next.top = start.top + vertical
+                next.bottom = start.bottom - vertical
+            } else {
+                if handle == .left || handle == .topLeft || handle == .bottomLeft {
+                    next.left = min(max(0, start.left + dx), 1 - start.right - minimumSpan)
+                }
+                if handle == .right || handle == .topRight || handle == .bottomRight {
+                    next.right = min(max(0, start.right - dx), 1 - start.left - minimumSpan)
+                }
+                if handle == .top || handle == .topLeft || handle == .topRight {
+                    next.top = min(max(0, start.top + dy), 1 - start.bottom - minimumSpan)
+                }
+                if handle == .bottom || handle == .bottomLeft || handle == .bottomRight {
+                    next.bottom = min(max(0, start.bottom - dy), 1 - start.top - minimumSpan)
+                }
+            }
+            return next
+        }
+
+        private func clamped(_ camera: CanvasCamera) -> CanvasCamera {
+            let maxCoord = max(1, worldHeight)
+            let aspect = max(0.000_001, outputAspect)
+            var next = camera
+            next.rotation = 0
+            next.viewHeight = min(maxCoord, max(0.08, next.viewHeight))
+            let marginX = min(maxCoord * 0.5, next.viewHeight * aspect * 0.5)
+            let marginY = min(maxCoord * 0.5, next.viewHeight * 0.5)
+            next.center.x = min(maxCoord - marginX, max(marginX, next.center.x))
+            next.center.y = min(maxCoord - marginY, max(marginY, next.center.y))
+            if maxCoord <= next.viewHeight || maxCoord <= next.viewHeight * aspect {
+                next.center = CGPoint(x: maxCoord * 0.5, y: maxCoord * 0.5)
+            }
+            return next
+        }
+    }
+}
+
 private struct ExportCropEditor: View {
     private enum Handle: CaseIterable, Identifiable {
         case move, top, bottom, left, right, topLeft, topRight, bottomLeft, bottomRight
@@ -4117,6 +5208,12 @@ private struct ExportPanel: View {
     let live: LiveReadouts
     let liveDisplay: SampleBufferDisplayController
     let usesMetalLivePreview: Bool
+    @Binding var auxPreviewEnabled: Bool
+    @Binding var camera: CanvasCamera
+    let worldHeight: CGFloat
+    let outputAspect: CGFloat
+    let paths: [InkEditorPath]
+    let selectedPathID: UUID?
     let currentSize: CGSize
     let currentFPS: Double
     let metricLayers: [(id: UUID, name: String)]
@@ -4132,30 +5229,44 @@ private struct ExportPanel: View {
 
         GroupBox("Preview") {
             VStack(alignment: .leading, spacing: 8) {
-                if exporter.reviewImage != nil {
-                    Picker("", selection: $previewShowsReview) {
-                        Text("Live").tag(false)
-                        Text("Review").tag(true)
+                Toggle("Aux previews", isOn: $auxPreviewEnabled)
+                    .toggleStyle(.checkbox)
+                    .help("Show the Export live/review preview and whole-canvas minimap. Turn this off while tuning navigation performance to keep the main canvas on the Metal display path only.")
+                if auxPreviewEnabled {
+                    if exporter.reviewImage != nil {
+                        Picker("", selection: $previewShowsReview) {
+                            Text("Live").tag(false)
+                            Text("Review").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    ExportWorldPreviewCanvas(
+                        live: live,
+                        liveDisplay: liveDisplay,
+                        usesMetalLivePreview: usesMetalLivePreview,
+                        reviewImage: previewShowsReview ? exporter.reviewImage : nil,
+                        isLoading: previewShowsReview && exporter.reviewIsLoading,
+                        outputSize: CGSize(width: max(1, exporter.configuration.width),
+                                           height: max(1, exporter.configuration.height)),
+                        framing: exporter.configuration.framing,
+                        camera: $camera,
+                        worldHeight: worldHeight,
+                        outputAspect: outputAspect,
+                        paths: paths,
+                        selectedPathID: selectedPathID,
+                        cropInsets: cropInsets,
+                        cropIsEditable: !previewShowsReview,
+                        cropDidEndEditing: exporter.refreshReviewPreview
+                    )
+                    .frame(height: 300)
+                } else {
+                    Text("Aux previews are off. The main canvas still renders/publishes normally; this avoids extra preview surfaces while panning and zooming.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                ExportPreviewCanvas(
-                    live: live,
-                    liveDisplay: liveDisplay,
-                    usesMetalLivePreview: usesMetalLivePreview,
-                    reviewImage: previewShowsReview ? exporter.reviewImage : nil,
-                    isLoading: previewShowsReview && exporter.reviewIsLoading,
-                    outputSize: CGSize(width: max(1, exporter.configuration.width),
-                                       height: max(1, exporter.configuration.height)),
-                    framing: exporter.configuration.framing,
-                    cropInsets: cropInsets,
-                    cropIsEditable: !previewShowsReview,
-                    cropDidEndEditing: exporter.refreshReviewPreview
-                )
-                .frame(height: 260)
 
-                if previewShowsReview, exporter.reviewImage != nil {
+                if auxPreviewEnabled, previewShowsReview, exporter.reviewImage != nil {
                     if exporter.reviewFrameCount > 1 {
                         Slider(value: Binding(
                             get: { Double(exporter.reviewFrame) },
@@ -4176,7 +5287,7 @@ private struct ExportPanel: View {
                     Text("Continue creates a new take with the reviewed prefix, then appends new captures. The original remains untouched.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Drag inside the crop to move it; drag an edge or corner to resize. Completed exports are available under Review.")
+                    Text("Drag the whole-canvas preview to move the viewport. Shift-drag the crop frame or handles to edit the export crop. Completed exports are available under Review.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

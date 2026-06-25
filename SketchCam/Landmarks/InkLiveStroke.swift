@@ -14,6 +14,13 @@ struct InkLiveStrokeSample: Equatable {
     var brushMode: InkBrushMode
     var inkKind: InkKind
     var width: Float
+    /// Optional direct radius in normalized world texture coordinates.
+    ///
+    /// When present, the engine treats `width` as UI metadata and uses this
+    /// physical radius instead of the abstract inkwash size curve. This is used
+    /// for World brush space so a "1 px" brush can really reach one pixel on the
+    /// world backing store.
+    var directRadius: Float?
     var flow: Float
     var brushInk: Float
     var color: RGBAColor

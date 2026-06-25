@@ -79,6 +79,7 @@ final class SketchCamViewModel: ObservableObject {
     @Published var outputFormat = SketchCamFormats.defaultFormat {
         didSet { store.outputFormat = outputFormat }
     }
+    @Published var canvasRenderContext = CanvasRenderContext()
     /// High-frequency live readouts (preview image + per-stage stats) live on a
     /// SEPARATE observable so their ~4 Hz updates don't fire the view model's
     /// objectWillChange and re-evaluate the entire ContentView body (which leaks
@@ -109,6 +110,7 @@ final class SketchCamViewModel: ObservableObject {
     /// A display layer cannot belong to two NSViews. Export gets its own
     /// zero-readback layer fed from the same completed compositor frame.
     let exportPreviewDisplay = SampleBufferDisplayController()
+    private let exportPreviewActive = LockedBox(false)
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
@@ -304,6 +306,10 @@ final class SketchCamViewModel: ObservableObject {
         case .gif: "gif"
         case .movie: config.container.rawValue
         }
+    }
+
+    func setExportPreviewActive(_ active: Bool) {
+        exportPreviewActive.value = active
     }
 
     private static func contentType(for format: ExportImageFormat) -> UTType {
@@ -1060,7 +1066,8 @@ final class SketchCamViewModel: ObservableObject {
                         frameIndex: frameIndex,
                         textureInput: inkTexture,
                         actionPaths: self.canvasActions.replayPaths(),
-                        controlFields: controlFields
+                        controlFields: controlFields,
+                        canvasContext: self.canvasRenderContext
                     )
                 }
                 let inkActivity = self.inkCompositor.activitySnapshot
@@ -1333,7 +1340,9 @@ final class SketchCamViewModel: ObservableObject {
         DispatchQueue.main.async {
             if let displayBuffer {
                 self.previewDisplay.enqueue(displayBuffer)
-                self.exportPreviewDisplay.enqueue(displayBuffer)
+                if self.exportPreviewActive.value {
+                    self.exportPreviewDisplay.enqueue(displayBuffer)
+                }
             }
             if let image {
                 self.live.previewImage = image

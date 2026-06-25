@@ -23,6 +23,10 @@ final class MetalPaperRenderer {
         var config: ResolvedPaperConfig
         var width: Int
         var height: Int
+        var originX: Int = 0
+        var originY: Int = 0
+        var sampleWidth: Int = 0
+        var sampleHeight: Int = 0
     }
 
     /// Excludes color finishing so appearance-only edits reuse physical fields.
@@ -44,8 +48,12 @@ final class MetalPaperRenderer {
         var resistSoftness: Float
         var width: Int
         var height: Int
+        var originX: Int
+        var originY: Int
+        var sampleWidth: Int
+        var sampleHeight: Int
 
-        init(config: ResolvedPaperConfig, width: Int, height: Int) {
+        init(config: ResolvedPaperConfig, width: Int, height: Int, worldPixelRect: CGRect = .zero) {
             fiberScaleX = config.fiberScaleX
             fiberScaleY = config.fiberScaleY
             fiberOrientation = config.fiberOrientation
@@ -63,6 +71,10 @@ final class MetalPaperRenderer {
             resistSoftness = config.resistSoftness
             self.width = width
             self.height = height
+            originX = Int(worldPixelRect.minX.rounded())
+            originY = Int(worldPixelRect.minY.rounded())
+            sampleWidth = Int((worldPixelRect.width > 0 ? worldPixelRect.width : CGFloat(width)).rounded())
+            sampleHeight = Int((worldPixelRect.height > 0 ? worldPixelRect.height : CGFloat(height)).rounded())
         }
     }
 
@@ -174,18 +186,27 @@ final class MetalPaperRenderer {
     }
     #endif
 
-    func texture(config: PaperConfig, size: CGSize, commandBuffer: MTLCommandBuffer) -> MTLTexture? {
-        textures(config: config, size: size, commandBuffer: commandBuffer)?.visible
+    func texture(config: PaperConfig, size: CGSize, commandBuffer: MTLCommandBuffer, worldPixelRect: CGRect? = nil) -> MTLTexture? {
+        textures(config: config, size: size, commandBuffer: commandBuffer, worldPixelRect: worldPixelRect)?.visible
     }
 
     func makeCommandBuffer() -> MTLCommandBuffer? { queue.makeCommandBuffer() }
 
-    func textures(config: PaperConfig, size: CGSize, commandBuffer: MTLCommandBuffer) -> PaperTextureSet? {
+    func textures(config: PaperConfig, size: CGSize, commandBuffer: MTLCommandBuffer, worldPixelRect: CGRect? = nil) -> PaperTextureSet? {
         let width = max(1, Int(size.width.rounded()))
         let height = max(1, Int(size.height.rounded()))
         let resolved = config.resolved
-        let visibleKey = VisibleKey(config: resolved, width: width, height: height)
-        let materialKey = MaterialKey(config: resolved, width: width, height: height)
+        let sampleRect = worldPixelRect ?? CGRect(x: 0, y: 0, width: width, height: height)
+        let visibleKey = VisibleKey(
+            config: resolved,
+            width: width,
+            height: height,
+            originX: Int(sampleRect.minX.rounded()),
+            originY: Int(sampleRect.minY.rounded()),
+            sampleWidth: Int(sampleRect.width.rounded()),
+            sampleHeight: Int(sampleRect.height.rounded())
+        )
+        let materialKey = MaterialKey(config: resolved, width: width, height: height, worldPixelRect: sampleRect)
 
         let visible: Entry
         if let cached = visibleEntries[visibleKey] {
@@ -193,7 +214,7 @@ final class MetalPaperRenderer {
             visible = cached
         } else {
             guard let entry = makeEntry(width: width, height: height) else { return nil }
-            encodeVisible(config: resolved, into: entry.texture, commandBuffer: commandBuffer)
+            encodeVisible(config: resolved, into: entry.texture, worldPixelRect: sampleRect, commandBuffer: commandBuffer)
             visibleEntries[visibleKey] = entry
             visibleGenerationCount += 1
             visible = entry
@@ -212,6 +233,7 @@ final class MetalPaperRenderer {
                 absorbency: absorbency,
                 drag: drag,
                 resist: resist,
+                worldPixelRect: sampleRect,
                 commandBuffer: commandBuffer
             )
             material = MaterialEntry(
@@ -238,7 +260,15 @@ final class MetalPaperRenderer {
         guard let commandBuffer = queue.makeCommandBuffer(),
               let texture = texture(config: config, size: rect.size, commandBuffer: commandBuffer)
         else { return nil }
-        let key = VisibleKey(config: config.resolved, width: texture.width, height: texture.height)
+        let key = VisibleKey(
+            config: config.resolved,
+            width: texture.width,
+            height: texture.height,
+            originX: 0,
+            originY: 0,
+            sampleWidth: texture.width,
+            sampleHeight: texture.height
+        )
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         guard let entry = visibleEntries[key] else { return nil }
@@ -276,9 +306,12 @@ final class MetalPaperRenderer {
         return device.makeTexture(descriptor: descriptor)
     }
 
-    private func params(for config: ResolvedPaperConfig, width: Int, height: Int) -> Params {
-        Params(
-            resolution: SIMD2(Float(width), Float(height)),
+    private func params(for config: ResolvedPaperConfig, width: Int, height: Int, worldPixelRect: CGRect = .zero) -> Params {
+        let sampleWidth = worldPixelRect.width > 0 ? Float(worldPixelRect.width) : Float(width)
+        let sampleHeight = worldPixelRect.height > 0 ? Float(worldPixelRect.height) : Float(height)
+        return Params(
+            resolution: SIMD2(sampleWidth, sampleHeight),
+            padding: SIMD2(Float(worldPixelRect.minX), Float(worldPixelRect.minY)),
             tint: SIMD4(config.tintRed, config.tintGreen, config.tintBlue, config.tintAlpha),
             fiber: SIMD4(config.fiberStrength, config.fiberScaleX, config.fiberScaleY, config.fiberOrientation),
             tooth: SIMD4(config.toothStrength, config.toothScaleX, config.toothScaleY, 0),
@@ -289,8 +322,8 @@ final class MetalPaperRenderer {
         )
     }
 
-    private func encodeVisible(config: ResolvedPaperConfig, into texture: MTLTexture, commandBuffer: MTLCommandBuffer) {
-        var params = params(for: config, width: texture.width, height: texture.height)
+    private func encodeVisible(config: ResolvedPaperConfig, into texture: MTLTexture, worldPixelRect: CGRect = .zero, commandBuffer: MTLCommandBuffer) {
+        var params = params(for: config, width: texture.width, height: texture.height, worldPixelRect: worldPixelRect)
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(visiblePipeline)
         encoder.setTexture(texture, index: 0)
@@ -305,9 +338,10 @@ final class MetalPaperRenderer {
         absorbency: MTLTexture,
         drag: MTLTexture,
         resist: MTLTexture,
+        worldPixelRect: CGRect = .zero,
         commandBuffer: MTLCommandBuffer
     ) {
-        var params = params(for: config, width: absorbency.width, height: absorbency.height)
+        var params = params(for: config, width: absorbency.width, height: absorbency.height, worldPixelRect: worldPixelRect)
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(materialPipeline)
         encoder.setTexture(absorbency, index: 0)
