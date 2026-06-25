@@ -81,11 +81,14 @@ final class InkPenRibbonRenderer {
         // viewport UV (same as the wash engine), then to output pixels. This is
         // what makes committed strokes re-rasterize crisp at the current zoom.
         let aspect = CGFloat(outW) / CGFloat(max(1, outH))
-        let pts = points.map { p -> CGPoint in
+        let mapped = points.map { p -> CGPoint in
             let uv = canvas.camera.viewportUV(fromWorldPoint: p, aspect: aspect)
             // World y is up; output/Metal pixel y is down → flip.
             return CGPoint(x: uv.x * CGFloat(outW), y: (1 - uv.y) * CGFloat(outH))
         }
+        // Smooth the polyline into a flowing curve (Catmull-Rom resample) so the
+        // stroke reads as a painterly line, not angular segments between samples.
+        let (pts, times) = Self.smooth(mapped, times: times, subdivisions: 8)
 
         // Width in OUTPUT pixels. Screen = literal apparent pixels (zoom-independent);
         // World = world-backing pixels mapped through the camera (rescales on zoom).
@@ -128,5 +131,32 @@ final class InkPenRibbonRenderer {
             widths[i] *= ease
         }
         return StrokeTessellator.Stroke(points: pts, color: color, baseWidth: baseWidthPx, widths: widths)
+    }
+
+    /// Uniform Catmull-Rom resample: turns a sparse polyline into a smooth,
+    /// densely-sampled curve through the original points. Times (if given) are
+    /// linearly interpolated so the per-point speed taper still works.
+    private static func smooth(_ p: [CGPoint], times: [TimeInterval]?, subdivisions: Int) -> ([CGPoint], [TimeInterval]?) {
+        let n = p.count
+        guard n >= 3, subdivisions >= 2 else { return (p, times) }
+        let haveTimes = (times?.count == n)
+        var outPts: [CGPoint] = []
+        var outTimes: [TimeInterval] = []
+        outPts.reserveCapacity((n - 1) * subdivisions + 1)
+        func pt(_ i: Int) -> CGPoint { p[min(max(i, 0), n - 1)] }
+        func tm(_ i: Int) -> TimeInterval { times![min(max(i, 0), n - 1)] }
+        for i in 0..<(n - 1) {
+            let p0 = pt(i - 1), p1 = pt(i), p2 = pt(i + 1), p3 = pt(i + 2)
+            let steps = (i == n - 2) ? subdivisions : subdivisions - 1
+            for s in 0...steps {
+                let t = CGFloat(s) / CGFloat(subdivisions)
+                let t2 = t * t, t3 = t2 * t
+                let x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2*p0.x - 5*p1.x + 4*p2.x - p3.x) * t2 + (-p0.x + 3*p1.x - 3*p2.x + p3.x) * t3)
+                let y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2*p0.y - 5*p1.y + 4*p2.y - p3.y) * t2 + (-p0.y + 3*p1.y - 3*p2.y + p3.y) * t3)
+                outPts.append(CGPoint(x: x, y: y))
+                if haveTimes { outTimes.append(tm(i) + (tm(i + 1) - tm(i)) * Double(t)) }
+            }
+        }
+        return (outPts, haveTimes ? outTimes : nil)
     }
 }
