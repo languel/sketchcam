@@ -51,7 +51,13 @@ final class InkPenRibbonRenderer {
                 liveAccumPoints = []
                 liveAccumTimes = []
             }
-            liveAccumPoints.append(contentsOf: livePoints.map { $0.point })
+            // Live points arrive normalized (worldPoint / worldHeight, clamped),
+            // but committed path points are raw WORLD coords. Un-normalize the
+            // live points to world space so BOTH map identically via the camera —
+            // otherwise the live stroke maps off-screen and only the committed
+            // path shows (the "only drawn at the end" bug).
+            let wh = CGFloat(max(0.000_001, canvas.worldHeight))
+            liveAccumPoints.append(contentsOf: livePoints.map { CGPoint(x: $0.point.x * wh, y: $0.point.y * wh) })
             liveAccumTimes.append(contentsOf: livePoints.map { $0.time })
             if liveAccumPoints.count > 1,
                let s = stroke(points: liveAccumPoints, times: liveAccumTimes,
