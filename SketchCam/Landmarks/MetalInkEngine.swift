@@ -980,7 +980,10 @@ final class MetalInkEngine {
             replayPressure += (targetPressure - replayPressure) * (1 - exp(-sampleDT * 6))
             let pressure = replayPressure
             if mode == .pen {
-                let radius = directPenRadius(baseRadius, pressure: pressure, speed: speed)
+                // Low-pass the width (see live pen) so the replayed ribbon is
+                // smooth, not beaded.
+                let rawRadius = directPenRadius(baseRadius, pressure: pressure, speed: speed)
+                let radius = previousPenRadius.map { $0 + (rawRadius - $0) * 0.22 } ?? rawRadius
                 let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
                 let steps = min(max(1, Int(ceil(dist / max(radius * 0.6, 0.0008)))), 80)
                 var segmentStart = previous
@@ -1210,12 +1213,18 @@ final class MetalInkEngine {
             state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-eventDT * 6))
             let pressure = state.simPressure
             let speed = state.speed
-            let radius = directPenRadius(liveBaseRadius, pressure: pressure, speed: speed)
+            // Low-pass the width along the stroke. The raw radius swings with the
+            // per-sample speed/pressure, and max-blending those varying-radius
+            // capsules scallops the edge (a regular bead). Smoothing the radius
+            // toward its running value keeps a clean, vector-like ribbon while
+            // still letting it taper gradually.
+            let rawRadius = directPenRadius(liveBaseRadius, pressure: pressure, speed: speed)
+            let radius = state.penRadius < 0 ? rawRadius
+                : state.penRadius + (rawRadius - state.penRadius) * 0.22
 
             let penDensity = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
             // Lay the stroke as a ribbon: one variable-width capsule per centerline
-            // step, max-blended so the union is smooth (no bead/"salami" from
-            // overlapping additive discs). The first step has no prior radius.
+            // step, max-blended so the union is smooth. The first step has no prior.
             let rPrev = state.penRadius < 0 ? radius : state.penRadius
             splatCapsule(texture: ink.read, a: previous, b: current, ra: rPrev, rb: radius, color: inkColor(kind: kind, base: color, density: penDensity), blend: .max, commandBuffer: commandBuffer)
             // The wet halo is part of what you see while drawing. A fixed 2.8×
