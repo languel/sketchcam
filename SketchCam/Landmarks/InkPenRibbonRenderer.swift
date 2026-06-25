@@ -78,26 +78,37 @@ final class InkPenRibbonRenderer {
         return result
     }
 
-    /// Render strokes WHITE (coverage = alpha) into a buffer for depositing.
+    /// 2× supersample so a ~1px dye line gets real anti-aliasing; the deposit's
+    /// linear sample then box-downsamples it to dye res cleanly.
+    private static let superSample = 2
+
+    /// Render strokes WHITE (coverage = alpha) into a SUPERSAMPLED buffer and
+    /// lightly feather it. The deposit samples this by uv, downsampling to dye res.
     private func coverageBuffer(_ strokes: [StrokeTessellator.Stroke], w: Int, h: Int) -> CVPixelBuffer? {
         guard let line else { return nil }
+        let ss = Self.superSample
+        let sw = w * ss, sh = h * ss
+        let f = Float(ss)
+        // White, scaled into the supersampled buffer (points + widths × ss).
         let white = strokes.map { s -> StrokeTessellator.Stroke in
             var s = s
             s.color = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
+            s.points = s.points.map { CGPoint(x: $0.x * CGFloat(ss), y: $0.y * CGFloat(ss)) }
+            s.widths = s.widths?.map { $0 * f }
+            s.baseWidth *= f
             return s
         }
-        // Smooth filled ribbon (miter strip + round end caps), rendered hard.
-        guard let hard = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage-hard", width: w, height: h)),
+        // Smooth filled ribbon (miter strip + round end caps), rendered hard at ss res.
+        guard let hard = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage-hard", width: sw, height: sh)),
               line.render(strokes: white, ribbon: true, roundCaps: true, into: hard) else { return nil }
-        // FEATHER the edge. The watercolor display edge-enhances density gradients;
-        // a hard thin ink line is gradient-everywhere → a "pixelated caterpillar".
-        // Spreading the edge over a few dye texels (small per-texel gradient) makes
-        // a thin stroke read as a smooth ink mark instead. ~1px sigma is enough.
-        guard let soft = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: w, height: h)) else { return hard }
-        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        // FEATHER lightly (the watercolor display edge-enhances density gradients;
+        // a hard thin ink line would read as a "pixelated caterpillar"). Sigma is in
+        // ss-pixels → ~0.6 dye px, just enough to soften the per-texel gradient.
+        guard let soft = try? pool.makeBuffer(format: FrameFormat(id: "pen-coverage", width: sw, height: sh)) else { return hard }
+        let rect = CGRect(x: 0, y: 0, width: sw, height: sh)
         let blurred = CIImage(cvPixelBuffer: hard)
             .clampedToExtent()
-            .applyingGaussianBlur(sigma: 0.8)
+            .applyingGaussianBlur(sigma: Double(ss) * 0.9)
             .cropped(to: rect)
         ciContext.render(blurred, to: soft)
         return soft
@@ -145,16 +156,17 @@ final class InkPenRibbonRenderer {
             apparentOutPx = uiSize * Float(outH) * worldHeight / (viewHeight * extent)
         }
         let dyeScale = Float(bufH) / Float(max(1, outH))
-        // Floor at a few dye px: a sub-~3px diagonal ink line aliases into a dashed
-        // core even with MSAA (it's below the dye's representable line width). The
-        // feather smooths the rest.
-        let baseWidthPx = max(3, apparentOutPx * dyeScale * viewHeight / worldHeight)
+        // Floor at ~1 dye px (a true hairline). The coverage is supersampled +
+        // lightly feathered (see coverageBuffer) so even a 1px line stays smooth
+        // instead of aliasing into a dashed core.
+        let baseWidthPx = max(1, apparentOutPx * dyeScale * viewHeight / worldHeight)
 
-        // Decimate to a segment spacing >= the stroke width. The miter ribbon goes
-        // unstable (each tiny segment renders as a separate lozenge → bead-chain)
-        // when segments are shorter than the width; this keeps them longer so the
-        // strip stays a clean continuous band at any width.
-        let pts = Self.decimate(smoothPts, minGap: CGFloat(max(2, baseWidthPx)))
+        // Keep the DENSE smoothed centerline: at dense spacing the angle between
+        // consecutive segments is tiny (cosA≈1), so the miter offset never bumps
+        // the width — no per-vertex bead-chain. (Decimating to sparse points made
+        // each vertex a visible miter bump.) Thin-line aliasing is handled by the
+        // supersample + feather in coverageBuffer, not by point spacing.
+        let pts = smoothPts
         guard pts.count > 1 else { return nil }
 
         // CONSTANT width along the body. (A per-point speed→width taper was keyed
@@ -176,21 +188,6 @@ final class InkPenRibbonRenderer {
             widths[i] *= ease
         }
         return StrokeTessellator.Stroke(points: pts, color: color, baseWidth: baseWidthPx, widths: widths)
-    }
-
-    /// Keep points spaced at least `minGap` apart (always keeping the last), so
-    /// the ribbon's segments stay longer than its width.
-    private static func decimate(_ p: [CGPoint], minGap: CGFloat) -> [CGPoint] {
-        guard p.count > 2, minGap > 0 else { return p }
-        var out: [CGPoint] = [p[0]]
-        let gap2 = minGap * minGap
-        for i in 1..<(p.count - 1) {
-            let last = out[out.count - 1]
-            let dx = p[i].x - last.x, dy = p[i].y - last.y
-            if dx * dx + dy * dy >= gap2 { out.append(p[i]) }
-        }
-        out.append(p[p.count - 1])
-        return out
     }
 
     /// Iterated binomial [0.25, 0.5, 0.25] low-pass that removes sub-pixel jitter

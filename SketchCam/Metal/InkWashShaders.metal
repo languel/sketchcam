@@ -587,11 +587,18 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
         return dot(8.0 * (1.0 - exp(-d * 0.125)), float3(1.0));
     };
     float2 worldTexel = p.texel;
+    float ctr = displayDensity(worldUV);
     float l = displayDensity(worldUV - float2(worldTexel.x, 0.0));
     float r = displayDensity(worldUV + float2(worldTexel.x, 0.0));
     float b = displayDensity(worldUV - float2(0.0, worldTexel.y));
     float t = displayDensity(worldUV + float2(0.0, worldTexel.y));
     float edge = length(float2(r - l, t - b));
+    // Ridge detector: a hairline is a sharp local maximum (strongly negative
+    // Laplacian); a wash rim is a step (Laplacian ≈ 0). Suppress edge-enhancement
+    // on ridges so thin ink lines don't quantize into a "caterpillar", while wash
+    // edges keep their crisp dark rim.
+    float lap = (l + r + b + t) - 4.0 * ctr;
+    float ridge = clamp(-lap * 1.5, 0.0, 1.0);
     float2 px = uv * p.res;
     float2 grainSeed = float2(p.grainScaleSeed.z * 17.41, p.grainScaleSeed.z * 7.23);
     float grain = fbm(px * p.grainScaleSeed.xy + 31.7 + grainSeed);
@@ -605,7 +612,7 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     // subpixel hairlines it quantizes the one-texel gradient and reads as a
     // pixelated caterpillar. Fade the boost in only once there is enough pigment
     // coverage for an actual edge.
-    float hairlineEdgeGate = smoothstep(0.18, 1.2, c + pw.a);
+    float hairlineEdgeGate = smoothstep(0.18, 1.2, c + pw.a) * (1.0 - ridge);
     absb *= 1.0 + edge * p.edge * hairlineEdgeGate;
     float3 col = paper * exp(-absb);
     float cov = 1.0 - exp(-pw.a * 2.2);
