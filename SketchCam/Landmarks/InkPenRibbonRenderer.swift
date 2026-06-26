@@ -30,32 +30,34 @@ final class InkPenRibbonRenderer {
         let wh = CGFloat(max(0.000_001, canvas.worldHeight))
         var result: [MetalInkPenDeposit] = []
 
-        // Committed pen strokes: deposit each ONCE.
+        // Committed pen strokes: deposit each ONCE into the dye (clean — a single
+        // SDF, no frame-to-frame accretion). Wash-pushable afterwards.
         for path in committed where isPen(path) && !depositedIDs.contains(path.id) {
             depositedIDs.insert(path.id)
             if let pts = Self.centerline(path.points, worldHeight: wh) {
                 result.append(MetalInkPenDeposit(points: pts,
                                                  uiSize: path.width ?? settings.landmarks.inkWidth,
                                                  space: path.brushSpace ?? .screen,
-                                                 color: path.color ?? settings.landmarks.inkColor))
+                                                 color: path.color ?? settings.landmarks.inkColor,
+                                                 isLive: false))
             }
         }
         // Forget ids no longer present (clear / undo) so a re-added path re-deposits.
         depositedIDs.formIntersection(Set(committed.map { $0.id }))
 
-        // In-progress pen stroke: accumulate the per-frame point deltas and deposit
-        // the whole growing centerline every frame (re-depositing while drawing is
-        // fine — no wash competes during a pen gesture).
+        // In-progress pen stroke: deposited into the LIVE preview texture, which the
+        // engine CLEARS every frame — so the preview is the SDF of the current whole
+        // curve, never an accreting MAX-union (that union was the lumps). On release
+        // the stroke becomes a committed path and deposits cleanly into the dye.
         if let liveSample, liveSample.brushMode == .pen {
             if liveID != liveSample.id { liveID = liveSample.id; liveAccumPoints = [] }
-            // Live points arrive normalized (worldPoint / worldHeight); un-normalize
-            // to world so they share the committed paths' coordinate space.
             liveAccumPoints.append(contentsOf: livePoints.map { CGPoint(x: $0.point.x * wh, y: $0.point.y * wh) })
             if let pts = Self.centerline(liveAccumPoints, worldHeight: wh) {
                 result.append(MetalInkPenDeposit(points: pts,
                                                  uiSize: liveSample.width,
                                                  space: liveSample.brushSpace,
-                                                 color: liveSample.color))
+                                                 color: liveSample.color,
+                                                 isLive: true))
             }
         } else {
             liveID = nil

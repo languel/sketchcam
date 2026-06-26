@@ -90,6 +90,9 @@ struct MetalInkPenDeposit {
     let uiSize: Float
     let space: CanvasBrushSpace
     let color: RGBAColor
+    /// In-progress stroke → the cleared-every-frame preview texture (no accretion);
+    /// committed stroke → the persistent dye (once).
+    let isLive: Bool
 }
 
 final class MetalInkEngine {
@@ -268,6 +271,10 @@ final class MetalInkEngine {
     /// Pigment baked permanent by Fix — displayed but never re-mobilized by the
     /// wash lift, so a fixed drawing can't be washed/displaced.
     private var locked: MTLTexture?
+    /// In-progress pen preview, CLEARED and re-deposited every frame from the SDF
+    /// of the whole current curve — so the live stroke never accretes (the old
+    /// per-frame MAX-union into the dye was what lumped curves).
+    private var penLive: MTLTexture?
     private var divergence: MTLTexture?
     private var curl: MTLTexture?
     private var outputBuffer: CVPixelBuffer?
@@ -339,8 +346,7 @@ final class MetalInkEngine {
     /// (one `ink_deposit_polyline` pass over the stroke bbox) — a perfectly smooth
     /// constant-width stroke at any width, no chain/scallop/bulge artifacts. Radius
     /// comes from the same resolver as the wash, so sizes match.
-    private func depositPenStroke(_ deposit: MetalInkPenDeposit, commandBuffer: MTLCommandBuffer) {
-        guard let ink else { return }
+    private func depositPenStroke(_ deposit: MetalInkPenDeposit, into target: MTLTexture, commandBuffer: MTLCommandBuffer) {
         // Cap the segment count so the per-pixel inner loop stays cheap on long
         // strokes (the SDF rounds the decimated path the same way).
         var pts = deposit.points
@@ -349,7 +355,7 @@ final class MetalInkEngine {
             pts = (0..<768).map { pts[Int((Double($0) * stride).rounded())] }
         }
         guard pts.count > 1 else { return }
-        let w = ink.read.width, h = ink.read.height
+        let w = target.width, h = target.height
         let pixel = 1 / Float(max(h, 1))
         let radius = max(resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space), 0.05 * pixel)
         let edge = min(0.7 * pixel, max(0.12 * pixel, radius * 0.55))
@@ -371,7 +377,7 @@ final class MetalInkEngine {
         guard let ptsBuf = device.makeBuffer(bytes: pts, length: pts.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared),
               let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(depositPSO)
-        encoder.setTexture(ink.read, index: 0)
+        encoder.setTexture(target, index: 0)
         encoder.setBuffer(ptsBuf, offset: 0, index: 0)
         encoder.setBytes(&params, length: MemoryLayout<PolyDepositParams>.stride, index: 1)
         encoder.dispatchThreads(MTLSize(width: ex - ox + 1, height: ey - oy + 1, depth: 1),
@@ -692,10 +698,17 @@ final class MetalInkEngine {
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
-            // Deposit pen strokes into the ink dye as capsule chains (before the
-            // sim, so a concurrent wash advects them). The pen "becomes ink" here.
+            // Pen deposits: committed strokes → the dye (once, before the sim so a
+            // concurrent wash advects them); the in-progress stroke → penLive, which
+            // we CLEAR first so the preview is the current curve, never an accreting
+            // union (that union lumped the curves).
+            if let penLive { encodeClear(penLive, commandBuffer: commandBuffer) }
             for deposit in penDeposits {
-                depositPenStroke(deposit, commandBuffer: commandBuffer)
+                if deposit.isLive {
+                    if let penLive { depositPenStroke(deposit, into: penLive, commandBuffer: commandBuffer) }
+                } else if let ink {
+                    depositPenStroke(deposit, into: ink.read, commandBuffer: commandBuffer)
+                }
             }
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
@@ -854,8 +867,9 @@ final class MetalInkEngine {
         fixed = makeDouble(width: dyeW, height: dyeH, format: .rgba16Float)
         wet = makeDouble(width: dyeW, height: dyeH, format: .r16Float)
         locked = makeTexture(width: dyeW, height: dyeH, format: .rgba16Float)
+        penLive = makeTexture(width: dyeW, height: dyeH, format: .rgba16Float)
         guard velocity != nil, pressure != nil, divergence != nil, curl != nil,
-              ink != nil, fixed != nil, wet != nil, locked != nil else { return false }
+              ink != nil, fixed != nil, wet != nil, locked != nil, penLive != nil else { return false }
 
         guard let buffer = try? PixelBufferUtils.makePixelBuffer(format: FrameFormat(id: "metal-ink-layer", width: width, height: height)) else {
             return false
@@ -1500,7 +1514,7 @@ final class MetalInkEngine {
     }
 
     private func render(settings: ProcessingSettings, paperConfig: PaperConfig, canvasContext: CanvasRenderContext, commandBuffer: MTLCommandBuffer) {
-        guard let ink, let fixed, let wet, let locked, let outputTexture else { return }
+        guard let ink, let fixed, let wet, let locked, let penLive, let outputTexture else { return }
         let l = settings.landmarks
         let outputAspect = CGFloat(outputTexture.width) / CGFloat(max(1, outputTexture.height))
         let worldRect = canvasContext.worldPixelRect(aspect: outputAspect, includeGuard: false)
@@ -1535,7 +1549,7 @@ final class MetalInkEngine {
                 Float(visibleWorldRect.height / worldHeight)
             )
         )
-        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, paperTexture, outputTexture], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
+        encode(displayPSO, textures: [ink.read, fixed.read, wet.read, locked, paperTexture, outputTexture, penLive], bytes: &params, length: MemoryLayout<DisplayParams>.stride, grid: outputTexture, commandBuffer: commandBuffer)
     }
 
     private func encodeClear(_ texture: MTLTexture, commandBuffer: MTLCommandBuffer) {

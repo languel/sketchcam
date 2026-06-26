@@ -590,6 +590,7 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
                         texture2d<float, access::sample> locked [[texture(3)]],
                         texture2d<float, access::sample> paperTex [[texture(4)]],
                         texture2d<float, access::write> outTex [[texture(5)]],
+                        texture2d<float, access::sample> penLive [[texture(6)]],
                         constant InkDisplayParams &p [[buffer(0)]],
                         uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
@@ -598,11 +599,14 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float2 worldUV = p.worldView.xy + uv * p.worldView.zw;
     bool insideWorld = all(worldUV >= float2(0.0)) && all(worldUV <= float2(1.0));
     // locked = pigment baked permanent by Fix (the wash lift never touches it).
+    // penLive = the in-progress pen preview (added so it renders identically to a
+    // committed stroke); it is NOT faded (it's a transient preview, not pigment).
     auto pig = [&](float2 q) {
         if (!all(q >= float2(0.0)) || !all(q <= float2(1.0))) {
             return float4(0.0);
         }
-        return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade;
+        return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade
+             + penLive.sample(s, q);
     };
     float4 pw = pig(worldUV);
     float3 dens = pw.rgb;
