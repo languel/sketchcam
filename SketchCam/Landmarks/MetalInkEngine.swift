@@ -81,11 +81,14 @@ final class MetalInkStateSnapshot: @unchecked Sendable {
     }
 }
 
-/// A pre-rendered pen-ribbon coverage image to deposit into the ink dye this
-/// frame (so the wash can then push it). `coverage` is white-on-clear (MSAA);
-/// `color` is the pen colour whose absorption is written into the dye.
+/// A pen stroke to deposit into the ink dye this frame (so the wash can push it),
+/// as a capsule chain — the same SDF primitive as the wash, so it is smooth at any
+/// width/zoom. `points` is the smoothed centerline in normalized-world coords;
+/// the engine resolves the radius from `uiSize`/`space` exactly like the wash.
 struct MetalInkPenDeposit {
-    let coverage: CVPixelBuffer
+    let points: [SIMD2<Float>]
+    let uiSize: Float
+    let space: CanvasBrushSpace
     let color: RGBAColor
 }
 
@@ -322,17 +325,22 @@ final class MetalInkEngine {
         return (resolved.field.texture, max(0, resolved.strength))
     }
 
-    /// Deposit a pre-rendered coverage image (a tessellated pen ribbon) into the
-    /// ink dye: ink = max(ink, absorption(color) * coverage). After this the
-    /// ribbon "is ink" and the wash sim advects it.
-    private func depositRibbon(_ deposit: MetalInkPenDeposit, commandBuffer: MTLCommandBuffer) {
-        guard let ink else { return }
-        let w = CVPixelBufferGetWidth(deposit.coverage), h = CVPixelBufferGetHeight(deposit.coverage)
-        guard let covTex = makeTexture(from: deposit.coverage, width: w, height: h) else { return }
+    /// Deposit a pen stroke into the ink dye as a CAPSULE CHAIN (the wash's SDF
+    /// primitive, constant radius, max blend → a smooth scallop-free stroke). The
+    /// radius comes from the same resolver as the wash, so sizes match. After this
+    /// the pen "is ink" and the wash sim advects it.
+    private func depositPenStroke(_ deposit: MetalInkPenDeposit, commandBuffer: MTLCommandBuffer) {
+        guard let ink, deposit.points.count > 1 else { return }
+        let radius = resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space)
         let abs = absorption(for: deposit.color)
-        var params = SIMD4<Float>(abs.x, abs.y, abs.z, 0)
-        encode(depositPSO, textures: [ink.read, covTex], bytes: &params,
-               length: MemoryLayout<SIMD4<Float>>.stride, grid: ink.read, commandBuffer: commandBuffer)
+        let color = SIMD4<Float>(abs.x, abs.y, abs.z, 0)
+        var prev = deposit.points[0]
+        for i in 1..<deposit.points.count {
+            let cur = deposit.points[i]
+            splatCapsule(texture: ink.read, a: prev, b: cur, ra: radius, rb: radius,
+                         color: color, blend: .max, commandBuffer: commandBuffer)
+            prev = cur
+        }
     }
 
     private func injectMotionWetness(amount: Float, commandBuffer: MTLCommandBuffer) {
@@ -648,10 +656,10 @@ final class MetalInkEngine {
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
-            // Deposit rendered pen ribbons into the ink dye (before the sim, so a
-            // concurrent wash advects them). The ribbon "becomes ink" here.
+            // Deposit pen strokes into the ink dye as capsule chains (before the
+            // sim, so a concurrent wash advects them). The pen "becomes ink" here.
             for deposit in penDeposits {
-                depositRibbon(deposit, commandBuffer: commandBuffer)
+                depositPenStroke(deposit, commandBuffer: commandBuffer)
             }
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)

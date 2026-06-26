@@ -5030,8 +5030,10 @@ private struct ExportWorldPreviewInteractionOverlay: NSViewRepresentable {
                 var next = startCamera
                 let dx = (point.x - startPoint.x) / max(1, worldRect.width) * max(1, worldHeight)
                 let dy = (point.y - startPoint.y) / max(1, worldRect.height) * max(1, worldHeight)
-                next.center.x -= dx
-                next.center.y -= dy
+                // Drag the viewport so it FOLLOWS the cursor (grab-the-frame), not
+                // grab-the-canvas (which felt inverted).
+                next.center.x += dx
+                next.center.y += dy
                 onCamera?(clamped(next))
             case let .crop(handle, startPoint, startInsets):
                 let dx = Double((point.x - startPoint.x) / max(1, viewportRect.width))

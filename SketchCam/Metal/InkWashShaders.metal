@@ -593,12 +593,19 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float b = displayDensity(worldUV - float2(0.0, worldTexel.y));
     float t = displayDensity(worldUV + float2(0.0, worldTexel.y));
     float edge = length(float2(r - l, t - b));
-    // Ridge detector: a hairline is a sharp local maximum (strongly negative
-    // Laplacian); a wash rim is a step (Laplacian ≈ 0). Suppress edge-enhancement
-    // on ridges so thin ink lines don't quantize into a "caterpillar", while wash
-    // edges keep their crisp dark rim.
-    float lap = (l + r + b + t) - 4.0 * ctr;
-    float ridge = clamp(-lap * 1.5, 0.0, 1.0);
+    // Ridge detector: a thin ink LINE is a local maximum in every direction (low
+    // density a few texels out on BOTH sides); a wash RIM is a step (high on one
+    // side). Sample the Laplacian at a WIDER (≈3-texel) offset so it catches not
+    // just 1px hairlines but the few-px pen lines too — those are what quantize
+    // into a "caterpillar" under edge-enhancement. Wash rims (steps over many
+    // texels) keep a near-zero Laplacian here, so they retain their crisp rim.
+    float2 wt = worldTexel * 3.0;
+    float lw = displayDensity(worldUV - float2(wt.x, 0.0));
+    float rw = displayDensity(worldUV + float2(wt.x, 0.0));
+    float bw = displayDensity(worldUV - float2(0.0, wt.y));
+    float tw = displayDensity(worldUV + float2(0.0, wt.y));
+    float lap = (lw + rw + bw + tw) - 4.0 * ctr;
+    float ridge = clamp(-lap * 1.1, 0.0, 1.0);
     float2 px = uv * p.res;
     float2 grainSeed = float2(p.grainScaleSeed.z * 17.41, p.grainScaleSeed.z * 7.23);
     float grain = fbm(px * p.grainScaleSeed.xy + 31.7 + grainSeed);
