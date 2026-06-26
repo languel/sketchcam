@@ -599,14 +599,14 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     float2 worldUV = p.worldView.xy + uv * p.worldView.zw;
     bool insideWorld = all(worldUV >= float2(0.0)) && all(worldUV <= float2(1.0));
     // locked = pigment baked permanent by Fix (the wash lift never touches it).
-    // penLive = the in-progress pen preview (added so it renders identically to a
-    // committed stroke); it is NOT faded (it's a transient preview, not pigment).
+    // NOTE: the PEN is NOT part of `pig` — it's a clean vector layer composited at
+    // the very end, so the watercolor grain/edge effects (which articulate the
+    // WASH) don't roughen a crisp ink line.
     auto pig = [&](float2 q) {
         if (!all(q >= float2(0.0)) || !all(q <= float2(1.0))) {
             return float4(0.0);
         }
-        return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade
-             + penLive.sample(s, q);
+        return (ink.sample(s, q) + fixedTex.sample(s, q) + locked.sample(s, q)) * p.inkFade;
     };
     float4 pw = pig(worldUV);
     float3 dens = pw.rgb;
@@ -669,7 +669,13 @@ kernel void ink_display(texture2d<float, access::sample> ink [[texture(0)]],
     col *= mix(float3(1.0), p.washTint.rgb, ws * p.washTint.a);
     float3 wcol = mix(float3(0.985, 0.982, 0.972), float3(0.945, 0.955, 1.0), p.whiteTint);
     col = mix(col, wcol, cov);
-    float densityAlpha = clamp(1.0 - exp(-(c + pw.a) * 1.4), 0.0, 1.0);
+    // PEN — clean vector layer composited LAST, over the finished wash+paper, with
+    // NO grain/edge: a smooth crisp ink line. (The pen SDF is anti-aliased; the
+    // watercolor effects above are exactly what roughened it when it shared the dye.)
+    float3 penAbs = insideWorld ? penLive.sample(s, worldUV).rgb : float3(0.0);
+    float penC = dot(penAbs, float3(1.0));
+    col *= exp(-penAbs);
+    float densityAlpha = clamp(1.0 - exp(-(c + pw.a + penC) * 1.4), 0.0, 1.0);
     float alpha = p.opacity * mix(densityAlpha, 1.0, p.paperOn);
     outTex.write(float4(col * alpha, alpha), gid);
 }

@@ -19,9 +19,6 @@ final class InkPenRibbonRenderer {
     // in-progress path here, keyed by the live stroke id, and reset on end.
     private var liveID: UUID?
     private var liveAccumPoints: [CGPoint] = []
-    /// Committed paths already deposited into the dye (deposit once, then the
-    /// wash owns the pigment — re-depositing would fight its displacement).
-    private var depositedIDs: Set<UUID> = []
 
     /// The pen capsule-chain deposits to lay into the ink dye this frame.
     func deposits(committed: [InkEditorPath], liveSample: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
@@ -30,25 +27,18 @@ final class InkPenRibbonRenderer {
         let wh = CGFloat(max(0.000_001, canvas.worldHeight))
         var result: [MetalInkPenDeposit] = []
 
-        // Committed pen strokes: deposit each ONCE into the dye (clean — a single
-        // SDF, no frame-to-frame accretion). Wash-pushable afterwards.
-        for path in committed where isPen(path) && !depositedIDs.contains(path.id) {
-            depositedIDs.insert(path.id)
+        // The pen layer is re-rendered FRESH every frame (the engine clears penLive),
+        // so emit ALL committed pen strokes + the in-progress one. No deposit-once /
+        // accretion bookkeeping — a fresh SDF render each frame is always clean, and
+        // Clear/undo just stop emitting the stroke.
+        for path in committed where isPen(path) {
             if let pts = Self.centerline(path.points, worldHeight: wh) {
                 result.append(MetalInkPenDeposit(points: pts,
                                                  uiSize: path.width ?? settings.landmarks.inkWidth,
                                                  space: path.brushSpace ?? .screen,
-                                                 color: path.color ?? settings.landmarks.inkColor,
-                                                 isLive: false))
+                                                 color: path.color ?? settings.landmarks.inkColor))
             }
         }
-        // Forget ids no longer present (clear / undo) so a re-added path re-deposits.
-        depositedIDs.formIntersection(Set(committed.map { $0.id }))
-
-        // In-progress pen stroke: deposited into the LIVE preview texture, which the
-        // engine CLEARS every frame — so the preview is the SDF of the current whole
-        // curve, never an accreting MAX-union (that union was the lumps). On release
-        // the stroke becomes a committed path and deposits cleanly into the dye.
         if let liveSample, liveSample.brushMode == .pen {
             if liveID != liveSample.id { liveID = liveSample.id; liveAccumPoints = [] }
             liveAccumPoints.append(contentsOf: livePoints.map { CGPoint(x: $0.point.x * wh, y: $0.point.y * wh) })
@@ -56,8 +46,7 @@ final class InkPenRibbonRenderer {
                 result.append(MetalInkPenDeposit(points: pts,
                                                  uiSize: liveSample.width,
                                                  space: liveSample.brushSpace,
-                                                 color: liveSample.color,
-                                                 isLive: true))
+                                                 color: liveSample.color))
             }
         } else {
             liveID = nil

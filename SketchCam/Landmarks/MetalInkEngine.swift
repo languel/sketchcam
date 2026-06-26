@@ -90,9 +90,6 @@ struct MetalInkPenDeposit {
     let uiSize: Float
     let space: CanvasBrushSpace
     let color: RGBAColor
-    /// In-progress stroke → the cleared-every-frame preview texture (no accretion);
-    /// committed stroke → the persistent dye (once).
-    let isLive: Bool
 }
 
 final class MetalInkEngine {
@@ -357,7 +354,15 @@ final class MetalInkEngine {
         guard pts.count > 1 else { return }
         let w = target.width, h = target.height
         let pixel = 1 / Float(max(h, 1))
-        let radius = max(resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space), 0.05 * pixel)
+        // A line thinner than ~1px can't be CONTINUOUS on a pixel grid — the SDF
+        // only lights texels it passes near, so a sub-pixel pen breaks into dots.
+        // Floor the radius at ~0.6px (≈1.2px diameter, continuous) and below that
+        // make the stroke FAINTER instead of thinner (a light-touch pen) by scaling
+        // the deposited density — so the thinnest sizes stay smooth, not dotted.
+        let requested = resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space)
+        let minRadius = 0.6 * pixel
+        let radius = max(requested, minRadius)
+        let densityScale = max(0.25, min(1, requested / minRadius))
         let edge = min(0.7 * pixel, max(0.12 * pixel, radius * 0.55))
         let margin = radius + edge
         var minX = Float.greatestFiniteMagnitude, minY = Float.greatestFiniteMagnitude
@@ -698,16 +703,14 @@ final class MetalInkEngine {
             if liveActive {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
-            // Pen deposits: committed strokes → the dye (once, before the sim so a
-            // concurrent wash advects them); the in-progress stroke → penLive, which
-            // we CLEAR first so the preview is the current curve, never an accreting
-            // union (that union lumped the curves).
-            if let penLive { encodeClear(penLive, commandBuffer: commandBuffer) }
-            for deposit in penDeposits {
-                if deposit.isLive {
-                    if let penLive { depositPenStroke(deposit, into: penLive, commandBuffer: commandBuffer) }
-                } else if let ink {
-                    depositPenStroke(deposit, into: ink.read, commandBuffer: commandBuffer)
+            // PEN: a clean vector layer kept entirely OUT of the fluid dye (so the
+            // watercolor grain/edge never touch it). Clear penLive and re-deposit
+            // ALL pen strokes (committed + live) fresh every frame as polyline SDFs —
+            // no accretion, no dye-resolution coupling. The display composites it.
+            if let penLive {
+                encodeClear(penLive, commandBuffer: commandBuffer)
+                for deposit in penDeposits {
+                    depositPenStroke(deposit, into: penLive, commandBuffer: commandBuffer)
                 }
             }
             if motionWetDriven {
