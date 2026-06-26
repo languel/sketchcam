@@ -4486,7 +4486,11 @@ private struct LivePreviewImage: View {
         if let image = live.previewImage {
             Image(image, scale: 1, label: Text("SketchCam preview"))
                 .resizable()
-                .interpolation(.none)
+                // High-quality resampling: the rendered frame is scaled to fit the
+                // canvas (rarely 1:1, esp. on Retina). Nearest-neighbor (.none)
+                // staircased hard diagonal edges (thin pen strokes); .high gives
+                // smooth bilinear scaling. Soft content (camera/wash) is unaffected.
+                .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
         } else {
             ProgressView()
@@ -4721,7 +4725,7 @@ private struct ExportPreviewImage: View {
         GeometryReader { proxy in
             let content = Image(decorative: image, scale: 1)
                 .resizable()
-                .interpolation(.none)
+                .interpolation(.high)
             switch framing {
             case .fit:
                 content.scaledToFit().frame(width: proxy.size.width, height: proxy.size.height)
