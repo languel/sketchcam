@@ -308,23 +308,51 @@ kernel void ink_splat_capsule(texture2d<float, access::read_write> target [[text
     target.write(p.blendMode == 1u ? max(old, mark) : old + mark, px);
 }
 
-// Deposit a pre-rendered COVERAGE image (a tessellated pen ribbon, white-on-clear,
-// MSAA) into the ink dye: ink = max(ink, absorption * coverage). This is how a
-// rendered ribbon "becomes ink" — once deposited, the wash advects it like any
-// other pigment. Coverage is sampled (it may be a different resolution than the
-// dye). `color` is the pen absorption (rgb), alpha 0 (matching the splat dye).
-struct InkDepositParams { float4 color; };
-kernel void ink_deposit(texture2d<float, access::read_write> ink [[texture(0)]],
-                        texture2d<float, access::sample> coverage [[texture(1)]],
-                        constant InkDepositParams &p [[buffer(0)]],
-                        uint2 gid [[thread_position_in_grid]]) {
-    if (gid.x >= ink.get_width() || gid.y >= ink.get_height()) return;
-    float2 uv = (float2(gid) + 0.5) / float2(ink.get_width(), ink.get_height());
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-    float cov = coverage.sample(s, uv).a;
-    if (cov <= 0.001) return;
-    float4 old = ink.read(gid);
-    ink.write(max(old, p.color * cov), gid);
+// Deposit a pen stroke into the ink dye as the SIGNED DISTANCE FIELD of its whole
+// polyline centerline (the known-robust "distance-field stroke" / Minkowski sum
+// with a disc): for each dye pixel, coverage = smoothstep over (radius − distance
+// to the nearest segment). One pass over the stroke's bbox → a perfectly smooth,
+// constant-width stroke at ANY width: no miter scallops, no capsule-chain vertex
+// bulges, no salami. `color` is the pen absorption (rgb), max-blended in so the
+// wash can then advect it. Radii/edge are in y-uv units (the dye splat metric).
+struct PolyDepositParams {
+    float4 color;
+    float2 targetSize;
+    float2 origin;
+    float aspect;
+    float radius;
+    float edge;
+    uint count;
+};
+kernel void ink_deposit_polyline(texture2d<float, access::read_write> ink [[texture(0)]],
+                                 device const float2 *pts [[buffer(0)]],
+                                 constant PolyDepositParams &p [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+    uint2 px = uint2(p.origin) + gid;
+    if (px.x >= ink.get_width() || px.y >= ink.get_height()) return;
+    // 2x2 SUPERSAMPLE: a thin line is only ~1-2 dye texels wide, so evaluating the
+    // SDF once per texel CENTER aliases it into a bead-chain as it weaves across
+    // the grid diagonally. Averaging four sub-texel samples anti-aliases it into a
+    // smooth line (this is what was beading regardless of deposit method).
+    const float2 offs[4] = { float2(-0.25,-0.25), float2(0.25,-0.25), float2(-0.25,0.25), float2(0.25,0.25) };
+    float mask = 0.0;
+    for (int s = 0; s < 4; s++) {
+        float2 uv = (float2(px) + 0.5 + offs[s]) / p.targetSize;
+        float2 P = float2(uv.x * p.aspect, uv.y);
+        float best = 1e9;
+        for (uint i = 0; i + 1 < p.count; i++) {
+            float2 A = float2(pts[i].x * p.aspect, pts[i].y);
+            float2 B = float2(pts[i + 1].x * p.aspect, pts[i + 1].y);
+            float2 ab = B - A;
+            float t = clamp(dot(P - A, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0);
+            best = min(best, length(P - (A + ab * t)));
+        }
+        mask += 1.0 - smoothstep(p.radius - p.edge, p.radius + p.edge, best);
+    }
+    mask *= 0.25;
+    if (mask <= 0.0) return;
+    float4 old = ink.read(px);
+    ink.write(max(old, p.color * mask), px);
 }
 
 kernel void ink_advect_velocity(texture2d<float, access::sample> velocityIn [[texture(0)]],

@@ -325,22 +325,58 @@ final class MetalInkEngine {
         return (resolved.field.texture, max(0, resolved.strength))
     }
 
-    /// Deposit a pen stroke into the ink dye as a CAPSULE CHAIN (the wash's SDF
-    /// primitive, constant radius, max blend → a smooth scallop-free stroke). The
-    /// radius comes from the same resolver as the wash, so sizes match. After this
-    /// the pen "is ink" and the wash sim advects it.
+    private struct PolyDepositParams {
+        var color: SIMD4<Float>
+        var targetSize: SIMD2<Float>
+        var origin: SIMD2<Float>
+        var aspect: Float
+        var radius: Float
+        var edge: Float
+        var count: UInt32
+    }
+
+    /// Deposit a pen stroke into the ink dye as the SDF of its whole polyline
+    /// (one `ink_deposit_polyline` pass over the stroke bbox) — a perfectly smooth
+    /// constant-width stroke at any width, no chain/scallop/bulge artifacts. Radius
+    /// comes from the same resolver as the wash, so sizes match.
     private func depositPenStroke(_ deposit: MetalInkPenDeposit, commandBuffer: MTLCommandBuffer) {
-        guard let ink, deposit.points.count > 1 else { return }
-        let radius = resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space)
-        let abs = absorption(for: deposit.color)
-        let color = SIMD4<Float>(abs.x, abs.y, abs.z, 0)
-        var prev = deposit.points[0]
-        for i in 1..<deposit.points.count {
-            let cur = deposit.points[i]
-            splatCapsule(texture: ink.read, a: prev, b: cur, ra: radius, rb: radius,
-                         color: color, blend: .max, commandBuffer: commandBuffer)
-            prev = cur
+        guard let ink else { return }
+        // Cap the segment count so the per-pixel inner loop stays cheap on long
+        // strokes (the SDF rounds the decimated path the same way).
+        var pts = deposit.points
+        if pts.count > 768 {
+            let stride = Double(pts.count - 1) / 767.0
+            pts = (0..<768).map { pts[Int((Double($0) * stride).rounded())] }
         }
+        guard pts.count > 1 else { return }
+        let w = ink.read.width, h = ink.read.height
+        let pixel = 1 / Float(max(h, 1))
+        let radius = max(resolveBaseRadius(uiSize: deposit.uiSize, space: deposit.space), 0.05 * pixel)
+        let edge = min(0.7 * pixel, max(0.12 * pixel, radius * 0.55))
+        let margin = radius + edge
+        var minX = Float.greatestFiniteMagnitude, minY = Float.greatestFiniteMagnitude
+        var maxX = -Float.greatestFiniteMagnitude, maxY = -Float.greatestFiniteMagnitude
+        for p in pts { minX = min(minX, p.x); minY = min(minY, p.y); maxX = max(maxX, p.x); maxY = max(maxY, p.y) }
+        let ox = max(Int(floor(Double((minX - margin) * Float(w)))), 0)
+        let oy = max(Int(floor(Double((minY - margin) * Float(h)))), 0)
+        let ex = min(Int(ceil(Double((maxX + margin) * Float(w)))), w - 1)
+        let ey = min(Int(ceil(Double((maxY + margin) * Float(h)))), h - 1)
+        guard ex >= ox, ey >= oy else { return }
+        let abs = absorption(for: deposit.color)
+        var params = PolyDepositParams(
+            color: SIMD4(abs.x, abs.y, abs.z, 0),
+            targetSize: SIMD2(Float(w), Float(h)),
+            origin: SIMD2(Float(ox), Float(oy)),
+            aspect: 1, radius: radius, edge: edge, count: UInt32(pts.count))
+        guard let ptsBuf = device.makeBuffer(bytes: pts, length: pts.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        encoder.setComputePipelineState(depositPSO)
+        encoder.setTexture(ink.read, index: 0)
+        encoder.setBuffer(ptsBuf, offset: 0, index: 0)
+        encoder.setBytes(&params, length: MemoryLayout<PolyDepositParams>.stride, index: 1)
+        encoder.dispatchThreads(MTLSize(width: ex - ox + 1, height: ey - oy + 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        encoder.endEncoding()
     }
 
     private func injectMotionWetness(amount: Float, commandBuffer: MTLCommandBuffer) {
@@ -387,7 +423,7 @@ final class MetalInkEngine {
               let injectWet = pso("ink_inject_wet"),
               let splat = pso("ink_splat"),
               let capsule = pso("ink_splat_capsule"),
-              let deposit = pso("ink_deposit"),
+              let deposit = pso("ink_deposit_polyline"),
               let accumulate = pso("ink_accumulate"),
               let advectVelocity = pso("ink_advect_velocity"),
               let controlForce = pso("ink_add_control_force"),
