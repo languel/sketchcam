@@ -5,9 +5,41 @@ import SwiftUI
 
 final class AppUIState: ObservableObject {
     @Published var debugOverlayVisible = false
+    @Published var layoutCommand: LayoutCommand?
 
     func toggleDebugOverlay() {
         debugOverlayVisible.toggle()
+    }
+
+    func sendLayoutCommand(_ command: LayoutCommand) {
+        layoutCommand = command
+    }
+}
+
+enum LayoutCommand: Equatable {
+    case showAll
+    case reset
+    case save(slot: Int)
+    case restore(slot: Int)
+    case delete(slot: Int)
+    case showTimeline
+}
+
+struct LayoutSnapshot: Codable {
+    var visibleTabsRaw: String
+    var bottomTabsRaw: String
+    var timelineDockVisible: Bool
+    var inspectorVisible: Bool
+    var inspectorFit: Bool
+}
+
+enum LayoutStorageKeys {
+    static let visibleTabs = "visibleControlTabs"
+    static let bottomTabs = "bottomControlTabs"
+    static let timelineDockVisible = "timelineDockVisible"
+
+    static func preset(_ slot: Int) -> String {
+        "layoutPreset.\(slot)"
     }
 }
 
@@ -92,9 +124,11 @@ struct ContentView: View {
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
     @State private var movieURLField = ""
     @State private var tab = ControlTab.layers
+    @State private var bottomTabID = ControlTab.ink.id
     /// Comma-separated ids of the tabs shown in the tab bar. Empty = default visible tabs.
-    @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
-    @AppStorage("timelineDockVisible") private var timelineDockVisible = true
+    @AppStorage(LayoutStorageKeys.visibleTabs) private var visibleTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.bottomTabs) private var bottomTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.timelineDockVisible) private var timelineDockVisible = true
     @AppStorage(InkUndoPreferences.gpuStateCountKey)
     private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
     @State private var inkTool = InkTool.draw
@@ -114,6 +148,10 @@ struct ContentView: View {
             model.prepareInkStrokeRecordsForCurrentSettings()
             registerShortcuts()
             ShortcutRegistry.shared.start()
+        }
+        .onReceive(appUI.$layoutCommand.compactMap { $0 }) { command in
+            applyLayoutCommand(command)
+            appUI.layoutCommand = nil
         }
         .onDisappear { model.stop() }
     }
@@ -145,14 +183,50 @@ struct ContentView: View {
     private var canvasDock: some View {
         VStack(spacing: 0) {
             previewPane
-            if timelineDockVisible {
-                timelineDock
-                    .frame(height: 132)
+            if timelineDockVisible || !bottomTabs.isEmpty {
+                bottomDock
+                    .frame(height: bottomTabs.isEmpty ? 132 : 220)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .top) { Divider() }
             }
         }
         .frame(minWidth: 120, minHeight: 68)
+    }
+
+    private var bottomDock: some View {
+        DockPanel(title: "Bottom Dock", systemImage: "rectangle.bottomthird.inset.filled", trailing: {
+            HStack(spacing: 6) {
+                if !bottomTabs.isEmpty {
+                    Picker("", selection: $bottomTabID) {
+                        ForEach(bottomTabs) { tab in
+                            Image(systemName: tab.icon)
+                                .help(tab.rawValue)
+                                .tag(tab.id)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 240)
+                }
+                panelMenuButton
+            }
+        }) {
+            if let bottomTab = selectedBottomTab {
+                VStack(alignment: .leading, spacing: 8) {
+                    panelMoveBar(for: bottomTab)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            tabContent(bottomTab)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else if timelineDockVisible {
+                timelineSummary
+            }
+        }
     }
 
     private var timelineDock: some View {
@@ -165,6 +239,11 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Hide timeline dock")
         }) {
+            timelineSummary
+        }
+    }
+
+    private var timelineSummary: some View {
             HStack(spacing: 10) {
                 TimelineMetric(label: "Strokes", value: "\(inkStrokeRecords.count)")
                 TimelineMetric(label: "Editable", value: "\(inkStrokeRecords.filter(\.isEditable).count)")
@@ -179,7 +258,6 @@ struct ContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
-        }
     }
 
     @ViewBuilder private var debugOverlay: some View {
@@ -293,16 +371,219 @@ struct ContentView: View {
         ControlTab.visibleTabs(from: visibleTabsRaw)
     }
 
+    private var bottomTabs: [ControlTab] {
+        tabs(from: bottomTabsRaw)
+    }
+
+    private var selectedBottomTab: ControlTab? {
+        if let selected = bottomTabs.first(where: { $0.id == bottomTabID }) {
+            return selected
+        }
+        return bottomTabs.first
+    }
+
+    private func tabs(from rawValue: String) -> [ControlTab] {
+        guard !rawValue.isEmpty else { return [] }
+        let ids = Set(rawValue.split(separator: ",").map(String.init))
+        return ControlTab.allCases.filter { ids.contains($0.id) }
+    }
+
     private func isTabVisible(_ t: ControlTab) -> Bool {
         visibleTabs.contains(t)
     }
 
+    private func isTabDockedBottom(_ t: ControlTab) -> Bool {
+        bottomTabs.contains(t)
+    }
+
     private func toggleTabVisible(_ t: ControlTab) {
-        var ids = Set(visibleTabs.map { $0.id })
-        if ids.contains(t.id) { ids.remove(t.id) } else { ids.insert(t.id) }
-        guard !ids.isEmpty else { return }
-        visibleTabsRaw = ControlTab.storageValue(for: Set(ControlTab.allCases.filter { ids.contains($0.id) }))
+        if isTabVisible(t) {
+            hidePanel(t)
+        } else {
+            dockPanelRight(t)
+        }
+    }
+
+    private func dockPanelRight(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.insert(panel)
+        bottom.remove(panel)
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        tab = panel
+        windowMode.panelVisible = true
+    }
+
+    private func dockPanelBottom(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.remove(panel)
+        bottom.insert(panel)
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        bottomTabID = panel.id
+        timelineDockVisible = true
         if !isTabVisible(tab) { tab = visibleTabs.first ?? .layers }
+    }
+
+    private func hidePanel(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.remove(panel)
+        bottom.remove(panel)
+        if right.isEmpty && bottom.isEmpty {
+            right.insert(.layers)
+        }
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        if !isTabVisible(tab) { tab = visibleTabs.first ?? .layers }
+        if bottomTabID == panel.id { bottomTabID = bottomTabs.first?.id ?? ControlTab.ink.id }
+    }
+
+    private func showAllPanels() {
+        visibleTabsRaw = ControlTab.storageValue(for: Set(ControlTab.allCases))
+        bottomTabsRaw = ""
+        timelineDockVisible = true
+        windowMode.panelVisible = true
+        windowMode.panelFit = true
+        tab = .layers
+    }
+
+    private func resetLayout() {
+        visibleTabsRaw = ""
+        bottomTabsRaw = ""
+        timelineDockVisible = true
+        windowMode.panelVisible = true
+        windowMode.panelFit = true
+        tab = .layers
+    }
+
+    private func applyLayoutCommand(_ command: LayoutCommand) {
+        switch command {
+        case .showAll:
+            showAllPanels()
+        case .reset:
+            resetLayout()
+        case .showTimeline:
+            timelineDockVisible = true
+        case .save(let slot):
+            saveLayout(slot: slot)
+        case .restore(let slot):
+            restoreLayout(slot: slot)
+        case .delete(let slot):
+            UserDefaults.standard.removeObject(forKey: LayoutStorageKeys.preset(slot))
+        }
+    }
+
+    private func currentLayoutSnapshot() -> LayoutSnapshot {
+        LayoutSnapshot(
+            visibleTabsRaw: visibleTabsRaw,
+            bottomTabsRaw: bottomTabsRaw,
+            timelineDockVisible: timelineDockVisible,
+            inspectorVisible: windowMode.panelVisible,
+            inspectorFit: windowMode.panelFit
+        )
+    }
+
+    private func saveLayout(slot: Int) {
+        guard let data = try? JSONEncoder().encode(currentLayoutSnapshot()) else { return }
+        UserDefaults.standard.set(data, forKey: LayoutStorageKeys.preset(slot))
+    }
+
+    private func restoreLayout(slot: Int) {
+        guard let data = UserDefaults.standard.data(forKey: LayoutStorageKeys.preset(slot)),
+              let snapshot = try? JSONDecoder().decode(LayoutSnapshot.self, from: data) else { return }
+        visibleTabsRaw = snapshot.visibleTabsRaw
+        bottomTabsRaw = snapshot.bottomTabsRaw
+        timelineDockVisible = snapshot.timelineDockVisible
+        windowMode.panelVisible = snapshot.inspectorVisible
+        windowMode.panelFit = snapshot.inspectorFit
+        tab = visibleTabs.first ?? .layers
+        bottomTabID = bottomTabs.first?.id ?? ControlTab.ink.id
+    }
+
+    private func panelPlacementText(_ panel: ControlTab) -> String {
+        if isTabVisible(panel) { return "Currently: Right" }
+        if isTabDockedBottom(panel) { return "Currently: Bottom" }
+        return "Currently: Hidden"
+    }
+
+    private var panelMenuButton: some View {
+        Menu {
+            Button("Dock Inspector Right") {
+                windowMode.panelFit = true
+                windowMode.panelVisible = true
+            }
+            Button("Float Inspector") {
+                windowMode.panelFit = false
+                windowMode.panelVisible = true
+            }
+            Button("Hide Inspector") {
+                windowMode.panelVisible = false
+            }
+            Divider()
+            Button("Show All Panels") { showAllPanels() }
+            Button("Reset Layout") { resetLayout() }
+            Toggle("Timeline", isOn: $timelineDockVisible)
+            Divider()
+            ForEach(ControlTab.allCases) { panel in
+                Menu(panel.rawValue) {
+                    Button("Dock Right") { dockPanelRight(panel) }
+                    Button("Dock Bottom") { dockPanelBottom(panel) }
+                    Button("Hide") { hidePanel(panel) }
+                    Divider()
+                    Text(panelPlacementText(panel))
+                }
+            }
+            Divider()
+            Menu("Layout Presets") {
+                ForEach(1...3, id: \.self) { slot in
+                    Button("Save Layout \(slot)") { saveLayout(slot: slot) }
+                    Button("Restore Layout \(slot)") { restoreLayout(slot: slot) }
+                    Button("Delete Layout \(slot)") {
+                        UserDefaults.standard.removeObject(forKey: LayoutStorageKeys.preset(slot))
+                    }
+                    if slot != 3 { Divider() }
+                }
+            }
+        } label: {
+            Image(systemName: "dock.rectangle")
+        }
+        .menuStyle(.borderlessButton)
+        .help("Move, hide, restore, or save panels")
+    }
+
+    private func panelMoveBar(for panel: ControlTab) -> some View {
+        HStack(spacing: 8) {
+            Label(panel.rawValue, systemImage: panel.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Right") { dockPanelRight(panel) }
+            Button("Bottom") { dockPanelBottom(panel) }
+            Button("Hide") { hidePanel(panel) }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder private func tabContent(_ tab: ControlTab) -> some View {
+        switch tab {
+        case .input: inputTab
+        case .camera: cameraTab
+        case .movie: movieTab
+        case .layers: layersTab
+        case .marks: marksTab
+        case .yarn: yarnTab
+        case .wrap: wrapTab
+        case .lineWalk: lineWalkTab
+        case .ink: inkTab
+        case .web: webTab
+        case .presets: presetsTab
+        case .keys: keysTab
+        case .debug: debugTab
+        }
     }
 
     private var controlsPane: some View {
@@ -311,25 +592,7 @@ struct ContentView: View {
                 title: "Inspector",
                 systemImage: "sidebar.right",
                 trailing: {
-                    Menu {
-                        Button("Dock Right") {
-                            windowMode.panelFit = true
-                            windowMode.panelVisible = true
-                        }
-                        Button("Float Right") {
-                            windowMode.panelFit = false
-                            windowMode.panelVisible = true
-                        }
-                        Button("Hide Inspector") {
-                            windowMode.panelVisible = false
-                        }
-                        Divider()
-                        Toggle("Timeline Dock", isOn: $timelineDockVisible)
-                    } label: {
-                        Image(systemName: "dock.rectangle")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("Dock panels")
+                    panelMenuButton
                 }
             )
             Divider()
@@ -345,16 +608,15 @@ struct ContentView: View {
                 .labelsHidden()
 
                 Menu {
-                    Text("Show tabs")
+                    Text("Panels")
                     Divider()
                     ForEach(ControlTab.allCases) { t in
-                        Button {
-                            toggleTabVisible(t)
-                        } label: {
-                            Label(
-                                t.rawValue,
-                                systemImage: isTabVisible(t) ? "checkmark" : ""
-                            )
+                        Menu(t.rawValue) {
+                            Button("Dock Right") { dockPanelRight(t) }
+                            Button("Dock Bottom") { dockPanelBottom(t) }
+                            Button("Hide") { hidePanel(t) }
+                            Divider()
+                            Text(panelPlacementText(t))
                         }
                     }
                 } label: {
@@ -368,21 +630,8 @@ struct ContentView: View {
             .padding(.vertical, 10)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    switch tab {
-                    case .input: inputTab
-                    case .camera: cameraTab
-                    case .movie: movieTab
-                    case .layers: layersTab
-                    case .marks: marksTab
-                    case .yarn: yarnTab
-                    case .wrap: wrapTab
-                    case .lineWalk: lineWalkTab
-                    case .ink: inkTab
-                    case .web: webTab
-                    case .presets: presetsTab
-                    case .keys: keysTab
-                    case .debug: debugTab
-                    }
+                    panelMoveBar(for: tab)
+                    tabContent(tab)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)

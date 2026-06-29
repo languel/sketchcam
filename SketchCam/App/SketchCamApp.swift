@@ -3,7 +3,9 @@ import SwiftUI
 @main
 struct SketchCamApp: App {
     @StateObject private var appUI = AppUIState()
-    @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.visibleTabs) private var visibleTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.bottomTabs) private var bottomTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.timelineDockVisible) private var timelineDockVisible = true
 
     init() {
         #if DEBUG
@@ -23,14 +25,39 @@ struct SketchCamApp: App {
                 .frame(minWidth: 120, minHeight: 68)
         }
         .commands {
-            CommandGroup(after: .toolbar) {
+            CommandMenu("Panels") {
+                Button("Show All Panels") {
+                    appUI.sendLayoutCommand(.showAll)
+                }
+                Button("Reset Panel Layout") {
+                    appUI.sendLayoutCommand(.reset)
+                }
+                Button("Show Timeline") {
+                    appUI.sendLayoutCommand(.showTimeline)
+                }
                 Divider()
-                Text("Show tabs")
                 ForEach(ControlTab.allCases) { tab in
-                    Button {
-                        toggleTabVisible(tab)
-                    } label: {
-                        Label(tab.rawValue, systemImage: isTabVisible(tab) ? "checkmark" : "")
+                    Menu(tab.rawValue) {
+                        Button("Dock Right") { dockPanelRight(tab) }
+                        Button("Dock Bottom") { dockPanelBottom(tab) }
+                        Button("Hide") { hidePanel(tab) }
+                        Divider()
+                        Text(panelPlacementText(tab))
+                    }
+                }
+                Divider()
+                Menu("Layout Presets") {
+                    ForEach(1...3, id: \.self) { slot in
+                        Button("Save Layout \(slot)") {
+                            appUI.sendLayoutCommand(.save(slot: slot))
+                        }
+                        Button("Restore Layout \(slot)") {
+                            appUI.sendLayoutCommand(.restore(slot: slot))
+                        }
+                        Button("Delete Layout \(slot)") {
+                            appUI.sendLayoutCommand(.delete(slot: slot))
+                        }
+                        if slot != 3 { Divider() }
                     }
                 }
                 Divider()
@@ -48,14 +75,58 @@ struct SketchCamApp: App {
         ControlTab.visibleTabs(from: visibleTabsRaw)
     }
 
+    private var bottomTabs: [ControlTab] {
+        tabs(from: bottomTabsRaw)
+    }
+
+    private func tabs(from rawValue: String) -> [ControlTab] {
+        guard !rawValue.isEmpty else { return [] }
+        let ids = Set(rawValue.split(separator: ",").map(String.init))
+        return ControlTab.allCases.filter { ids.contains($0.id) }
+    }
+
     private func isTabVisible(_ tab: ControlTab) -> Bool {
         visibleTabs.contains(tab)
     }
 
-    private func toggleTabVisible(_ tab: ControlTab) {
-        var tabs = Set(visibleTabs)
-        if tabs.contains(tab) { tabs.remove(tab) } else { tabs.insert(tab) }
-        guard !tabs.isEmpty else { return }
-        visibleTabsRaw = ControlTab.storageValue(for: tabs)
+    private func isTabDockedBottom(_ tab: ControlTab) -> Bool {
+        bottomTabs.contains(tab)
+    }
+
+    private func dockPanelRight(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.insert(panel)
+        bottom.remove(panel)
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+    }
+
+    private func dockPanelBottom(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.remove(panel)
+        bottom.insert(panel)
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        timelineDockVisible = true
+    }
+
+    private func hidePanel(_ panel: ControlTab) {
+        var right = Set(visibleTabs)
+        var bottom = Set(bottomTabs)
+        right.remove(panel)
+        bottom.remove(panel)
+        if right.isEmpty && bottom.isEmpty {
+            right.insert(.layers)
+        }
+        visibleTabsRaw = ControlTab.storageValue(for: right)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+    }
+
+    private func panelPlacementText(_ panel: ControlTab) -> String {
+        if isTabVisible(panel) { return "Currently: Right" }
+        if isTabDockedBottom(panel) { return "Currently: Bottom" }
+        return "Currently: Hidden"
     }
 }
