@@ -4,7 +4,10 @@ import SwiftUI
 struct SketchCamApp: App {
     @StateObject private var appUI = AppUIState()
     @AppStorage(LayoutStorageKeys.visibleTabs) private var visibleTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.leftTabs) private var leftTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.topTabs) private var topTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.bottomTabs) private var bottomTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.floatingTabs) private var floatingTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.timelineDockVisible) private var timelineDockVisible = true
 
     init() {
@@ -38,8 +41,11 @@ struct SketchCamApp: App {
                 Divider()
                 ForEach(ControlTab.allCases) { tab in
                     Menu(tab.rawValue) {
+                        Button("Dock Left") { movePanel(tab, to: .left) }
                         Button("Dock Right") { dockPanelRight(tab) }
+                        Button("Dock Top") { movePanel(tab, to: .top) }
                         Button("Dock Bottom") { dockPanelBottom(tab) }
+                        Button("Float") { movePanel(tab, to: .floating) }
                         Button("Hide") { hidePanel(tab) }
                         Divider()
                         Text(panelPlacementText(tab))
@@ -75,58 +81,104 @@ struct SketchCamApp: App {
         ControlTab.visibleTabs(from: visibleTabsRaw)
     }
 
+    private var leftTabs: [ControlTab] {
+        tabs(from: leftTabsRaw)
+    }
+
+    private var topTabs: [ControlTab] {
+        tabs(from: topTabsRaw)
+    }
+
     private var bottomTabs: [ControlTab] {
         tabs(from: bottomTabsRaw)
     }
 
+    private var floatingTabs: [ControlTab] {
+        tabs(from: floatingTabsRaw)
+    }
+
     private func tabs(from rawValue: String) -> [ControlTab] {
+        guard rawValue != ControlTab.emptyDockValue else { return [] }
         guard !rawValue.isEmpty else { return [] }
         let ids = Set(rawValue.split(separator: ",").map(String.init))
         return ControlTab.allCases.filter { ids.contains($0.id) }
     }
 
-    private func isTabVisible(_ tab: ControlTab) -> Bool {
-        visibleTabs.contains(tab)
+    private func panelLocation(_ tab: ControlTab) -> PanelDropDestination? {
+        if leftTabs.contains(tab) { return .left }
+        if visibleTabs.contains(tab) { return .right }
+        if topTabs.contains(tab) { return .top }
+        if bottomTabs.contains(tab) { return .bottom }
+        if floatingTabs.contains(tab) { return .floating }
+        return nil
     }
 
-    private func isTabDockedBottom(_ tab: ControlTab) -> Bool {
-        bottomTabs.contains(tab)
+    private func movePanel(_ panel: ControlTab, to destination: PanelDropDestination) {
+        var left = Set(leftTabs)
+        var right = Set(visibleTabs)
+        var top = Set(topTabs)
+        var bottom = Set(bottomTabs)
+        var floating = Set(floatingTabs)
+        left.remove(panel)
+        bottom.remove(panel)
+        right.remove(panel)
+        top.remove(panel)
+        floating.remove(panel)
+        switch destination {
+        case .left:
+            left.insert(panel)
+        case .right:
+            right.insert(panel)
+        case .top:
+            top.insert(panel)
+        case .bottom:
+            bottom.insert(panel)
+            timelineDockVisible = true
+        case .floating:
+            floating.insert(panel)
+        }
+        leftTabsRaw = ControlTab.storageValue(for: left)
+        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
+        topTabsRaw = ControlTab.storageValue(for: top)
+        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        floatingTabsRaw = ControlTab.storageValue(for: floating)
     }
 
     private func dockPanelRight(_ panel: ControlTab) {
-        var right = Set(visibleTabs)
-        var bottom = Set(bottomTabs)
-        right.insert(panel)
-        bottom.remove(panel)
-        visibleTabsRaw = ControlTab.storageValue(for: right)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        movePanel(panel, to: .right)
     }
 
     private func dockPanelBottom(_ panel: ControlTab) {
-        var right = Set(visibleTabs)
-        var bottom = Set(bottomTabs)
-        right.remove(panel)
-        bottom.insert(panel)
-        visibleTabsRaw = ControlTab.storageValue(for: right)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
-        timelineDockVisible = true
+        movePanel(panel, to: .bottom)
     }
 
     private func hidePanel(_ panel: ControlTab) {
+        var left = Set(leftTabs)
         var right = Set(visibleTabs)
+        var top = Set(topTabs)
         var bottom = Set(bottomTabs)
+        var floating = Set(floatingTabs)
+        left.remove(panel)
         right.remove(panel)
+        top.remove(panel)
         bottom.remove(panel)
-        if right.isEmpty && bottom.isEmpty {
-            right.insert(.layers)
-        }
-        visibleTabsRaw = ControlTab.storageValue(for: right)
+        floating.remove(panel)
+        leftTabsRaw = ControlTab.storageValue(for: left)
+        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
+        topTabsRaw = ControlTab.storageValue(for: top)
         bottomTabsRaw = ControlTab.storageValue(for: bottom)
+        floatingTabsRaw = ControlTab.storageValue(for: floating)
     }
 
     private func panelPlacementText(_ panel: ControlTab) -> String {
-        if isTabVisible(panel) { return "Currently: Right" }
-        if isTabDockedBottom(panel) { return "Currently: Bottom" }
+        switch panelLocation(panel) {
+        case .left: return "Currently: Left"
+        case .right: return "Currently: Right"
+        case .top: return "Currently: Top"
+        case .bottom: return "Currently: Bottom"
+        case .floating: return "Currently: Floating"
+        case nil: break
+        }
         return "Currently: Hidden"
     }
 }
