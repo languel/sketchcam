@@ -35,10 +35,6 @@ struct SketchCamApp: App {
                 Button("Reset Panel Layout") {
                     appUI.sendLayoutCommand(.reset)
                 }
-                Button("Show Timeline") {
-                    appUI.sendLayoutCommand(.showTimeline)
-                }
-                Divider()
                 ForEach(ControlTab.allCases) { tab in
                     Menu(tab.rawValue) {
                         Button("Dock Left") { movePanel(tab, to: .left) }
@@ -78,30 +74,64 @@ struct SketchCamApp: App {
     }
 
     private var visibleTabs: [ControlTab] {
-        ControlTab.visibleTabs(from: visibleTabsRaw)
+        rightGroups.flatMap(\.panels)
     }
 
     private var leftTabs: [ControlTab] {
-        tabs(from: leftTabsRaw)
+        leftGroups.flatMap(\.panels)
     }
 
     private var topTabs: [ControlTab] {
-        tabs(from: topTabsRaw)
+        topGroups.flatMap(\.panels)
     }
 
     private var bottomTabs: [ControlTab] {
-        tabs(from: bottomTabsRaw)
+        bottomGroups.flatMap(\.panels)
     }
 
     private var floatingTabs: [ControlTab] {
-        tabs(from: floatingTabsRaw)
+        floatingGroups.flatMap(\.panels)
+    }
+
+    private var leftGroups: [PanelGroup] {
+        groups(from: leftTabsRaw)
+    }
+
+    private var rightGroups: [PanelGroup] {
+        groups(from: visibleTabsRaw, defaultPanels: ControlTab.allCases.filter { ControlTab.defaultVisible.contains($0) })
+    }
+
+    private var topGroups: [PanelGroup] {
+        groups(from: topTabsRaw)
+    }
+
+    private var bottomGroups: [PanelGroup] {
+        groups(from: bottomTabsRaw, defaultPanels: timelineDockVisible ? [.timeline] : [])
+    }
+
+    private var floatingGroups: [PanelGroup] {
+        groups(from: floatingTabsRaw)
     }
 
     private func tabs(from rawValue: String) -> [ControlTab] {
+        groups(from: rawValue).flatMap(\.panels)
+    }
+
+    private func groups(from rawValue: String, defaultPanels: [ControlTab] = []) -> [PanelGroup] {
         guard rawValue != ControlTab.emptyDockValue else { return [] }
-        guard !rawValue.isEmpty else { return [] }
-        let ids = Set(rawValue.split(separator: ",").map(String.init))
-        return ControlTab.allCases.filter { ids.contains($0.id) }
+        guard !rawValue.isEmpty else {
+            return defaultPanels.map { PanelGroup(panels: [$0]) }
+        }
+        if rawValue.contains("|") || rawValue.contains("+") {
+            return rawValue.split(separator: "|").compactMap { groupRaw in
+                let panels = groupRaw
+                    .split(separator: "+")
+                    .compactMap { id in ControlTab.allCases.first(where: { $0.id == String(id) }) }
+                return panels.isEmpty ? nil : PanelGroup(panels: panels)
+            }
+        }
+        let ids = rawValue.split(separator: ",").map(String.init)
+        return ControlTab.panelGroups(for: ControlTab.allCases.filter { ids.contains($0.id) })
     }
 
     private func panelLocation(_ tab: ControlTab) -> PanelDropDestination? {
@@ -114,34 +144,18 @@ struct SketchCamApp: App {
     }
 
     private func movePanel(_ panel: ControlTab, to destination: PanelDropDestination) {
-        var left = Set(leftTabs)
-        var right = Set(visibleTabs)
-        var top = Set(topTabs)
-        var bottom = Set(bottomTabs)
-        var floating = Set(floatingTabs)
-        left.remove(panel)
-        bottom.remove(panel)
-        right.remove(panel)
-        top.remove(panel)
-        floating.remove(panel)
-        switch destination {
-        case .left:
-            left.insert(panel)
-        case .right:
-            right.insert(panel)
-        case .top:
-            top.insert(panel)
-        case .bottom:
-            bottom.insert(panel)
+        let panels = moveGroup(for: panel)
+        panels.forEach(removePanelFromAllDocks)
+        var groups = groupsForDock(destination)
+        groups.append(PanelGroup(panels: panels))
+        setGroups(groups, for: destination)
+        if destination == .bottom, panel == .timeline {
             timelineDockVisible = true
-        case .floating:
-            floating.insert(panel)
         }
-        leftTabsRaw = ControlTab.storageValue(for: left)
-        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
-        topTabsRaw = ControlTab.storageValue(for: top)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
-        floatingTabsRaw = ControlTab.storageValue(for: floating)
+    }
+
+    private func moveGroup(for panel: ControlTab) -> [ControlTab] {
+        ControlTab.yarnPathGroup.contains(panel) ? ControlTab.yarnPathGroup : [panel]
     }
 
     private func dockPanelRight(_ panel: ControlTab) {
@@ -153,21 +167,46 @@ struct SketchCamApp: App {
     }
 
     private func hidePanel(_ panel: ControlTab) {
-        var left = Set(leftTabs)
-        var right = Set(visibleTabs)
-        var top = Set(topTabs)
-        var bottom = Set(bottomTabs)
-        var floating = Set(floatingTabs)
-        left.remove(panel)
-        right.remove(panel)
-        top.remove(panel)
-        bottom.remove(panel)
-        floating.remove(panel)
-        leftTabsRaw = ControlTab.storageValue(for: left)
-        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
-        topTabsRaw = ControlTab.storageValue(for: top)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
-        floatingTabsRaw = ControlTab.storageValue(for: floating)
+        removePanelFromAllDocks(panel)
+    }
+
+    private func removePanelFromAllDocks(_ panel: ControlTab) {
+        if panel == .timeline {
+            timelineDockVisible = false
+        }
+        for destination in [PanelDropDestination.left, .right, .top, .bottom, .floating] {
+            var groups = groupsForDock(destination)
+            groups = groups.compactMap { group in
+                let panels = group.panels.filter { $0 != panel }
+                return panels.isEmpty ? nil : PanelGroup(panels: panels)
+            }
+            setGroups(groups, for: destination)
+        }
+    }
+
+    private func groupsForDock(_ destination: PanelDropDestination) -> [PanelGroup] {
+        switch destination {
+        case .left: return leftGroups
+        case .right: return rightGroups
+        case .top: return topGroups
+        case .bottom: return bottomGroups
+        case .floating: return floatingGroups
+        }
+    }
+
+    private func setGroups(_ groups: [PanelGroup], for destination: PanelDropDestination) {
+        switch destination {
+        case .left:
+            leftTabsRaw = ControlTab.dockStorageValue(for: groups)
+        case .right:
+            visibleTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
+        case .top:
+            topTabsRaw = ControlTab.dockStorageValue(for: groups)
+        case .bottom:
+            bottomTabsRaw = ControlTab.dockStorageValue(for: groups)
+        case .floating:
+            floatingTabsRaw = ControlTab.dockStorageValue(for: groups)
+        }
     }
 
     private func panelPlacementText(_ panel: ControlTab) -> String {

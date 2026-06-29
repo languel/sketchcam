@@ -23,7 +23,6 @@ enum LayoutCommand: Equatable {
     case save(slot: Int)
     case restore(slot: Int)
     case delete(slot: Int)
-    case showTimeline
 }
 
 struct LayoutSnapshot: Codable {
@@ -37,6 +36,11 @@ struct LayoutSnapshot: Codable {
     var rightDockCollapsed: Bool
     var topDockCollapsed: Bool
     var bottomDockCollapsed: Bool
+    var leftDockSize: Double
+    var rightDockSize: Double
+    var topDockSize: Double
+    var bottomDockSize: Double
+    var minimizedPanelsRaw: String
     var inspectorVisible: Bool
     var inspectorFit: Bool
 
@@ -51,6 +55,11 @@ struct LayoutSnapshot: Codable {
         rightDockCollapsed: Bool,
         topDockCollapsed: Bool,
         bottomDockCollapsed: Bool,
+        leftDockSize: Double,
+        rightDockSize: Double,
+        topDockSize: Double,
+        bottomDockSize: Double,
+        minimizedPanelsRaw: String,
         inspectorVisible: Bool,
         inspectorFit: Bool
     ) {
@@ -64,6 +73,11 @@ struct LayoutSnapshot: Codable {
         self.rightDockCollapsed = rightDockCollapsed
         self.topDockCollapsed = topDockCollapsed
         self.bottomDockCollapsed = bottomDockCollapsed
+        self.leftDockSize = leftDockSize
+        self.rightDockSize = rightDockSize
+        self.topDockSize = topDockSize
+        self.bottomDockSize = bottomDockSize
+        self.minimizedPanelsRaw = minimizedPanelsRaw
         self.inspectorVisible = inspectorVisible
         self.inspectorFit = inspectorFit
     }
@@ -80,6 +94,11 @@ struct LayoutSnapshot: Codable {
         rightDockCollapsed = try container.decodeIfPresent(Bool.self, forKey: .rightDockCollapsed) ?? false
         topDockCollapsed = try container.decodeIfPresent(Bool.self, forKey: .topDockCollapsed) ?? false
         bottomDockCollapsed = try container.decodeIfPresent(Bool.self, forKey: .bottomDockCollapsed) ?? false
+        leftDockSize = try container.decodeIfPresent(Double.self, forKey: .leftDockSize) ?? 320
+        rightDockSize = try container.decodeIfPresent(Double.self, forKey: .rightDockSize) ?? 360
+        topDockSize = try container.decodeIfPresent(Double.self, forKey: .topDockSize) ?? 190
+        bottomDockSize = try container.decodeIfPresent(Double.self, forKey: .bottomDockSize) ?? 220
+        minimizedPanelsRaw = try container.decodeIfPresent(String.self, forKey: .minimizedPanelsRaw) ?? ""
         inspectorVisible = try container.decodeIfPresent(Bool.self, forKey: .inspectorVisible) ?? true
         inspectorFit = try container.decodeIfPresent(Bool.self, forKey: .inspectorFit) ?? true
     }
@@ -96,18 +115,35 @@ enum LayoutStorageKeys {
     static let rightDockCollapsed = "rightDockCollapsed"
     static let topDockCollapsed = "topDockCollapsed"
     static let bottomDockCollapsed = "bottomDockCollapsed"
+    static let leftDockSize = "leftDockSize"
+    static let rightDockSize = "rightDockSize"
+    static let topDockSize = "topDockSize"
+    static let bottomDockSize = "bottomDockSize"
+    static let minimizedPanels = "minimizedPanels"
 
     static func preset(_ slot: Int) -> String {
         "layoutPreset.\(slot)"
     }
 }
 
-enum PanelDropDestination {
+enum PanelDropDestination: Hashable {
     case left
     case right
     case top
     case bottom
     case floating
+}
+
+struct PanelGroup: Identifiable, Equatable {
+    var panels: [ControlTab]
+
+    var id: String {
+        panels.map(\.id).joined(separator: "+")
+    }
+
+    var activeDefault: ControlTab? {
+        panels.first
+    }
 }
 
 enum ControlTab: String, CaseIterable, Identifiable {
@@ -119,6 +155,8 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case wrap = "Wrap"
     case lineWalk = "Line walk"
     case ink = "Ink"
+    case history = "History"
+    case timeline = "Timeline"
     case web = "Web"
     case presets = "Presets"
     case keys = "Keys"
@@ -128,6 +166,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     static let defaultVisible: Set<ControlTab> = [.layers, .camera, .ink, .input]
+    static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk]
     static let emptyDockValue = "__empty__"
 
     static func visibleTabs(from rawValue: String) -> [ControlTab] {
@@ -151,6 +190,32 @@ enum ControlTab: String, CaseIterable, Identifiable {
         tabs.isEmpty ? emptyDockValue : storageValue(for: tabs)
     }
 
+    static func dockStorageValue(for groups: [PanelGroup], emptyValue: String = "") -> String {
+        guard !groups.isEmpty else { return emptyValue }
+        return groups
+            .map { group in group.panels.map(\.id).joined(separator: "+") }
+            .joined(separator: "|")
+    }
+
+    static func panelSet(from rawValue: String) -> Set<ControlTab> {
+        let ids = Set(rawValue.split(separator: ",").map(String.init))
+        return Set(allCases.filter { ids.contains($0.id) })
+    }
+
+    static func panelGroups(for panels: [ControlTab]) -> [PanelGroup] {
+        var used = Set<ControlTab>()
+        return panels.compactMap { panel in
+            guard !used.contains(panel) else { return nil }
+            if yarnPathGroup.contains(panel) {
+                let grouped = yarnPathGroup.filter { panels.contains($0) }
+                used.formUnion(grouped)
+                return grouped.isEmpty ? nil : PanelGroup(panels: grouped)
+            }
+            used.insert(panel)
+            return PanelGroup(panels: [panel])
+        }
+    }
+
     var icon: String {
         switch self {
         case .input: "gearshape"
@@ -162,6 +227,8 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .wrap: "figure.stand"
         case .lineWalk: "lasso"
         case .ink: "paintbrush.pointed"
+        case .history: "clock.arrow.circlepath"
+        case .timeline: "timeline.selection"
         case .web: "globe"
         case .presets: "bookmark"
         case .keys: "keyboard"
@@ -209,6 +276,11 @@ struct ContentView: View {
     @AppStorage(LayoutStorageKeys.rightDockCollapsed) private var rightDockCollapsed = false
     @AppStorage(LayoutStorageKeys.topDockCollapsed) private var topDockCollapsed = false
     @AppStorage(LayoutStorageKeys.bottomDockCollapsed) private var bottomDockCollapsed = false
+    @AppStorage(LayoutStorageKeys.leftDockSize) private var leftDockSize = 320.0
+    @AppStorage(LayoutStorageKeys.rightDockSize) private var rightDockSize = 360.0
+    @AppStorage(LayoutStorageKeys.topDockSize) private var topDockSize = 190.0
+    @AppStorage(LayoutStorageKeys.bottomDockSize) private var bottomDockSize = 220.0
+    @AppStorage(LayoutStorageKeys.minimizedPanels) private var minimizedPanelsRaw = ""
     @AppStorage(InkUndoPreferences.gpuStateCountKey)
     private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
     @State private var inkTool = InkTool.draw
@@ -218,6 +290,8 @@ struct ContentView: View {
     @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
+    @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
+    @State private var selectedPanelByGroup: [String: String] = [:]
     @State private var leftDockDropTargeted = false
     @State private var rightDockDropTargeted = false
     @State private var topDockDropTargeted = false
@@ -229,6 +303,11 @@ struct ContentView: View {
         .overlay { debugOverlay }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                panelChromeToolbar
+            }
+        }
         .onAppear {
             model.start()
             model.prepareInkStrokeRecordsForCurrentSettings()
@@ -245,17 +324,21 @@ struct ContentView: View {
     private var dockedWorkspace: some View {
         HStack(spacing: 0) {
             if !leftTabs.isEmpty {
-                dockSection(title: "Left", systemImage: "rectangle.leftthird.inset.filled", tabs: leftTabs, destination: .left, isCollapsed: $leftDockCollapsed)
-                    .frame(width: leftDockCollapsed ? 44 : 320)
+                dockSection(title: "Left", systemImage: "rectangle.leftthird.inset.filled", groups: leftGroups, destination: .left, isCollapsed: $leftDockCollapsed)
+                    .frame(width: leftDockCollapsed ? 34 : max(leftDockSize, dockMinimumSize(.left)))
                     .background(Color(nsColor: .windowBackgroundColor))
-                    .overlay(alignment: .trailing) { Divider() }
+                    .overlay(alignment: .trailing) {
+                        dockResizeHandle(destination: .left, isCollapsed: $leftDockCollapsed, size: $leftDockSize)
+                    }
             }
             canvasDock
             if windowMode.panelVisible && windowMode.panelFit && !visibleTabs.isEmpty {
-                dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", tabs: visibleTabs, destination: .right, isCollapsed: $rightDockCollapsed)
-                    .frame(width: rightDockCollapsed ? 44 : 360)
+                dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
+                    .frame(width: rightDockCollapsed ? 34 : max(rightDockSize, dockMinimumSize(.right)))
                     .background(Color(nsColor: .windowBackgroundColor))
-                    .overlay(alignment: .leading) { Divider() }
+                    .overlay(alignment: .leading) {
+                        dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                    }
             }
         }
         .overlay {
@@ -263,9 +346,12 @@ struct ContentView: View {
                 GeometryReader { _ in
                     HStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", tabs: visibleTabs, destination: .right, isCollapsed: $rightDockCollapsed)
+                        dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
+                            .frame(width: rightDockCollapsed ? 34 : max(rightDockSize, dockMinimumSize(.right)))
                             .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
-                            .overlay(alignment: .leading) { Divider() }
+                            .overlay(alignment: .leading) {
+                                dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                            }
                     }
                 }
             }
@@ -279,17 +365,21 @@ struct ContentView: View {
     private var canvasDock: some View {
         VStack(spacing: 0) {
             if !topTabs.isEmpty {
-                dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", tabs: topTabs, destination: .top, isCollapsed: $topDockCollapsed)
-                    .frame(height: topDockCollapsed ? 38 : 190)
+                dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", groups: topGroups, destination: .top, isCollapsed: $topDockCollapsed)
+                    .frame(height: topDockCollapsed ? 34 : max(topDockSize, dockMinimumSize(.top)))
                     .background(Color(nsColor: .windowBackgroundColor))
-                    .overlay(alignment: .bottom) { Divider() }
+                    .overlay(alignment: .bottom) {
+                        dockResizeHandle(destination: .top, isCollapsed: $topDockCollapsed, size: $topDockSize)
+                    }
             }
             previewPane
-            if timelineDockVisible || !bottomTabs.isEmpty {
+            if !bottomTabs.isEmpty {
                 bottomDock
-                    .frame(height: bottomDockCollapsed ? 38 : (bottomTabs.isEmpty ? 132 : 220))
+                    .frame(height: bottomDockCollapsed ? 34 : max(bottomDockSize, dockMinimumSize(.bottom)))
                     .background(Color(nsColor: .windowBackgroundColor))
-                    .overlay(alignment: .top) { Divider() }
+                    .overlay(alignment: .top) {
+                        dockResizeHandle(destination: .bottom, isCollapsed: $bottomDockCollapsed, size: $bottomDockSize)
+                    }
             }
         }
         .frame(minWidth: 120, minHeight: 68)
@@ -297,26 +387,15 @@ struct ContentView: View {
 
     private var bottomDock: some View {
         VStack(alignment: .leading, spacing: 0) {
-            DockPanelHeader(title: "Bottom", systemImage: "rectangle.bottomthird.inset.filled") {
-                dockHeaderControls(destination: .bottom, isCollapsed: $bottomDockCollapsed)
-            }
             if !bottomDockCollapsed {
-                if let bottomTab = selectedBottomTab {
-                    VStack(alignment: .leading, spacing: 8) {
-                        panelHeader(for: bottomTab)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 8)
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 14) {
-                                tabContent(bottomTab)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(bottomGroups) { group in
+                            panelGroupCard(group, destination: .bottom)
                         }
                     }
-                } else if timelineDockVisible {
-                    timelineSummary
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -326,17 +405,104 @@ struct ContentView: View {
         }
     }
 
-    private var timelineDock: some View {
-        DockPanel(title: "Timeline", systemImage: "rectangle.bottomthird.inset.filled", trailing: {
-            Button {
-                timelineDockVisible = false
+    @ViewBuilder private var panelChromeToolbar: some View {
+        HStack(spacing: 6) {
+            dockToolbarButton(
+                destination: .left,
+                systemImage: "rectangle.leftthird.inset.filled",
+                isAvailable: !leftTabs.isEmpty,
+                isActive: !leftDockCollapsed && !leftTabs.isEmpty,
+                help: leftDockCollapsed ? "Expand left dock" : "Minimize left dock"
+            )
+            dockToolbarButton(
+                destination: .top,
+                systemImage: "rectangle.topthird.inset.filled",
+                isAvailable: !topTabs.isEmpty,
+                isActive: !topDockCollapsed && !topTabs.isEmpty,
+                help: topDockCollapsed ? "Expand top dock" : "Minimize top dock"
+            )
+            dockToolbarButton(
+                destination: .bottom,
+                systemImage: "rectangle.bottomthird.inset.filled",
+                isAvailable: !bottomTabs.isEmpty,
+                isActive: !bottomDockCollapsed && !bottomTabs.isEmpty,
+                help: bottomDockCollapsed ? "Expand bottom dock" : "Minimize bottom dock"
+            )
+            dockToolbarButton(
+                destination: .right,
+                systemImage: "rectangle.rightthird.inset.filled",
+                isAvailable: !visibleTabs.isEmpty,
+                isActive: windowMode.panelVisible && !rightDockCollapsed && !visibleTabs.isEmpty,
+                help: rightDockCollapsed || !windowMode.panelVisible ? "Expand right dock" : "Minimize right dock"
+            )
+            Divider()
+            Menu {
+                Button("Show All Panels") { showAllPanels() }
+                Button("Reset Panel Layout") { resetLayout() }
+                Divider()
+                Button(windowMode.panelFit ? "Float Right Dock" : "Fit Right Dock") {
+                    windowMode.panelFit.toggle()
+                    if !visibleTabs.isEmpty {
+                        windowMode.panelVisible = true
+                    }
+                }
+                Button(windowMode.panelVisible ? "Hide Right Dock" : "Show Right Dock") {
+                    windowMode.panelVisible.toggle()
+                }
+                .disabled(visibleTabs.isEmpty)
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "slider.horizontal.3")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Panel layout")
+
+            Button {
+                appUI.toggleDebugOverlay()
+            } label: {
+                Image(systemName: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle")
             }
             .buttonStyle(.borderless)
-            .help("Hide timeline dock")
-        }) {
-            timelineSummary
+            .help("Toggle performance overlay")
+        }
+        .controlSize(.small)
+    }
+
+    private func dockToolbarButton(
+        destination: PanelDropDestination,
+        systemImage: String,
+        isAvailable: Bool,
+        isActive: Bool,
+        help: String
+    ) -> some View {
+        Button {
+            toggleDockFromToolbar(destination)
+        } label: {
+            Image(systemName: systemImage)
+                .symbolVariant(isActive ? .fill : .none)
+        }
+        .buttonStyle(.borderless)
+        .disabled(!isAvailable)
+        .foregroundStyle(isActive ? Color.primary : Color.secondary)
+        .help(help)
+    }
+
+    private func toggleDockFromToolbar(_ destination: PanelDropDestination) {
+        switch destination {
+        case .left:
+            leftDockCollapsed.toggle()
+        case .right:
+            if !windowMode.panelVisible {
+                windowMode.panelVisible = true
+                rightDockCollapsed = false
+            } else {
+                rightDockCollapsed.toggle()
+            }
+        case .top:
+            topDockCollapsed.toggle()
+        case .bottom:
+            bottomDockCollapsed.toggle()
+        case .floating:
+            break
         }
     }
 
@@ -398,7 +564,7 @@ struct ContentView: View {
                     // re-evaluate the whole ContentView body.
                     LivePreviewImage(live: model.live)
                 }
-                if tab == .ink, model.settings.landmarks.inkEnabled {
+                if model.settings.landmarks.inkEnabled {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
                         showLivePath: model.settings.landmarks.inkShowLivePath,
@@ -426,7 +592,7 @@ struct ContentView: View {
                     )
                     .zIndex(20)
                 }
-                if tab == .ink, model.settings.landmarks.inkEnabled, inkHUDVisible {
+                if model.settings.landmarks.inkEnabled, inkHUDVisible {
                     InkBottomHUD(
                         mode: inkModeBinding,
                         inkKind: inkKindBinding,
@@ -451,7 +617,7 @@ struct ContentView: View {
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let point):
-                    inkHUDVisible = tab == .ink && point.y > geo.size.height - 130
+                    inkHUDVisible = model.settings.landmarks.inkEnabled && point.y > geo.size.height - 130
                 case .ended:
                     inkHUDVisible = false
                 }
@@ -465,37 +631,74 @@ struct ContentView: View {
 
     /// The tabs currently shown in the tab bar, in canonical order.
     private var visibleTabs: [ControlTab] {
-        ControlTab.visibleTabs(from: visibleTabsRaw)
+        rightGroups.flatMap(\.panels)
     }
 
     private var leftTabs: [ControlTab] {
-        tabs(from: leftTabsRaw)
+        leftGroups.flatMap(\.panels)
     }
 
     private var topTabs: [ControlTab] {
-        tabs(from: topTabsRaw)
+        topGroups.flatMap(\.panels)
     }
 
     private var bottomTabs: [ControlTab] {
-        tabs(from: bottomTabsRaw)
+        bottomGroups.flatMap(\.panels)
     }
 
     private var floatingTabs: [ControlTab] {
-        tabs(from: floatingTabsRaw)
+        floatingGroups.flatMap(\.panels)
+    }
+
+    private var leftGroups: [PanelGroup] {
+        groups(from: leftTabsRaw)
+    }
+
+    private var rightGroups: [PanelGroup] {
+        groups(from: visibleTabsRaw, defaultPanels: ControlTab.allCases.filter { ControlTab.defaultVisible.contains($0) })
+    }
+
+    private var topGroups: [PanelGroup] {
+        groups(from: topTabsRaw)
+    }
+
+    private var bottomGroups: [PanelGroup] {
+        groups(from: bottomTabsRaw, defaultPanels: timelineDockVisible ? [.timeline] : [])
+    }
+
+    private var floatingGroups: [PanelGroup] {
+        groups(from: floatingTabsRaw)
+    }
+
+    private var minimizedPanels: Set<ControlTab> {
+        ControlTab.panelSet(from: minimizedPanelsRaw)
     }
 
     private var selectedBottomTab: ControlTab? {
-        if let selected = bottomTabs.first(where: { $0.id == bottomTabID }) {
-            return selected
-        }
-        return bottomTabs.first
+        selectedPanel(in: bottomGroups.first) ?? bottomTabs.first
     }
 
     private func tabs(from rawValue: String) -> [ControlTab] {
+        groups(from: rawValue).flatMap(\.panels)
+    }
+
+    private func groups(from rawValue: String, defaultPanels: [ControlTab] = []) -> [PanelGroup] {
         guard rawValue != ControlTab.emptyDockValue else { return [] }
-        guard !rawValue.isEmpty else { return [] }
-        let ids = Set(rawValue.split(separator: ",").map(String.init))
-        return ControlTab.allCases.filter { ids.contains($0.id) }
+        guard !rawValue.isEmpty else {
+            return defaultPanels.map { PanelGroup(panels: [$0]) }
+        }
+        if rawValue.contains("|") || rawValue.contains("+") {
+            return rawValue
+                .split(separator: "|")
+                .compactMap { groupRaw in
+                    let panels = groupRaw
+                        .split(separator: "+")
+                        .compactMap { id in ControlTab.allCases.first(where: { $0.id == String(id) }) }
+                    return panels.isEmpty ? nil : PanelGroup(panels: panels)
+                }
+        }
+        let ids = rawValue.split(separator: ",").map(String.init)
+        return ControlTab.panelGroups(for: ControlTab.allCases.filter { ids.contains($0.id) })
     }
 
     private func panelLocation(_ panel: ControlTab) -> PanelDropDestination? {
@@ -516,39 +719,111 @@ struct ContentView: View {
     }
 
     private func movePanel(_ panel: ControlTab, to destination: PanelDropDestination) {
-        var left = Set(leftTabs)
-        var right = Set(visibleTabs)
-        var top = Set(topTabs)
-        var bottom = Set(bottomTabs)
-        var floating = Set(floatingTabs)
-        left.remove(panel)
-        right.remove(panel)
-        top.remove(panel)
-        bottom.remove(panel)
-        floating.remove(panel)
+        let panels = moveGroup(for: panel)
+        panels.forEach(removePanelFromAllDocks)
+        var groups = groupsForDock(destination)
+        groups.append(PanelGroup(panels: panels))
+        setGroups(groups, for: destination)
+        activateDock(destination, panel: panel)
+        tab = panel
+    }
 
+    private func movePanel(_ panel: ControlTab, to destination: PanelDropDestination, before target: ControlTab?) {
+        let oldLocation = panelLocation(panel)
+        let oldGroups = oldLocation == destination ? groupsForDock(destination) : []
+        let sourceIndex = oldGroups.firstIndex(where: { $0.panels.contains(panel) })
+        let targetIndex = oldGroups.firstIndex(where: { $0.panels.contains(target ?? panel) })
+        removePanelFromAllDocks(panel)
+        var groups = groupsForDock(destination)
+        if let target, let index = groups.firstIndex(where: { $0.panels.contains(target) }) {
+            let shouldInsertAfter = oldLocation == destination
+                && (sourceIndex ?? 0) < (targetIndex ?? 0)
+            groups.insert(PanelGroup(panels: [panel]), at: shouldInsertAfter ? index + 1 : index)
+        } else {
+            groups.append(PanelGroup(panels: [panel]))
+        }
+        setGroups(groups, for: destination)
+        activateDock(destination, panel: panel)
+        tab = panel
+    }
+
+    private func moveGroup(for panel: ControlTab) -> [ControlTab] {
+        ControlTab.yarnPathGroup.contains(panel) ? ControlTab.yarnPathGroup : [panel]
+    }
+
+    private func groupPanel(_ panel: ControlTab, with target: ControlTab, in destination: PanelDropDestination) {
+        guard panel != target else { return }
+        removePanelFromAllDocks(panel)
+        var groups = groupsForDock(destination)
+        if let index = groups.firstIndex(where: { $0.panels.contains(target) }) {
+            if !groups[index].panels.contains(panel) {
+                groups[index].panels.append(panel)
+            }
+        } else {
+            groups.append(PanelGroup(panels: [target, panel]))
+        }
+        setGroups(groups, for: destination)
+        activateDock(destination, panel: panel)
+        tab = panel
+    }
+
+    private func removePanelFromAllDocks(_ panel: ControlTab) {
+        if panel == .timeline {
+            timelineDockVisible = false
+        }
+        for destination in [PanelDropDestination.left, .right, .top, .bottom, .floating] {
+            var groups = groupsForDock(destination)
+            groups = groups.compactMap { group in
+                let panels = group.panels.filter { $0 != panel }
+                return panels.isEmpty ? nil : PanelGroup(panels: panels)
+            }
+            setGroups(groups, for: destination)
+        }
+    }
+
+    private func groupsForDock(_ destination: PanelDropDestination) -> [PanelGroup] {
+        switch destination {
+        case .left: return leftGroups
+        case .right: return rightGroups
+        case .top: return topGroups
+        case .bottom: return bottomGroups
+        case .floating: return floatingGroups
+        }
+    }
+
+    private func setGroups(_ groups: [PanelGroup], for destination: PanelDropDestination) {
         switch destination {
         case .left:
-            left.insert(panel)
+            leftTabsRaw = ControlTab.dockStorageValue(for: groups)
         case .right:
-            right.insert(panel)
-            windowMode.panelVisible = true
+            visibleTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .top:
-            top.insert(panel)
+            topTabsRaw = ControlTab.dockStorageValue(for: groups)
         case .bottom:
-            bottom.insert(panel)
-            bottomTabID = panel.id
-            timelineDockVisible = true
+            bottomTabsRaw = ControlTab.dockStorageValue(for: groups)
         case .floating:
-            floating.insert(panel)
+            floatingTabsRaw = ControlTab.dockStorageValue(for: groups)
         }
+    }
 
-        leftTabsRaw = ControlTab.storageValue(for: left)
-        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
-        topTabsRaw = ControlTab.storageValue(for: top)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
-        floatingTabsRaw = ControlTab.storageValue(for: floating)
-        tab = panel
+    private func activateDock(_ destination: PanelDropDestination, panel: ControlTab) {
+        switch destination {
+        case .right:
+            windowMode.panelVisible = true
+            rightDockCollapsed = false
+        case .bottom:
+            bottomTabID = panel.id
+            if panel == .timeline {
+                timelineDockVisible = true
+            }
+            bottomDockCollapsed = false
+        case .left:
+            leftDockCollapsed = false
+        case .top:
+            topDockCollapsed = false
+        case .floating:
+            break
+        }
     }
 
     private func dockPanelLeft(_ panel: ControlTab) {
@@ -572,51 +847,48 @@ struct ContentView: View {
     }
 
     private func hidePanel(_ panel: ControlTab) {
-        var left = Set(leftTabs)
-        var right = Set(visibleTabs)
-        var top = Set(topTabs)
-        var bottom = Set(bottomTabs)
-        var floating = Set(floatingTabs)
-        left.remove(panel)
-        right.remove(panel)
-        top.remove(panel)
-        bottom.remove(panel)
-        floating.remove(panel)
-        leftTabsRaw = ControlTab.storageValue(for: left)
-        visibleTabsRaw = ControlTab.rightDockStorageValue(for: right)
-        topTabsRaw = ControlTab.storageValue(for: top)
-        bottomTabsRaw = ControlTab.storageValue(for: bottom)
-        floatingTabsRaw = ControlTab.storageValue(for: floating)
+        removePanelFromAllDocks(panel)
+        selectedPanelByGroup = selectedPanelByGroup.filter { $0.value != panel.id }
         if panelLocation(tab) == nil { tab = visibleTabs.first ?? leftTabs.first ?? topTabs.first ?? bottomTabs.first ?? floatingTabs.first ?? .layers }
         if bottomTabID == panel.id { bottomTabID = bottomTabs.first?.id ?? ControlTab.ink.id }
     }
 
     private func showAllPanels() {
         leftTabsRaw = ""
-        visibleTabsRaw = ControlTab.storageValue(for: Set(ControlTab.allCases))
+        visibleTabsRaw = ControlTab.dockStorageValue(for: allPanelsGroupedForDisplay())
         topTabsRaw = ""
         bottomTabsRaw = ""
         floatingTabsRaw = ""
-        timelineDockVisible = true
+        timelineDockVisible = false
         rightDockCollapsed = false
         windowMode.panelVisible = true
         windowMode.panelFit = true
         tab = .layers
     }
 
+    private func allPanelsGroupedForDisplay() -> [PanelGroup] {
+        ControlTab.panelGroups(for: ControlTab.allCases)
+    }
+
     private func resetLayout() {
         leftTabsRaw = ""
         visibleTabsRaw = ""
         topTabsRaw = ""
-        bottomTabsRaw = ""
+        bottomTabsRaw = ControlTab.dockStorageValue(for: [PanelGroup(panels: [.timeline])])
         floatingTabsRaw = ""
         timelineDockVisible = true
         leftDockCollapsed = false
         rightDockCollapsed = false
         topDockCollapsed = false
         bottomDockCollapsed = false
+        leftDockSize = 320
+        rightDockSize = 360
+        topDockSize = 190
+        bottomDockSize = 220
+        minimizedPanelsRaw = ""
         windowMode.panelVisible = true
         windowMode.panelFit = true
+        selectedPanelByGroup = [:]
         tab = .layers
     }
 
@@ -626,8 +898,6 @@ struct ContentView: View {
             showAllPanels()
         case .reset:
             resetLayout()
-        case .showTimeline:
-            timelineDockVisible = true
         case .save(let slot):
             saveLayout(slot: slot)
         case .restore(let slot):
@@ -649,6 +919,11 @@ struct ContentView: View {
             rightDockCollapsed: rightDockCollapsed,
             topDockCollapsed: topDockCollapsed,
             bottomDockCollapsed: bottomDockCollapsed,
+            leftDockSize: leftDockSize,
+            rightDockSize: rightDockSize,
+            topDockSize: topDockSize,
+            bottomDockSize: bottomDockSize,
+            minimizedPanelsRaw: minimizedPanelsRaw,
             inspectorVisible: windowMode.panelVisible,
             inspectorFit: windowMode.panelFit
         )
@@ -672,6 +947,11 @@ struct ContentView: View {
         rightDockCollapsed = snapshot.rightDockCollapsed
         topDockCollapsed = snapshot.topDockCollapsed
         bottomDockCollapsed = snapshot.bottomDockCollapsed
+        leftDockSize = snapshot.leftDockSize
+        rightDockSize = snapshot.rightDockSize
+        topDockSize = snapshot.topDockSize
+        bottomDockSize = snapshot.bottomDockSize
+        minimizedPanelsRaw = snapshot.minimizedPanelsRaw
         windowMode.panelVisible = snapshot.inspectorVisible
         windowMode.panelFit = snapshot.inspectorFit
         tab = visibleTabs.first ?? .layers
@@ -688,6 +968,37 @@ struct ContentView: View {
         case nil: break
         }
         return "Currently: Hidden"
+    }
+
+    private func selectedPanel(in group: PanelGroup?) -> ControlTab? {
+        guard let group else { return nil }
+        if let id = selectedPanelByGroup[group.id],
+           let panel = group.panels.first(where: { $0.id == id }) {
+            return panel
+        }
+        if group.panels.contains(tab) {
+            return tab
+        }
+        return group.activeDefault
+    }
+
+    private func selectPanel(_ panel: ControlTab, in group: PanelGroup) {
+        selectedPanelByGroup[group.id] = panel.id
+        tab = panel
+        if bottomTabs.contains(panel) {
+            bottomTabID = panel.id
+        }
+    }
+
+    private func togglePanelMinimized(_ panel: ControlTab) {
+        var minimized = minimizedPanels
+        if minimized.contains(panel) {
+            minimized.remove(panel)
+        } else {
+            minimized.insert(panel)
+        }
+        minimizedPanelsRaw = ControlTab.storageValue(for: minimized)
+        tab = panel
     }
 
     private func panelDragProvider(for panel: ControlTab) -> NSItemProvider {
@@ -726,6 +1037,36 @@ struct ContentView: View {
         return true
     }
 
+    private func handlePanelDrop(_ providers: [NSItemProvider], destination: PanelDropDestination, before target: ControlTab) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let id = object as? String,
+                  let panel = ControlTab.allCases.first(where: { $0.id == id }) else { return }
+            DispatchQueue.main.async {
+                movePanel(panel, to: destination, before: target)
+                draggingPanel = nil
+            }
+        }
+        return true
+    }
+
+    private func handlePanelGroupDrop(_ providers: [NSItemProvider], destination: PanelDropDestination, target: ControlTab) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let id = object as? String,
+                  let panel = ControlTab.allCases.first(where: { $0.id == id }) else { return }
+            DispatchQueue.main.async {
+                groupPanel(panel, with: target, in: destination)
+                draggingPanel = nil
+            }
+        }
+        return true
+    }
+
     private func dropTargetBinding(for destination: PanelDropDestination) -> Binding<Bool> {
         switch destination {
         case .left:
@@ -746,7 +1087,7 @@ struct ContentView: View {
         case .left:
             leftTabsRaw = ""
         case .right:
-            visibleTabsRaw = ""
+            visibleTabsRaw = ControlTab.emptyDockValue
             windowMode.panelVisible = false
         case .top:
             topTabsRaw = ""
@@ -772,22 +1113,91 @@ struct ContentView: View {
         }
     }
 
+    private func dockResizeHandle(destination: PanelDropDestination, isCollapsed: Binding<Bool>, size: Binding<Double>) -> some View {
+        let isVertical = destination == .left || destination == .right
+        return Rectangle()
+            .fill(Color.primary.opacity(0.001))
+            .frame(width: isVertical ? 8 : nil, height: isVertical ? nil : 8)
+            .overlay {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.16))
+                    .frame(width: isVertical ? 1 : nil, height: isVertical ? nil : 1)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dockDragBaselines[destination] == nil {
+                            dockDragBaselines[destination] = size.wrappedValue
+                        }
+                        let baseline = dockDragBaselines[destination] ?? size.wrappedValue
+                        let delta: CGFloat
+                        switch destination {
+                        case .left:
+                            delta = value.translation.width
+                        case .right:
+                            delta = -value.translation.width
+                        case .top:
+                            delta = value.translation.height
+                        case .bottom:
+                            delta = -value.translation.height
+                        case .floating:
+                            delta = 0
+                        }
+                        let proposed = baseline + Double(delta)
+                        let minimum = dockMinimumSize(destination)
+                        let maximum = dockMaximumSize(destination)
+                        if proposed < minimum * 0.45 {
+                            isCollapsed.wrappedValue = true
+                        } else {
+                            isCollapsed.wrappedValue = false
+                            size.wrappedValue = min(max(proposed, minimum), maximum)
+                        }
+                    }
+                    .onEnded { _ in
+                        dockDragBaselines[destination] = nil
+                    }
+            )
+            .help("Drag to resize or minimize this dock")
+    }
+
+    private func dockMinimumSize(_ destination: PanelDropDestination) -> Double {
+        switch destination {
+        case .left, .right:
+            return 320
+        case .top:
+            return 150
+        case .bottom:
+            return 170
+        case .floating:
+            return 300
+        }
+    }
+
+    private func dockMaximumSize(_ destination: PanelDropDestination) -> Double {
+        switch destination {
+        case .left, .right:
+            return 680
+        case .top, .bottom:
+            return 460
+        case .floating:
+            return 520
+        }
+    }
+
     private func dockSection(
         title: String,
         systemImage: String,
-        tabs: [ControlTab],
+        groups: [PanelGroup],
         destination: PanelDropDestination,
         isCollapsed: Binding<Bool>
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            DockPanelHeader(title: title, systemImage: systemImage) {
-                dockHeaderControls(destination: destination, isCollapsed: isCollapsed)
-            }
             if !isCollapsed.wrappedValue {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(tabs) { panel in
-                            panelStackCard(for: panel)
+                        ForEach(groups) { group in
+                            panelGroupCard(group, destination: destination)
                         }
                     }
                     .padding(10)
@@ -799,26 +1209,6 @@ struct ContentView: View {
         .onDrop(of: [UTType.plainText], isTargeted: dropTargetBinding(for: destination)) { providers in
             handlePanelDrop(providers, destination: destination)
         }
-    }
-
-    private func dockHeaderControls(destination: PanelDropDestination, isCollapsed: Binding<Bool>) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                isCollapsed.wrappedValue.toggle()
-            } label: {
-                Image(systemName: isCollapsed.wrappedValue ? "chevron.right" : "chevron.down")
-            }
-            .buttonStyle(.borderless)
-            .help(isCollapsed.wrappedValue ? "Expand dock" : "Collapse dock")
-            Button {
-                closeDock(destination)
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .help("Close dock")
-        }
-        .controlSize(.small)
     }
 
     private func panelHeader(for panel: ControlTab) -> some View {
@@ -836,22 +1226,104 @@ struct ContentView: View {
         }
     }
 
-    private func panelStackCard(for panel: ControlTab) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            panelHeader(for: panel)
+    private func panelGroupCard(_ group: PanelGroup, destination: PanelDropDestination) -> some View {
+        let activePanel = selectedPanel(in: group) ?? group.activeDefault ?? .layers
+        let isMinimized = minimizedPanels.contains(activePanel)
+        return VStack(alignment: .leading, spacing: 10) {
+            panelHeader(for: activePanel, group: group, destination: destination)
                 .padding(.top, 8)
                 .padding(.horizontal, 12)
-            tabContent(panel)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+            if !isMinimized {
+                tabContent(activePanel)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+            }
         }
-        .background(panel == tab ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .frame(minWidth: panelMinimumWidth(for: destination), alignment: .leading)
+        .background(group.panels.contains(tab) ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(panel == tab ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
+                .stroke(group.panels.contains(tab) ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
         }
-        .onTapGesture { tab = panel }
+        .onTapGesture { tab = activePanel }
+        .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
+            handlePanelDrop(providers, destination: destination, before: group.panels.first ?? activePanel)
+        }
+    }
+
+    private func panelMinimumWidth(for destination: PanelDropDestination) -> CGFloat {
+        switch destination {
+        case .left, .right, .floating:
+            return 292
+        case .top, .bottom:
+            return 260
+        }
+    }
+
+    private func panelHeader(for activePanel: ControlTab, group: PanelGroup, destination: PanelDropDestination) -> some View {
+        HStack(spacing: 8) {
+            panelTabStrip(group: group, activePanel: activePanel, destination: destination)
+            Spacer(minLength: 0)
+            Button {
+                hidePanel(activePanel)
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("Hide \(activePanel.rawValue)")
+        }
+    }
+
+    private func panelTabStrip(group: PanelGroup, activePanel: ControlTab, destination: PanelDropDestination) -> some View {
+        HStack(spacing: 2) {
+            ForEach(group.panels) { panel in
+                panelTabButton(panel, group: group, activePanel: activePanel, destination: destination)
+            }
+        }
+    }
+
+    @ViewBuilder private func panelTabButton(
+        _ panel: ControlTab,
+        group: PanelGroup,
+        activePanel: ControlTab,
+        destination: PanelDropDestination
+    ) -> some View {
+        if group.panels.count == 1 || panel == activePanel {
+            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination)
+                .labelStyle(.titleAndIcon)
+        } else {
+            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination)
+                .labelStyle(.iconOnly)
+        }
+    }
+
+    private func panelTabLabel(
+        _ panel: ControlTab,
+        group: PanelGroup,
+        activePanel: ControlTab,
+        destination: PanelDropDestination
+    ) -> some View {
+        Label(panel.rawValue, systemImage: panel.icon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(draggingPanel == panel || panel == activePanel ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, panel == activePanel ? 5 : 4)
+            .padding(.vertical, 3)
+            .background(panel == activePanel ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .contentShape(Rectangle())
+            .help("Double-click to minimize \(panel.rawValue)")
+            .onTapGesture(count: 2) {
+                selectPanel(panel, in: group)
+                togglePanelMinimized(panel)
+            }
+            .onTapGesture {
+                selectPanel(panel, in: group)
+            }
+            .onDrag { panelDragProvider(for: panel) }
+            .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
+                handlePanelGroupDrop(providers, destination: destination, target: panel)
+            }
     }
 
     private func panelDragHandle(for panel: ControlTab) -> some View {
@@ -873,8 +1345,8 @@ struct ContentView: View {
 
     private var floatingPanelsOverlay: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(floatingTabs) { panel in
-                panelStackCard(for: panel)
+            ForEach(floatingGroups) { group in
+                panelGroupCard(group, destination: .floating)
                     .frame(width: 340)
                     .background(.ultraThinMaterial)
                     .shadow(color: Color.black.opacity(0.22), radius: 16, y: 8)
@@ -897,6 +1369,8 @@ struct ContentView: View {
         case .wrap: wrapTab
         case .lineWalk: lineWalkTab
         case .ink: inkTab
+        case .history: historyTab
+        case .timeline: timelineTab
         case .web: webTab
         case .presets: presetsTab
         case .keys: keysTab
@@ -1034,7 +1508,6 @@ struct ContentView: View {
         SectionHeader("Window")
         HStack {
             Toggle("Panel", isOn: $windowMode.panelVisible)
-            Toggle("Timeline", isOn: $timelineDockVisible)
         }
         .toggleStyle(.checkbox)
         HStack {
@@ -1438,12 +1911,6 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            InkStrokeDataList(
-                records: inkStrokeRecords,
-                selectedRecordID: $selectedInkPathID
-            )
-            .frame(minHeight: 150)
-            .help("Captured stroke data. The main preview remains the drawing and editing surface.")
 
             HStack {
                 Button {
@@ -1543,6 +2010,46 @@ struct ContentView: View {
 
         }
         .disabled(!model.settings.landmarks.inkEnabled)
+    }
+
+    @ViewBuilder private var historyTab: some View {
+        SectionHeader("Ink actions")
+        InkStrokeDataList(
+            records: inkStrokeRecords,
+            selectedRecordID: $selectedInkPathID
+        )
+        .frame(minHeight: 180)
+        .help("Captured ink actions in chronological order.")
+
+        HStack {
+            Button {
+                deleteSelectedInk()
+            } label: {
+                Label("Delete", systemImage: "delete.left")
+            }
+            .disabled(selectedInkPathID == nil)
+            Button {
+                rerenderInk()
+            } label: {
+                Label("Rerender", systemImage: "arrow.clockwise")
+            }
+            .disabled(inkStrokeRecords.isEmpty)
+            Button {
+                clearInk()
+            } label: {
+                Label("Clear", systemImage: "trash")
+            }
+            Spacer(minLength: 0)
+            Text("\(inkStrokeRecords.count) actions")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .controlSize(.small)
+    }
+
+    @ViewBuilder private var timelineTab: some View {
+        SectionHeader("Timeline")
+        timelineSummary
     }
 
     private func deleteSelectedInk() {
@@ -3662,9 +4169,10 @@ private struct DockPanelHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Label(title, systemImage: systemImage)
+            Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .help(title)
             Spacer(minLength: 0)
             trailing()
         }
