@@ -2,6 +2,7 @@ import AppKit
 import SketchCamCore
 import SketchCamShared
 import SwiftUI
+import UniformTypeIdentifiers
 
 final class AppUIState: ObservableObject {
     @Published var debugOverlayVisible = false
@@ -41,6 +42,11 @@ enum LayoutStorageKeys {
     static func preset(_ slot: Int) -> String {
         "layoutPreset.\(slot)"
     }
+}
+
+private enum PanelDropDestination {
+    case right
+    case bottom
 }
 
 enum ControlTab: String, CaseIterable, Identifiable {
@@ -137,6 +143,9 @@ struct ContentView: View {
     @State private var inkHUDVisible = false
     @State private var inkPaperSettingsExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
+    @State private var draggingPanel: ControlTab?
+    @State private var rightDockDropTargeted = false
+    @State private var bottomDockDropTargeted = false
 
     var body: some View {
         dockedWorkspace
@@ -197,7 +206,15 @@ struct ContentView: View {
         DockPanel(title: "Bottom Dock", systemImage: "rectangle.bottomthird.inset.filled", trailing: {
             HStack(spacing: 6) {
                 if !bottomTabs.isEmpty {
-                    Picker("", selection: $bottomTabID) {
+                    Picker("", selection: Binding(
+                        get: { bottomTabID },
+                        set: { id in
+                            bottomTabID = id
+                            if let panel = ControlTab.allCases.first(where: { $0.id == id }) {
+                                tab = panel
+                            }
+                        }
+                    )) {
                         ForEach(bottomTabs) { tab in
                             Image(systemName: tab.icon)
                                 .help(tab.rawValue)
@@ -226,6 +243,17 @@ struct ContentView: View {
             } else if timelineDockVisible {
                 timelineSummary
             }
+        }
+        .background(bottomDockDropTargeted ? Color.accentColor.opacity(0.10) : Color.clear)
+        .overlay {
+            if bottomDockDropTargeted {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.accentColor.opacity(0.65), lineWidth: 2)
+                    .padding(3)
+            }
+        }
+        .onDrop(of: [UTType.plainText], isTargeted: $bottomDockDropTargeted) { providers in
+            handlePanelDrop(providers, destination: .bottom)
         }
     }
 
@@ -509,6 +537,33 @@ struct ContentView: View {
         return "Currently: Hidden"
     }
 
+    private func panelDragProvider(for panel: ControlTab) -> NSItemProvider {
+        draggingPanel = panel
+        return NSItemProvider(object: panel.id as NSString)
+    }
+
+    private func handlePanelDrop(_ providers: [NSItemProvider], destination: PanelDropDestination) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let id = object as? String,
+                  let panel = ControlTab.allCases.first(where: { $0.id == id }) else { return }
+            DispatchQueue.main.async {
+                switch destination {
+                case .right:
+                    dockPanelRight(panel)
+                case .bottom:
+                    dockPanelBottom(panel)
+                }
+                draggingPanel = nil
+                rightDockDropTargeted = false
+                bottomDockDropTargeted = false
+            }
+        }
+        return true
+    }
+
     private var panelMenuButton: some View {
         Menu {
             Button("Dock Inspector Right") {
@@ -556,9 +611,7 @@ struct ContentView: View {
 
     private func panelMoveBar(for panel: ControlTab) -> some View {
         HStack(spacing: 8) {
-            Label(panel.rawValue, systemImage: panel.icon)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            panelDragHandle(for: panel)
             Spacer()
             Button("Right") { dockPanelRight(panel) }
             Button("Bottom") { dockPanelBottom(panel) }
@@ -566,6 +619,34 @@ struct ContentView: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
+    }
+
+    private func panelStackCard(for panel: ControlTab) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            panelMoveBar(for: panel)
+                .padding(.top, 8)
+            tabContent(panel)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+        }
+        .background(panel == tab ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(panel == tab ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .onTapGesture { tab = panel }
+    }
+
+    private func panelDragHandle(for panel: ControlTab) -> some View {
+        Label(panel.rawValue, systemImage: panel.icon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(draggingPanel == panel ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .help("Drag to snap this panel into another dock")
+            .onDrag { panelDragProvider(for: panel) }
     }
 
     @ViewBuilder private func tabContent(_ tab: ControlTab) -> some View {
@@ -596,48 +677,28 @@ struct ContentView: View {
                 }
             )
             Divider()
-            HStack(spacing: 8) {
-                Picker("", selection: $tab) {
-                    ForEach(visibleTabs) { tab in
-                        Image(systemName: tab.icon)
-                            .help(tab.rawValue)
-                            .tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                Menu {
-                    Text("Panels")
-                    Divider()
-                    ForEach(ControlTab.allCases) { t in
-                        Menu(t.rawValue) {
-                            Button("Dock Right") { dockPanelRight(t) }
-                            Button("Dock Bottom") { dockPanelBottom(t) }
-                            Button("Hide") { hidePanel(t) }
-                            Divider()
-                            Text(panelPlacementText(t))
-                        }
-                    }
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Choose which tabs to show")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    panelMoveBar(for: tab)
-                    tabContent(tab)
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(visibleTabs) { panel in
+                        panelStackCard(for: panel)
+                    }
                 }
-                .padding(16)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(width: 360)
+        .background(rightDockDropTargeted ? Color.accentColor.opacity(0.10) : Color.clear)
+        .overlay {
+            if rightDockDropTargeted {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.accentColor.opacity(0.65), lineWidth: 2)
+                    .padding(3)
+            }
+        }
+        .onDrop(of: [UTType.plainText], isTargeted: $rightDockDropTargeted) { providers in
+            handlePanelDrop(providers, destination: .right)
+        }
     }
 
     private var isHeld: Bool {
