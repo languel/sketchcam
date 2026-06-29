@@ -280,14 +280,51 @@ final class SketchCamViewModel: ObservableObject {
     func endInkLiveStroke() { inkLiveStroke.end() }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
 
+    func prepareInkStrokeRecordsForCurrentSettings() {
+        let records = resolvedInkStrokeRecords()
+        settings.landmarks.inkStrokeRecords = records
+        settings.landmarks.inkPaths = records.filter(\.isEditable).map(\.renderPath)
+        canvasActions.replaceAll(records)
+        canvasHistoryRevision &+= 1
+    }
+
     func commitImmediateCanvasStroke(_ path: InkEditorPath) {
-        canvasActions.commitImmediate(path)
+        commitImmediateCanvasStroke(InkStrokeRecord.legacy(path: path, isEditable: false, fallbackSmoothing: settings.landmarks.inkSmoothing))
+    }
+
+    func commitImmediateCanvasStroke(_ record: InkStrokeRecord) {
+        var immediate = record
+        immediate.isEditable = false
+        canvasActions.commitImmediate(immediate)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func commitEditableCanvasStroke(_ record: InkStrokeRecord) {
+        var editable = record
+        editable.isEditable = true
+        canvasActions.commit(editable)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func replaceEditableCanvasRecords(_ records: [InkStrokeRecord]) {
+        canvasActions.replaceEditableRecords(records)
+        syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
     }
 
     func replaceEditableCanvasPaths(_ paths: [InkEditorPath]) {
-        canvasActions.replaceEditablePaths(paths)
-        canvasHistoryRevision &+= 1
+        let existing = Dictionary(uniqueKeysWithValues: resolvedInkStrokeRecords().map { ($0.id, $0) })
+        let records = paths.map { path in
+            if let record = existing[path.id] {
+                var updated = record.updatingRenderPath(path)
+                updated.isEditable = true
+                return updated
+            }
+            return InkStrokeRecord.legacy(path: path, isEditable: true, fallbackSmoothing: settings.landmarks.inkSmoothing)
+        }
+        replaceEditableCanvasRecords(records)
     }
 
     var canUndoCanvasAction: Bool { canvasActions.canUndo() }
@@ -297,7 +334,10 @@ final class SketchCamViewModel: ObservableObject {
     func undoCanvasAction() -> CanvasStrokeAction? {
         cancelInkLiveStroke()
         let action = canvasActions.undo()
-        if action != nil { canvasHistoryRevision &+= 1 }
+        if action != nil {
+            syncSettingsFromCanvasActions()
+            canvasHistoryRevision &+= 1
+        }
         return action
     }
 
@@ -305,14 +345,28 @@ final class SketchCamViewModel: ObservableObject {
     func redoCanvasAction() -> CanvasStrokeAction? {
         cancelInkLiveStroke()
         let action = canvasActions.redo()
-        if action != nil { canvasHistoryRevision &+= 1 }
+        if action != nil {
+            syncSettingsFromCanvasActions()
+            canvasHistoryRevision &+= 1
+        }
         return action
     }
 
     func clearCanvasActions() {
         cancelInkLiveStroke()
         canvasActions.clear()
+        syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
+    }
+
+    private func resolvedInkStrokeRecords() -> [InkStrokeRecord] {
+        settings.landmarks.resolvedInkStrokeRecords()
+    }
+
+    private func syncSettingsFromCanvasActions() {
+        let records = canvasActions.records()
+        settings.landmarks.inkStrokeRecords = records
+        settings.landmarks.inkPaths = records.filter(\.isEditable).map(\.renderPath)
     }
 
     // MARK: - Web layer controls (main thread)

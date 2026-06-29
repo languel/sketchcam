@@ -505,6 +505,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
     public var inkPaths: [InkEditorPath]
+    /// New stroke model: captured gesture data + active render recipe. Nil
+    /// means this preset predates the split and should be migrated from
+    /// `inkPaths` at runtime.
+    public var inkStrokeRecords: [InkStrokeRecord]?
     public var inkColor: RGBAColor
     /// Tint the wet wash leaves on the paper (the wet field's transmission
     /// colour). Default ≈ light blue-grey reproduces the built-in look; pick a
@@ -681,6 +685,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
         inkPaths: [InkEditorPath] = [],
+        inkStrokeRecords: [InkStrokeRecord]? = nil,
         inkColor: RGBAColor = .ink,
         inkWashColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
         inkWidth: Float = 0.5,
@@ -812,6 +817,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
         self.inkPaths = inkPaths
+        self.inkStrokeRecords = inkStrokeRecords
         self.inkColor = inkColor
         self.inkWashColor = inkWashColor
         self.inkWidth = inkWidth

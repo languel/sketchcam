@@ -124,7 +124,7 @@ struct ContentView: View {
         .background(WindowAccessor(controller: windowMode))
         .onAppear {
             model.start()
-            model.replaceEditableCanvasPaths(model.settings.landmarks.inkPaths)
+            model.prepareInkStrokeRecordsForCurrentSettings()
             registerShortcuts()
             ShortcutRegistry.shared.start()
         }
@@ -200,7 +200,7 @@ struct ContentView: View {
                         smoothing: model.settings.landmarks.inkSmoothing,
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
-                        onImmediateCommitted: { model.commitImmediateCanvasStroke($0) },
+                        onStrokeCommitted: { commitCanvasStrokeRecord($0) },
                         outputSize: model.outputFormat.size,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -862,22 +862,12 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            InkEditorCanvas(
-                paths: inkPathsBinding,
-                paperColor: rgbaColor(model.settings.landmarks.inkPaperColor),
-                inkColor: rgbaColor(model.settings.landmarks.inkColor),
-                inkRGBA: model.settings.landmarks.inkColor,
-                brushMode: currentInkMode,
-                inkKind: currentInkKind,
-                width: Float(inkSizeBinding.wrappedValue),
-                flow: model.settings.landmarks.inkFlow,
-                bleed: model.settings.landmarks.inkBleed,
-                dry: model.settings.landmarks.inkDry,
-                colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
-                brushInk: Float(inkBrushInkBinding.wrappedValue)
+            InkStrokeDataList(
+                records: inkStrokeRecords,
+                selectedRecordID: $selectedInkPathID
             )
-                .frame(height: 180)
-                .help("Scratchpad view of the same full-canvas strokes. You can also draw directly on the preview while this tab is selected.")
+            .frame(minHeight: 150)
+            .help("Captured stroke data. The main preview remains the drawing and editing surface.")
 
             HStack {
                 Button {
@@ -903,9 +893,9 @@ struct ContentView: View {
                 } label: {
                     Label("Rerender", systemImage: "arrow.clockwise")
                 }
-                .disabled(model.settings.landmarks.inkPaths.isEmpty)
-                .help("Clear and re-simulate every committed path from scratch (with the current curve/params). Immediate-mode marks are not re-simulated.")
-                Text("\(model.settings.landmarks.inkPaths.count) paths")
+                .disabled(inkStrokeRecords.isEmpty)
+                .help("Clear and re-simulate every committed stroke through its active render recipe.")
+                Text("\(inkStrokeRecords.count) strokes")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1006,7 +996,6 @@ struct ContentView: View {
     private func clearInk() {
         model.cancelInkLiveStroke()
         model.clearCanvasActions()
-        setInkPaths([])
         // Fade the canvas out over the Fade duration, then wipe — the engine
         // fades the live-baked + committed ink (incl. immediate-mode marks) and
         // clears the textures when the fade completes.
@@ -1067,18 +1056,12 @@ struct ContentView: View {
     }
 
     private func undoInk() {
-        guard let action = model.undoCanvasAction() else { return }
-        if action.isEditable {
-            model.settings.landmarks.inkPaths.removeAll { $0.id == action.id }
-        }
+        guard model.undoCanvasAction() != nil else { return }
         clearInkSelection()
     }
 
     private func redoInk() {
-        guard let action = model.redoCanvasAction() else { return }
-        if action.isEditable, !model.settings.landmarks.inkPaths.contains(where: { $0.id == action.id }) {
-            model.settings.landmarks.inkPaths.append(action.path)
-        }
+        guard model.redoCanvasAction() != nil else { return }
         clearInkSelection()
     }
 
@@ -1086,8 +1069,15 @@ struct ContentView: View {
         model.cancelInkLiveStroke()
         let old = model.settings.landmarks.inkPaths
         guard old != paths else { return }
-        model.settings.landmarks.inkPaths = paths
         model.replaceEditableCanvasPaths(paths)
+    }
+
+    private func commitCanvasStrokeRecord(_ record: InkStrokeRecord) {
+        if record.isEditable {
+            model.commitEditableCanvasStroke(record)
+        } else {
+            model.commitImmediateCanvasStroke(record)
+        }
     }
 
     private var currentInkMode: InkBrushMode {
@@ -1103,6 +1093,10 @@ struct ContentView: View {
             get: { model.settings.landmarks.inkPaths },
             set: { setInkPaths($0) }
         )
+    }
+
+    private var inkStrokeRecords: [InkStrokeRecord] {
+        model.settings.landmarks.resolvedInkStrokeRecords()
     }
 
     private var inkModeBinding: Binding<InkBrushMode> {
@@ -1504,7 +1498,7 @@ struct ContentView: View {
         } else {
             model.settings.landmarks = preset.settings.landmarks
         }
-        model.replaceEditableCanvasPaths(model.settings.landmarks.inkPaths)
+        model.prepareInkStrokeRecordsForCurrentSettings()
     }
 
     private func saveCurrentPreset() {
@@ -3071,6 +3065,117 @@ private struct StyleRow: View {
     }
 }
 
+private struct InkStrokeDataList: View {
+    let records: [InkStrokeRecord]
+    @Binding var selectedRecordID: UUID?
+
+    private var selectedRecord: InkStrokeRecord? {
+        guard let selectedRecordID else { return records.last }
+        return records.first { $0.id == selectedRecordID } ?? records.last
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if records.isEmpty {
+                Text("No captured strokes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 64, alignment: .center)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
+                            Button {
+                                selectedRecordID = record.id
+                            } label: {
+                                InkStrokeDataRow(index: index, record: record, selected: selectedRecordID == record.id)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(minHeight: 94)
+                if let selectedRecord {
+                    InkStrokeDetail(record: selectedRecord)
+                }
+            }
+        }
+    }
+}
+
+private struct InkStrokeDataRow: View {
+    let index: Int
+    let record: InkStrokeRecord
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("#\(index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 30, alignment: .leading)
+            Text(record.capture.mode.label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 48, alignment: .leading)
+            Text(record.isEditable ? "saved" : "immediate")
+                .font(.caption)
+                .foregroundStyle(record.isEditable ? .primary : .secondary)
+                .frame(width: 68, alignment: .leading)
+            Text(durationText(record.capture.duration))
+                .font(.caption.monospacedDigit())
+                .frame(width: 44, alignment: .trailing)
+            Text("\(record.capture.canonicalSamples.count) pts")
+                .font(.caption.monospacedDigit())
+                .frame(width: 48, alignment: .trailing)
+            Text(recipeSummary(record.activeRender))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+private struct InkStrokeDetail: View {
+    let record: InkStrokeRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(record.id.uuidString)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text("raw \(record.capture.rawSamples.count) / canonical \(record.capture.canonicalSamples.count), seed \(record.capture.seed), \(recipeSummary(record.activeRender))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 6)
+    }
+}
+
+private extension InkStrokeCaptureMode {
+    var label: String {
+        switch self {
+        case .pen: return "pen"
+        case .wash: return "wash"
+        case .wetOnly: return "wet"
+        }
+    }
+}
+
+private func durationText(_ duration: TimeInterval) -> String {
+    String(format: "%.2fs", duration)
+}
+
+private func recipeSummary(_ recipe: InkRenderRecipe) -> String {
+    "\(recipe.intent.rawValue) \(recipe.inkKind.rawValue) w\(String(format: "%.2f", recipe.width)) f\(String(format: "%.2f", recipe.flow)) \(recipe.algorithm)"
+}
+
 private struct InkEditorCanvas: View {
     @Binding var paths: [InkEditorPath]
     let paperColor: Color
@@ -3299,7 +3404,7 @@ private struct InkPreviewDrawingLayer: View {
     let smoothing: Float
     let onLive: (InkLiveStrokeSample) -> Void
     let onLiveEnd: () -> Void
-    let onImmediateCommitted: (InkEditorPath) -> Void
+    let onStrokeCommitted: (InkStrokeRecord) -> Void
     let outputSize: CGSize
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -3318,6 +3423,10 @@ private struct InkPreviewDrawingLayer: View {
     @State private var current: [CGPoint] = []
     @State private var rawCurrent: [CGPoint] = []
     @State private var currentSampleTimes: [TimeInterval] = []
+    @State private var currentSampleModifiers: [InkStrokeModifierFlags?] = []
+    @State private var rawSampleModifiers: [InkStrokeModifierFlags?] = []
+    @State private var currentSampleCharges: [Float?] = []
+    @State private var rawSampleCharges: [Float?] = []
     @State private var currentStrokeStartTime: TimeInterval?
     @State private var currentStrokeSeed: UInt64?
     @State private var currentPathID: UUID?
@@ -3423,34 +3532,18 @@ private struct InkPreviewDrawingLayer: View {
     private func handleDragEnded(committed: Bool) {
         let strokeMode = currentStrokeMode ?? brushMode
         let immediate = (strokeMode == .pen && immediatePen) || (strokeMode == .brush && immediateWash)
-        let completedPath = InkEditorPath(
-            id: currentPathID ?? UUID(),
-            points: current,
-            sampleTimes: currentSampleTimes.count == current.count ? currentSampleTimes : nil,
-            strokeSeed: currentStrokeSeed,
-            brushMode: strokeMode,
-            inkKind: currentDissolveWash ? .white : inkKind,
-            width: strokeMode == .brush ? washWidth : width,
-            flow: flow,
-            bleed: bleed,
-            dry: dry,
-            colorSeparation: colorSeparation,
-            brushInk: currentDissolveWash ? 1 : brushInk,
-            color: inkRGBA
-        )
-        // Immediate mode: the live ink is already baked onto the canvas — keep
-        // it, but don't add an editable path (so the buffer doesn't grow).
+        let record = completedStrokeRecord(strokeMode: strokeMode, immediate: immediate)
         if tool == .draw, committed, current.count > 1 {
-            if immediate || currentWetOnly {
-                onImmediateCommitted(completedPath)
-            } else {
-                paths.append(completedPath)
-            }
+            onStrokeCommitted(record)
         }
         onLiveEnd()
         current = []
         rawCurrent = []
         currentSampleTimes = []
+        currentSampleModifiers = []
+        rawSampleModifiers = []
+        currentSampleCharges = []
+        rawSampleCharges = []
         currentStrokeStartTime = nil
         currentStrokeSeed = nil
         currentPathID = nil
@@ -3459,6 +3552,55 @@ private struct InkPreviewDrawingLayer: View {
         currentDissolveWash = false
         dragStartPaths = []
         dragStartPoint = nil
+    }
+
+    private func completedStrokeRecord(strokeMode: InkBrushMode, immediate: Bool) -> InkStrokeRecord {
+        let id = currentPathID ?? UUID()
+        let seed = currentStrokeSeed ?? 0
+        let times = currentSampleTimes.count == current.count ? currentSampleTimes : current.indices.map { TimeInterval($0) / 60 }
+        let rawTimes = currentSampleTimes.count == rawCurrent.count ? currentSampleTimes : rawCurrent.indices.map { TimeInterval($0) / 60 }
+        let rawSamples = rawCurrent.indices.map { index in
+            InkStrokeSample(
+                point: rawCurrent[index],
+                time: rawTimes[index],
+                modifiers: rawSampleModifiers.indices.contains(index) ? rawSampleModifiers[index] : nil,
+                charge: rawSampleCharges.indices.contains(index) ? rawSampleCharges[index] : nil
+            )
+        }
+        let canonicalSamples = current.indices.map { index in
+            InkStrokeSample(
+                point: current[index],
+                time: times[index],
+                modifiers: currentSampleModifiers.indices.contains(index) ? currentSampleModifiers[index] : nil,
+                charge: currentSampleCharges.indices.contains(index) ? currentSampleCharges[index] : nil
+            )
+        }
+        let captureMode: InkStrokeCaptureMode = currentWetOnly ? .wetOnly : (strokeMode == .pen ? .pen : .wash)
+        let renderIntent: InkRenderIntent = currentWetOnly ? .wetOnly : (strokeMode == .pen ? .pen : .wash)
+        let capture = InkStrokeCapture(
+            id: id,
+            seed: seed,
+            rawSamples: rawSamples,
+            canonicalSamples: canonicalSamples,
+            mode: captureMode
+        )
+        let recipe = InkRenderRecipe(
+            intent: renderIntent,
+            inkKind: currentDissolveWash ? .white : inkKind,
+            color: inkRGBA,
+            width: strokeMode == .brush ? washWidth : width,
+            flow: flow,
+            bleed: bleed,
+            dry: dry,
+            colorSeparation: colorSeparation,
+            brushInk: currentDissolveWash ? 1 : brushInk,
+            smoothing: smoothing
+        )
+        return InkStrokeRecord(
+            capture: capture,
+            activeRender: recipe,
+            isEditable: !(immediate || currentWetOnly)
+        )
     }
 
     private func updateLiveStroke(with point: CGPoint, secondary: Bool, combined: Bool, dissolveWash: Bool, shift: Bool, charge: Float) {
@@ -3478,6 +3620,11 @@ private struct InkPreviewDrawingLayer: View {
             current = [point]
             rawCurrent = [point]
             currentSampleTimes = [0]
+            let flags = InkStrokeModifierFlags(shift: shift, option: secondary, command: combined, control: dissolveWash)
+            currentSampleModifiers = [flags]
+            rawSampleModifiers = [flags]
+            currentSampleCharges = [charge]
+            rawSampleCharges = [charge]
             emitLiveSamples(point: point, time: 0, shift: shift, charge: charge)
             return
         }
@@ -3509,6 +3656,11 @@ private struct InkPreviewDrawingLayer: View {
             }
             current.append(canonicalPoint)
             currentSampleTimes.append(eventTime)
+            let flags = InkStrokeModifierFlags(shift: shift, option: secondary, command: combined, control: dissolveWash)
+            rawSampleModifiers.append(flags)
+            currentSampleModifiers.append(flags)
+            rawSampleCharges.append(charge)
+            currentSampleCharges.append(charge)
             emitLiveSamples(point: canonicalPoint, time: eventTime, shift: shift, charge: charge)
         } else if (currentStrokeMode ?? brushMode) == .brush {
             let now = ProcessInfo.processInfo.systemUptime

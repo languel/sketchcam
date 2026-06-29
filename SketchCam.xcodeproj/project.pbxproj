@@ -54,6 +54,7 @@
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
 		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
 		9929C7F801705C184CEFB01F /* TrackedMotionFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */; };
+		9A50A4C0AB26A7725C06F5E4 /* InkStrokeRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3422AD7620F1947DC05D22A /* InkStrokeRecord.swift */; };
 		9B12DCAF538270CE6FE730AC /* InkWashShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C21653FA03BD4BCD40E46591 /* InkWashShaders.metal */; };
 		A2520BED93ECF9C42B797E50 /* DrawingAlgorithm.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */; };
 		A36F9D2E267E1B35079B8E08 /* CanvasActionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B114A15FAA4899558AA203BB /* CanvasActionHistory.swift */; };
@@ -226,6 +227,7 @@
 		B114A15FAA4899558AA203BB /* CanvasActionHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasActionHistory.swift; sourceTree = "<group>"; };
 		B15DC36DBE47DE03D6397592 /* TestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGenerator.swift; sourceTree = "<group>"; };
 		B2E83FCC5EFAAAA2D96BC1A8 /* WindowModeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowModeController.swift; sourceTree = "<group>"; };
+		B3422AD7620F1947DC05D22A /* InkStrokeRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkStrokeRecord.swift; sourceTree = "<group>"; };
 		B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraDeviceOption.swift; sourceTree = "<group>"; };
 		B53093F3EB6121C4B7899971 /* SegmentationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentationService.swift; sourceTree = "<group>"; };
 		B5353551EC3801D94B187FD7 /* TrackedMotionFieldProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProvider.swift; sourceTree = "<group>"; };
@@ -531,6 +533,7 @@
 				1B76938CF9C16060A016345E /* ControlFieldGraph.swift */,
 				1C06D40213B1C498E532DC06 /* CoreImageFrameProcessor.swift */,
 				7F020DE1E3188F55E237ED1D /* FrameProcessor.swift */,
+				B3422AD7620F1947DC05D22A /* InkStrokeRecord.swift */,
 				B02169792350DA5793406338 /* LayerGraph.swift */,
 				2836CF880DAF3F0A8928640F /* LineWalk.swift */,
 				33A62B38FB62959937129F6F /* ProcessingSettings.swift */,
@@ -795,6 +798,7 @@
 				EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */,
 				C87C74E5B2A9C6A74FAB31AD /* CoreImageFrameProcessor.swift in Sources */,
 				D990ED134C835896BE69D1DB /* FrameProcessor.swift in Sources */,
+				9A50A4C0AB26A7725C06F5E4 /* InkStrokeRecord.swift in Sources */,
 				66D99898FC53D50F55AFB2E3 /* LayerGraph.swift in Sources */,
 				D565A70265A20DB130B45F11 /* LineWalk.swift in Sources */,
 				1B760321663FC29EBC2FAD18 /* ProcessingSettings.swift in Sources */,
