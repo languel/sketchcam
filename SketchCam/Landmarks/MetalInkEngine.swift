@@ -446,7 +446,7 @@ final class MetalInkEngine {
             livePointerStates = [:]
             rebuildKey = key
             lastFrameIndex = nil
-            activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
+            activeFramesRemaining = pathsNeedSimulation(replayablePaths, settings: settings) ? 180 : 0
         } else if pathsChanged && !clearFadeRequested && !clearFadeActive {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
         }
@@ -467,7 +467,10 @@ final class MetalInkEngine {
         // window length is the Fade duration (longer = the wash keeps drifting
         // and settling longer before it locks in).
         let fadeFrames = Int(fadeDuration * 60) + 30
-        if endedLiveID != nil {
+        let endedStrokeNeedsSimulation = endedLiveID.flatMap { id in
+            replayablePaths.first(where: { $0.id == id })?.brushMode
+        } == .brush
+        if endedStrokeNeedsSimulation {
             fixTimer = max(fixTimer, fadeDuration)
             activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
         }
@@ -540,13 +543,14 @@ final class MetalInkEngine {
                 }
             }
             let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
-            if liveActive {
+            let liveNeedsSimulation = liveActive && live?.brushMode == .brush
+            if liveNeedsSimulation {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
             }
-            if !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive) {
+            if !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveNeedsSimulation) {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
@@ -729,8 +733,10 @@ final class MetalInkEngine {
         for (index, path) in paths.enumerated() {
             replay(path: path, index: index, settings: settings, commandBuffer: commandBuffer)
         }
-        for _ in 0..<6 {
-            step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+        if pathsNeedSimulation(paths, settings: settings) {
+            for _ in 0..<6 {
+                step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+            }
         }
     }
 
@@ -747,7 +753,9 @@ final class MetalInkEngine {
                 // double the mark. Replay only programmatic / loaded paths.
                 if bakedLiveIDs.contains(path.id) { continue }
                 replay(path: path, index: replayedPaths.count, settings: settings, commandBuffer: commandBuffer)
-                activeFramesRemaining = max(activeFramesRemaining, 90)
+                if pathNeedsSimulation(path, settings: settings) {
+                    activeFramesRemaining = max(activeFramesRemaining, 90)
+                }
             }
             replayedPaths = paths
             return
@@ -757,7 +765,15 @@ final class MetalInkEngine {
         replay(paths: paths, settings: settings, commandBuffer: commandBuffer)
         replayedPaths = paths
         livePointerStates = [:]
-        activeFramesRemaining = paths.isEmpty ? 0 : 180
+        activeFramesRemaining = pathsNeedSimulation(paths, settings: settings) ? 180 : 0
+    }
+
+    private func pathsNeedSimulation(_ paths: [InkEditorPath], settings: ProcessingSettings) -> Bool {
+        paths.contains { pathNeedsSimulation($0, settings: settings) }
+    }
+
+    private func pathNeedsSimulation(_ path: InkEditorPath, settings: ProcessingSettings) -> Bool {
+        (path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .brush
     }
 
     private func isAppendOnly(previous: [InkEditorPath], next: [InkEditorPath]) -> Bool {
