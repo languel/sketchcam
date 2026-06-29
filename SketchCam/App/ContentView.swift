@@ -94,6 +94,7 @@ struct ContentView: View {
     @State private var tab = ControlTab.layers
     /// Comma-separated ids of the tabs shown in the tab bar. Empty = default visible tabs.
     @AppStorage("visibleControlTabs") private var visibleTabsRaw: String = ""
+    @AppStorage("timelineDockVisible") private var timelineDockVisible = true
     @AppStorage(InkUndoPreferences.gpuStateCountKey)
     private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
     @State private var inkTool = InkTool.draw
@@ -104,21 +105,7 @@ struct ContentView: View {
     @State private var debugOverlayOffset = CGSize.zero
 
     var body: some View {
-        Group {
-            if windowMode.panelVisible && windowMode.panelFit {
-                // Fit mode: panel sits beside the canvas; the canvas shrinks to
-                // the remaining space (fully visible, never under the panel).
-                HStack(spacing: 0) {
-                    previewPane
-                    controlsPane
-                        .frame(width: 360)
-                        .background(Color(nsColor: .windowBackgroundColor))
-                        .overlay(alignment: .leading) { Divider() }
-                }
-            } else {
-                contentWithOverlayPanel
-            }
-        }
+        dockedWorkspace
         .overlay { debugOverlay }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
@@ -131,23 +118,68 @@ struct ContentView: View {
         .onDisappear { model.stop() }
     }
 
-    private var contentWithOverlayPanel: some View {
-        previewPane
-            .overlay {
-                // Overlay mode: panel floats over the canvas inside a
-                // GeometryReader (which reports no minimum size, so the 360pt
-                // panel can never constrain how small the window may shrink, PIP).
-                if windowMode.panelVisible {
-                    GeometryReader { _ in
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            controlsPane
-                                .background(Color(nsColor: .windowBackgroundColor).opacity(0.92))
-                                .overlay(alignment: .leading) { Divider() }
-                        }
+    private var dockedWorkspace: some View {
+        HStack(spacing: 0) {
+            canvasDock
+            if windowMode.panelVisible && windowMode.panelFit {
+                controlsPane
+                    .frame(width: 360)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .overlay(alignment: .leading) { Divider() }
+            }
+        }
+        .overlay {
+            if windowMode.panelVisible && !windowMode.panelFit {
+                GeometryReader { _ in
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        controlsPane
+                            .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+                            .overlay(alignment: .leading) { Divider() }
                     }
                 }
             }
+        }
+    }
+
+    private var canvasDock: some View {
+        VStack(spacing: 0) {
+            previewPane
+            if timelineDockVisible {
+                timelineDock
+                    .frame(height: 132)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .overlay(alignment: .top) { Divider() }
+            }
+        }
+        .frame(minWidth: 120, minHeight: 68)
+    }
+
+    private var timelineDock: some View {
+        DockPanel(title: "Timeline", systemImage: "rectangle.bottomthird.inset.filled", trailing: {
+            Button {
+                timelineDockVisible = false
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Hide timeline dock")
+        }) {
+            HStack(spacing: 10) {
+                TimelineMetric(label: "Strokes", value: "\(inkStrokeRecords.count)")
+                TimelineMetric(label: "Editable", value: "\(inkStrokeRecords.filter(\.isEditable).count)")
+                TimelineMetric(label: "Immediate", value: "\(inkStrokeRecords.filter { !$0.isEditable }.count)")
+                Divider()
+                    .frame(height: 40)
+                Text("Timeline controls will land here; records already preserve timing, order, and render recipes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+        }
     }
 
     @ViewBuilder private var debugOverlay: some View {
@@ -275,9 +307,31 @@ struct ContentView: View {
 
     private var controlsPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            actionBar
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+            DockPanelHeader(
+                title: "Inspector",
+                systemImage: "sidebar.right",
+                trailing: {
+                    Menu {
+                        Button("Dock Right") {
+                            windowMode.panelFit = true
+                            windowMode.panelVisible = true
+                        }
+                        Button("Float Right") {
+                            windowMode.panelFit = false
+                            windowMode.panelVisible = true
+                        }
+                        Button("Hide Inspector") {
+                            windowMode.panelVisible = false
+                        }
+                        Divider()
+                        Toggle("Timeline Dock", isOn: $timelineDockVisible)
+                    } label: {
+                        Image(systemName: "dock.rectangle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("Dock panels")
+                }
+            )
             Divider()
             HStack(spacing: 8) {
                 Picker("", selection: $tab) {
@@ -337,40 +391,6 @@ struct ContentView: View {
         .frame(width: 360)
     }
 
-    /// Always-visible actions with their shortcuts.
-    private var actionBar: some View {
-        HStack(spacing: 8) {
-            Text("SketchCam")
-                .font(.headline)
-            Spacer()
-            Button {
-                model.toggleFreezeOrPause()
-            } label: {
-                Label(
-                    freezeButtonTitle,
-                    systemImage: isHeld ? "play.fill" : "pause.fill"
-                )
-            }
-            .help("Freeze live input / pause movie")
-            Button {
-                model.exportCurrentFrame()
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-            }
-            .help("Export current frame as PNG")
-            Button {
-                appUI.toggleDebugOverlay()
-            } label: {
-                Label(
-                    "Performance",
-                    systemImage: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle"
-                )
-            }
-            .help("Toggle performance overlay (Control-Option-P)")
-        }
-        .controlSize(.small)
-    }
-
     private var isHeld: Bool {
         model.frameSource == .movie ? model.movieRate == 0 : model.inputFrozen
     }
@@ -387,6 +407,19 @@ struct ContentView: View {
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
+        HStack {
+            Button {
+                model.toggleFreezeOrPause()
+            } label: {
+                Label(freezeButtonTitle, systemImage: isHeld ? "play.fill" : "pause.fill")
+            }
+            .help("Freeze live camera input")
+            Spacer()
+            Text(model.inputFrozen ? "held" : "live")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .controlSize(.small)
         Picker("Camera", selection: Binding(
             get: { model.selectedDeviceID ?? "" },
             set: {
@@ -416,6 +449,19 @@ struct ContentView: View {
     @ViewBuilder private var movieTab: some View {
         SectionHeader("Movie")
         HStack {
+            Button {
+                model.toggleFreezeOrPause()
+            } label: {
+                Label(freezeButtonTitle, systemImage: isHeld ? "play.fill" : "pause.fill")
+            }
+            .help("Pause or resume movie input")
+            Spacer()
+            Text(model.movieRate == 0 ? "paused" : "playing")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .controlSize(.small)
+        HStack {
             Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
             Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
             Text(model.movieURL?.lastPathComponent ?? "No movie selected")
@@ -435,6 +481,13 @@ struct ContentView: View {
 
     @ViewBuilder private var inputTab: some View {
         SectionHeader("Output")
+        Button {
+            model.exportCurrentFrame()
+        } label: {
+            Label("Export current frame", systemImage: "square.and.arrow.down")
+        }
+        .controlSize(.small)
+        .help("Export current frame as PNG")
         Picker("Format", selection: $model.outputFormat) {
             ForEach(SketchCamFormats.all) { format in
                 Text(format.displayName).tag(format)
@@ -468,14 +521,24 @@ struct ContentView: View {
         SectionHeader("Window")
         HStack {
             Toggle("Panel", isOn: $windowMode.panelVisible)
-            Toggle("Decoration", isOn: $windowMode.decorated)
+            Toggle("Timeline", isOn: $timelineDockVisible)
         }
         .toggleStyle(.checkbox)
         HStack {
+            Toggle("Decoration", isOn: $windowMode.decorated)
             Toggle("Transparent", isOn: $windowMode.transparent)
-            Toggle("On top", isOn: $windowMode.alwaysOnTop)
         }
         .toggleStyle(.checkbox)
+        HStack {
+            Toggle("On top", isOn: $windowMode.alwaysOnTop)
+            Button {
+                appUI.toggleDebugOverlay()
+            } label: {
+                Label("Performance", systemImage: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle")
+            }
+            .help("Toggle performance overlay (Control-Option-P)")
+        }
+        .controlSize(.small)
         HStack {
             Button(windowMode.presentationMode ? "Exit Presentation Mode" : "Presentation Mode") {
                 windowMode.togglePresentationMode()
@@ -3062,6 +3125,55 @@ private struct StyleRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 30, alignment: .trailing)
         }
+    }
+}
+
+private struct DockPanel<Content: View, Trailing: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder var trailing: () -> Trailing
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DockPanelHeader(title: title, systemImage: systemImage, trailing: trailing)
+            content()
+        }
+    }
+}
+
+private struct DockPanelHeader<Trailing: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            trailing()
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct TimelineMetric: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.headline.monospacedDigit())
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minWidth: 62, alignment: .leading)
     }
 }
 
