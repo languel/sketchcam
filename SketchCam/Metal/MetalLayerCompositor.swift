@@ -247,22 +247,29 @@ final class MetalLayerCompositor {
         }
         result = result.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
         result = result.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-        result = result.transformed(by: renderTransform(for: frame.transform))
+        result = result.transformed(by: renderTransform(for: frame.transform, localRect: target, viewport: viewport))
         result = result.transformed(by: CGAffineTransform(translationX: -viewport.minX, y: -viewport.minY))
         return result.cropped(to: CGRect(origin: .zero, size: outputFormat.size))
     }
 
-    private func renderTransform(for transform: WorkspaceAffineTransform) -> CGAffineTransform {
+    private func renderTransform(
+        for transform: WorkspaceAffineTransform,
+        localRect: CGRect,
+        viewport: CGRect
+    ) -> CGAffineTransform {
         // Workspace/UI coordinates are top-left/y-down. Core Image applies
-        // affine transforms in y-up coordinates, so convert the stored frame
-        // transform at the compositor boundary instead of changing the model.
-        CGAffineTransform(
+        // affine transforms in y-up coordinates. Convert around the local and
+        // viewport heights, not the origin, so scaled frames keep their visual
+        // pivot aligned with the artboard overlay and input hit testing.
+        let localYSum = localRect.minY + localRect.maxY
+        let viewportYSum = viewport.minY + viewport.maxY
+        return CGAffineTransform(
             a: transform.a,
             b: -transform.b,
             c: -transform.c,
             d: transform.d,
-            tx: transform.tx,
-            ty: -transform.ty
+            tx: transform.tx + transform.c * localYSum,
+            ty: viewportYSum - transform.d * localYSum - transform.ty
         )
     }
 

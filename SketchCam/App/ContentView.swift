@@ -709,6 +709,12 @@ struct ContentView: View {
                 if !windowMode.transparent {
                     CheckerboardBackground()
                 }
+                WorkspaceMaterialProxyLayer(
+                    workspace: model.settings.workspace,
+                    graph: model.settings.layerGraph,
+                    outputSize: model.outputFormat.size,
+                    outputRect: outputRect
+                )
                 if !model.settings.previewEnabled {
                     Text("Preview off — still publishing")
                         .foregroundStyle(.secondary)
@@ -738,6 +744,7 @@ struct ContentView: View {
                         onStrokeCommitted: { commitCanvasStrokeRecord($0) },
                         outputSize: model.outputFormat.size,
                         outputRect: outputRect,
+                        workspace: model.settings.workspace,
                         activeFrameID: activeInkFrameID,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -4123,6 +4130,24 @@ private struct WorkspaceFrameStackEditor: View {
                 .labelsHidden()
                 .frame(width: 100)
             }
+            HStack(spacing: 6) {
+                Button {
+                    fitFrame(frame.id, to: .viewport)
+                } label: {
+                    Label("Viewport", systemImage: "viewfinder")
+                }
+                .help("Fit frame to the live output viewport")
+
+                Button {
+                    fitFrame(frame.id, to: .artboard)
+                } label: {
+                    Label("Artboard", systemImage: "rectangle.expand.vertical")
+                }
+                .help("Fit frame to a larger artboard backdrop around the live viewport")
+            }
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
             HStack {
                 field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x))
                 field("Y", value: cropValue(frame.id, keyPath: \.origin.y))
@@ -4182,6 +4207,34 @@ private struct WorkspaceFrameStackEditor: View {
             body(&workspace.frames[index])
             workspace.activeFrameID = id
             workspace.selectedFrameIDs = [id]
+        }
+    }
+
+    private enum FrameFitTarget {
+        case viewport
+        case artboard
+    }
+
+    private func fitFrame(_ id: UUID, to target: FrameFitTarget) {
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }) else { return }
+            let viewport = workspace.outputViewport.frame
+            let bounds: CGRect
+            switch target {
+            case .viewport:
+                bounds = viewport
+            case .artboard:
+                bounds = viewport.insetBy(dx: -viewport.width * 0.5, dy: -viewport.height * 0.5)
+            }
+            workspace.frames[index].localBounds = CGRect(origin: .zero, size: bounds.size)
+            workspace.frames[index].transform = .translation(x: bounds.minX, y: bounds.minY)
+            workspace.frames[index].cropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+            workspace.viewCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+            if target == .artboard {
+                workspace.zoom = min(workspace.zoom, 0.7)
+            }
         }
     }
 
@@ -5842,12 +5895,105 @@ private func workspaceOutputRect(container: CGSize, outputSize: CGSize, workspac
     )
 }
 
+private struct WorkspaceMaterialProxyLayer: View {
+    let workspace: CollageWorkspace?
+    let graph: LayerGraph?
+    let outputSize: CGSize
+    let outputRect: CGRect
+
+    var body: some View {
+        Canvas { context, _ in
+            drawProxy(context: &context)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func drawProxy(context: inout GraphicsContext) {
+        guard let workspace else { return }
+        for frame in workspace.frames where frame.visible {
+            guard shouldDrawProxy(frame, workspace: workspace) else { continue }
+            let corners = frameCorners(frame, workspace: workspace)
+            guard corners.count == 4 else { continue }
+            var path = Path()
+            path.move(to: corners[0])
+            for point in corners.dropFirst() {
+                path.addLine(to: point)
+            }
+            path.closeSubpath()
+            let opacity = Double(max(0, min(1, frame.opacity)))
+            context.fill(path, with: .color(proxyFill(for: frame).opacity(opacity)))
+            context.stroke(path, with: .color(Color.white.opacity(0.05 * opacity)), lineWidth: 1)
+        }
+    }
+
+    private func shouldDrawProxy(_ frame: WorkspaceFrame, workspace: CollageWorkspace) -> Bool {
+        guard frame.role != .preview else { return false }
+        guard !frame.worldBounds.intersection(workspace.outputViewport.frame).equalTo(frame.worldBounds) else {
+            return false
+        }
+        if frame.role == .reference { return true }
+        guard case .layer(let layerID) = frame.material,
+              let layer = graph?.layers.first(where: { $0.id == layerID }),
+              let node = graph?.node(layer.node) else { return false }
+        return node.kind.family == "paper" || node.kind.family == "solid" || node.kind.family == "image"
+    }
+
+    private func proxyFill(for frame: WorkspaceFrame) -> Color {
+        guard case .layer(let layerID) = frame.material,
+              let layer = graph?.layers.first(where: { $0.id == layerID }),
+              let node = graph?.node(layer.node) else {
+            return Color.white.opacity(0.08)
+        }
+        switch node.kind {
+        case .paper(let config):
+            return Color(
+                red: Double(config.tint.red),
+                green: Double(config.tint.green),
+                blue: Double(config.tint.blue)
+            ).opacity(0.84)
+        case .solid(let config):
+            return Color(
+                red: Double(config.color.red),
+                green: Double(config.color.green),
+                blue: Double(config.color.blue)
+            ).opacity(Double(config.color.alpha))
+        case .image:
+            return Color.white.opacity(0.16)
+        default:
+            return Color.white.opacity(0.08)
+        }
+    }
+
+    private func frameCorners(_ frame: WorkspaceFrame, workspace: CollageWorkspace) -> [CGPoint] {
+        rectCorners(frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed))
+            .map { $0.applying(frame.transform.cgAffineTransform) }
+            .map { viewPoint(world: $0, viewport: workspace.outputViewport.frame) }
+    }
+
+    private func rectCorners(_ rect: CGRect) -> [CGPoint] {
+        [
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.maxY),
+            CGPoint(x: rect.minX, y: rect.maxY)
+        ]
+    }
+
+    private func viewPoint(world: CGPoint, viewport: CGRect) -> CGPoint {
+        CGPoint(
+            x: outputRect.minX + ((world.x - viewport.minX) / max(1, viewport.width)) * outputRect.width,
+            y: outputRect.minY + ((world.y - viewport.minY) / max(1, viewport.height)) * outputRect.height
+        )
+    }
+}
+
 private struct WorkspaceArtboardOverlay: View {
     @ObservedObject var model: SketchCamViewModel
     let outputSize: CGSize
 
     @State private var dragStarted = false
     @State private var dragOperation: DragOperation?
+    @State private var magnifyStartZoom: Double?
 
     private enum DragOperation {
         case pan(startView: CGPoint, startCenter: CGPoint)
@@ -5872,6 +6018,15 @@ private struct WorkspaceArtboardOverlay: View {
                     }
                     .onEnded { _ in
                         handleDragEnded()
+                    }
+            )
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        handleMagnifyChanged(value)
+                    }
+                    .onEnded { _ in
+                        magnifyStartZoom = nil
                     }
             )
         }
@@ -6050,6 +6205,18 @@ private struct WorkspaceArtboardOverlay: View {
         }
     }
 
+    private func handleMagnifyChanged(_ value: CGFloat) {
+        guard let workspace = model.settings.workspace else { return }
+        if magnifyStartZoom == nil {
+            magnifyStartZoom = workspace.zoom
+        }
+        let base = magnifyStartZoom ?? workspace.zoom
+        let zoom = max(0.05, min(16, base * Double(value)))
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.zoom = zoom
+        }
+    }
+
     private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, centerWorld: CGPoint)? {
         for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
             let corners = frameCorners(frame, viewport: workspace.outputViewport.frame, outputRect: outputRect)
@@ -6145,6 +6312,7 @@ private struct InkPreviewDrawingLayer: View {
     let onStrokeCommitted: (InkStrokeRecord) -> Void
     let outputSize: CGSize
     let outputRect: CGRect?
+    let workspace: CollageWorkspace?
     let activeFrameID: UUID?
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -6207,7 +6375,8 @@ private struct InkPreviewDrawingLayer: View {
                 }
                 InkCanvasEventOverlay(
                     onChanged: { value in
-                        guard rect.contains(value.location) else { return }
+                        guard rect.contains(value.location),
+                              acceptsInput(value.location, in: rect) else { return }
                         handleDragChanged(value, in: rect)
                     },
                     onEnded: { ended in
@@ -6234,7 +6403,15 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func viewPoint(_ point: CGPoint, in rect: CGRect) -> CGPoint {
-        CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
+        if let mapping = activeFrameMapping(in: rect) {
+            let local = CGPoint(
+                x: mapping.target.minX + point.x * mapping.target.width,
+                y: mapping.target.minY + point.y * mapping.target.height
+            )
+            let world = local.applying(mapping.frame.transform.cgAffineTransform)
+            return viewPoint(world: world, viewport: mapping.viewport, outputRect: rect)
+        }
+        return CGPoint(x: rect.minX + point.x * rect.width, y: rect.minY + point.y * rect.height)
     }
 
     private func handleDragChanged(_ value: InkCanvasDragValue, in rect: CGRect) {
@@ -6449,27 +6626,94 @@ private struct InkPreviewDrawingLayer: View {
     }
 
     private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
-        CGPoint(
+        if let mapped = frameNormalized(point, in: rect, clamped: true) {
+            return mapped
+        }
+        return CGPoint(
             x: min(1, max(0, (point.x - rect.minX) / max(1, rect.width))),
             y: min(1, max(0, (point.y - rect.minY) / max(1, rect.height)))
+        )
+    }
+
+    private struct ActiveFrameMapping {
+        var frame: WorkspaceFrame
+        var viewport: CGRect
+        var target: CGRect
+    }
+
+    private func activeFrameMapping(in rect: CGRect) -> ActiveFrameMapping? {
+        guard let workspace,
+              let frame = workspace.frame(id: activeFrameID),
+              rect.width > 0,
+              rect.height > 0 else { return nil }
+        let target = frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed)
+        guard target.width > 0,
+              target.height > 0,
+              isInvertible(frame.transform.cgAffineTransform) else { return nil }
+        return ActiveFrameMapping(frame: frame, viewport: workspace.outputViewport.frame, target: target)
+    }
+
+    private func isInvertible(_ transform: CGAffineTransform) -> Bool {
+        abs(transform.a * transform.d - transform.b * transform.c) > 0.000001
+    }
+
+    private func acceptsInput(_ point: CGPoint, in rect: CGRect) -> Bool {
+        guard activeFrameMapping(in: rect) != nil,
+              let normalized = frameNormalized(point, in: rect, clamped: false) else {
+            return true
+        }
+        let slop: CGFloat = 0.01
+        return normalized.x >= -slop &&
+            normalized.x <= 1 + slop &&
+            normalized.y >= -slop &&
+            normalized.y <= 1 + slop
+    }
+
+    private func frameNormalized(_ point: CGPoint, in rect: CGRect, clamped: Bool) -> CGPoint? {
+        guard let mapping = activeFrameMapping(in: rect) else { return nil }
+        let world = worldPoint(view: point, viewport: mapping.viewport, outputRect: rect)
+        let local = world.applying(mapping.frame.transform.cgAffineTransform.inverted())
+        let normalized = CGPoint(
+            x: (local.x - mapping.target.minX) / max(1, mapping.target.width),
+            y: (local.y - mapping.target.minY) / max(1, mapping.target.height)
+        )
+        guard clamped else { return normalized }
+        return CGPoint(
+            x: min(1, max(0, normalized.x)),
+            y: min(1, max(0, normalized.y))
+        )
+    }
+
+    private func viewPoint(world: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
+        return CGPoint(
+            x: outputRect.minX + ((world.x - viewport.minX) / max(1, viewport.width)) * outputRect.width,
+            y: outputRect.minY + ((world.y - viewport.minY) / max(1, viewport.height)) * outputRect.height
+        )
+    }
+
+    private func worldPoint(view: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
+        return CGPoint(
+            x: viewport.minX + ((view.x - outputRect.minX) / max(1, outputRect.width)) * viewport.width,
+            y: viewport.minY + ((view.y - outputRect.minY) / max(1, outputRect.height)) * viewport.height
         )
     }
 
     private func selectionBounds(_ points: [CGPoint], in rect: CGRect) -> Path {
         var path = Path()
         guard !points.isEmpty else { return path }
-        let xs = points.map(\.x)
-        let ys = points.map(\.y)
+        let viewPoints = points.map { viewPoint($0, in: rect) }
+        let xs = viewPoints.map(\.x)
+        let ys = viewPoints.map(\.y)
         let minX = xs.min() ?? 0
         let maxX = xs.max() ?? 0
         let minY = ys.min() ?? 0
         let maxY = ys.max() ?? 0
-        let inset: CGFloat = 0.008
+        let inset: CGFloat = 6
         path.addRect(CGRect(
-            x: rect.minX + (minX - inset) * rect.width,
-            y: rect.minY + (minY - inset) * rect.height,
-            width: (maxX - minX + inset * 2) * rect.width,
-            height: (maxY - minY + inset * 2) * rect.height
+            x: minX - inset,
+            y: minY - inset,
+            width: maxX - minX + inset * 2,
+            height: maxY - minY + inset * 2
         ))
         return path
     }
