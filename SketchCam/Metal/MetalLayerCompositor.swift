@@ -43,6 +43,7 @@ final class MetalLayerCompositor {
     /// Composite the graph into a fresh output frame, or nil on failure (caller
     /// falls back to the CoreImage path).
     func composite(graph: LayerGraph, streams: Streams, outputFormat: FrameFormat,
+                   workspace: CollageWorkspace? = nil,
                    frameIndex: Int, timestamp: CMTime, mirror: Bool) -> ProcessedFrame? {
         guard ensureBuffers(for: outputFormat) else { return nil }
         let rect = CGRect(origin: .zero, size: outputFormat.size)
@@ -52,15 +53,16 @@ final class MetalLayerCompositor {
         rasterize(CIImage(color: .clear).cropped(to: rect), into: accumA)
         var cur = accumA, other = accumB
 
-        for layer in graph.layers where layer.visible && layer.opacity > 0.001 {
-            guard let node = graph.node(layer.node), let img = streams.image(node) else { continue }
+        let items = renderItems(graph: graph, streams: streams, workspace: workspace, outputFormat: outputFormat)
+        for item in items where item.opacity > 0.001 {
+            guard let img = item.image else { continue }
             rasterize(img, into: content)
 
             // Layer masks clip the raw source first. Effect-chain Person Key still
             // lives in the chain below, so it affects the chain at its own position.
             var chainInput = content
             var chainOutput = masked
-            if let mask = layer.mask {
+            if let mask = item.mask {
                 if case .source(.personMatte) = mask.source, let personMatte = streams.personMatte {
                     rasterize(personMatte, into: matteBuf)
                     let invert = mask.personKeyInvert != mask.invert
@@ -96,18 +98,18 @@ final class MetalLayerCompositor {
             // A personKey (or other matte-using) effect needs the person matte
             // rasterized into a buffer for the chain.
             var chainMatte: CVPixelBuffer? = nil
-            if layer.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }), let pm = streams.personMatte {
+            if item.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }), let pm = streams.personMatte {
                 rasterize(pm, into: matteBuf)
                 chainMatte = matteBuf
             }
 
             // Per-layer effect chain after source masking.
             guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
-                                     effects: layer.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
+                                     effects: item.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
 
             // Composite onto the accumulator with the layer opacity/blend mode.
             guard effects.composite(base: cur, overlay: chainOutput, output: other,
-                                    opacity: layer.opacity, blend: layer.blend) else { return nil }
+                                    opacity: item.opacity, blend: item.blend) else { return nil }
             swap(&cur, &other)
         }
 
@@ -123,6 +125,129 @@ final class MetalLayerCompositor {
             inputResolution: outputFormat.size, outputResolution: outputFormat.size,
             threshold: 0, edgeStrength: 0, invert: false, mirror: mirror)
         return ProcessedFrame(pixelBuffer: output, sampleBuffer: sampleBuffer, state: state)
+    }
+
+    private struct RenderItem {
+        var image: CIImage?
+        var effects: [EffectConfig]
+        var mask: MaskBinding?
+        var opacity: Float
+        var blend: BlendMode
+    }
+
+    private func renderItems(
+        graph: LayerGraph,
+        streams: Streams,
+        workspace: CollageWorkspace?,
+        outputFormat: FrameFormat
+    ) -> [RenderItem] {
+        guard let workspace else {
+            return graph.layers.compactMap { layer in
+                guard layer.visible,
+                      let node = graph.node(layer.node) else { return nil }
+                return RenderItem(
+                    image: streams.image(node),
+                    effects: layer.effects,
+                    mask: layer.mask,
+                    opacity: layer.opacity,
+                    blend: layer.blend
+                )
+            }
+        }
+
+        let viewport = workspace.outputViewport.frame
+        return workspace.visibleOutputFrames().compactMap { frame in
+            guard let resolved = resolveFrame(frame, graph: graph, streams: streams, viewport: viewport, outputFormat: outputFormat) else {
+                return nil
+            }
+            return resolved
+        }
+    }
+
+    private func resolveFrame(
+        _ frame: WorkspaceFrame,
+        graph: LayerGraph,
+        streams: Streams,
+        viewport: CGRect,
+        outputFormat: FrameFormat
+    ) -> RenderItem? {
+        let image: CIImage?
+        let layer: Layer?
+        switch frame.material {
+        case .layer(let layerID):
+            layer = graph.layers.first { $0.id == layerID }
+            guard let layer, let node = graph.node(layer.node) else { return nil }
+            image = streams.image(node)
+        case .node(let nodeID):
+            layer = graph.layers.first { $0.node == nodeID }
+            guard let node = graph.node(nodeID) else { return nil }
+            image = streams.image(node)
+        case .image:
+            layer = nil
+            image = nil
+        case .outputViewport:
+            layer = nil
+            image = nil
+        }
+        guard let transformed = image.flatMap({ transform($0, for: frame, viewport: viewport, outputFormat: outputFormat) }) else {
+            return nil
+        }
+        return RenderItem(
+            image: transformed,
+            effects: layer?.effects ?? [],
+            mask: frame.mask ?? layer?.mask,
+            opacity: max(0, min(1, frame.opacity)),
+            blend: frame.blend
+        )
+    }
+
+    private func transform(
+        _ image: CIImage,
+        for frame: WorkspaceFrame,
+        viewport: CGRect,
+        outputFormat: FrameFormat
+    ) -> CIImage? {
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0,
+              frame.localBounds.width > 0, frame.localBounds.height > 0 else { return nil }
+        let cropUnit = frame.cropRect.standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard cropUnit.width > 0, cropUnit.height > 0 else { return nil }
+        let crop = CGRect(
+            x: extent.minX + cropUnit.minX * extent.width,
+            y: extent.minY + cropUnit.minY * extent.height,
+            width: cropUnit.width * extent.width,
+            height: cropUnit.height * extent.height
+        )
+        guard crop.width > 0, crop.height > 0 else { return nil }
+
+        var result = image.cropped(to: crop)
+        result = result.transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+
+        let target = frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed)
+        let scaleX: CGFloat
+        let scaleY: CGFloat
+        let offsetX: CGFloat
+        let offsetY: CGFloat
+        switch frame.contentFit {
+        case .stretch:
+            scaleX = target.width / crop.width
+            scaleY = target.height / crop.height
+            offsetX = target.minX
+            offsetY = target.minY
+        case .fit, .fill:
+            let uniform = frame.contentFit == .fit
+                ? min(target.width / crop.width, target.height / crop.height)
+                : max(target.width / crop.width, target.height / crop.height)
+            scaleX = uniform
+            scaleY = uniform
+            offsetX = target.minX + (target.width - crop.width * uniform) * 0.5
+            offsetY = target.minY + (target.height - crop.height * uniform) * 0.5
+        }
+        result = result.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        result = result.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        result = result.transformed(by: frame.transform.cgAffineTransform)
+        result = result.transformed(by: CGAffineTransform(translationX: -viewport.minX, y: -viewport.minY))
+        return result.cropped(to: CGRect(origin: .zero, size: outputFormat.size))
     }
 
     /// Materialize a layer's post-effect pixels for downstream node routing.

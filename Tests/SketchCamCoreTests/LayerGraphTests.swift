@@ -61,7 +61,7 @@ final class LayerGraphTests: XCTestCase {
         let kinds: [NodeKind] = [.video, .movie, .solid(SolidConfig()), .paper(PaperConfig()), .personMatte,
                                  .effect, .marks,
                                  .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk),
-                                 .ink, .web]
+                                 .ink, .web, .image(WorkspaceImageConfig(urlString: "/tmp/reference.png"))]
         for kind in kinds {
             XCTAssertEqual(kind.ports.count, kind.defaultBindings.count,
                            "ports and defaultBindings must align for \(kind)")

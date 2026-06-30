@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct SketchCamApp: App {
     @StateObject private var appUI = AppUIState()
+    @StateObject private var model = SketchCamViewModel()
     @AppStorage(LayoutStorageKeys.visibleTabs) private var visibleTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.leftTabs) private var leftTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.topTabs) private var topTabsRaw: String = ""
@@ -23,7 +24,7 @@ struct SketchCamApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(model: model)
                 .environmentObject(appUI)
                 .frame(minWidth: 120, minHeight: 68)
         }
@@ -75,6 +76,12 @@ struct SketchCamApp: App {
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
+
+        Window("SketchCam Output", id: "output") {
+            SecondaryOutputWindow(model: model)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
     }
 
     private var visibleTabs: [ControlTab] {
@@ -106,7 +113,7 @@ struct SketchCamApp: App {
     }
 
     private var topGroups: [PanelGroup] {
-        groups(from: topTabsRaw)
+        groups(from: topTabsRaw, defaultPanels: ControlTab.defaultTopPanels)
     }
 
     private var bottomGroups: [PanelGroup] {

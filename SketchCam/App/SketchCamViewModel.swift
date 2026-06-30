@@ -67,7 +67,12 @@ final class SketchCamViewModel: ObservableObject {
         didSet { store.settings = settings }
     }
     @Published var outputFormat = SketchCamFormats.defaultFormat {
-        didSet { store.outputFormat = outputFormat }
+        didSet {
+            store.outputFormat = outputFormat
+            if settings.workspace != nil {
+                settings.workspace?.outputViewport.frame.size = outputFormat.size
+            }
+        }
     }
     /// High-frequency live readouts (preview image + per-stage stats) live on a
     /// SEPARATE observable so their ~4 Hz updates don't fire the view model's
@@ -95,6 +100,9 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     /// Zero-readback display path (the preview pane / presentation output).
     let previewDisplay = SampleBufferDisplayController()
+    /// Secondary monitor/projection window display. It receives the same
+    /// published pixel buffer as the main preview, never a second render.
+    let secondaryOutputDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
@@ -106,10 +114,13 @@ final class SketchCamViewModel: ObservableObject {
     let inkLiveStroke = InkLiveStroke()
     private let canvasActions = CanvasActionHistory()
     @Published private(set) var canvasHistoryRevision = 0
+    private var workspaceUndoStack: [CollageWorkspace] = []
+    private var workspaceRedoStack: [CollageWorkspace] = []
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
     private var webPickedURLs: [URL] = []   // retained to keep sandbox grants alive
+    private var imageCache: [String: CIImage] = [:]
     private let segmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
@@ -396,6 +407,79 @@ final class SketchCamViewModel: ObservableObject {
         exporter.signal(.anyCanvasAction)
         syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
+    }
+
+    func ensureWorkspace() {
+        guard settings.workspace == nil else { return }
+        settings.workspace = settings.resolvedWorkspace(outputSize: outputFormat.size, formatID: outputFormat.id)
+    }
+
+    func reconcileWorkspaceWithGraph() {
+        let graph = (settings.layerGraph ?? LayerGraph.defaultGraph(from: settings)).reconciled(with: settings)
+        settings.layerGraph = graph
+        var workspace = settings.workspace ?? CollageWorkspace.defaultWorkspace(
+            graph: graph,
+            outputSize: outputFormat.size,
+            formatID: outputFormat.id
+        )
+        workspace.outputViewport.frame.size = outputFormat.size
+        let defaults = CollageWorkspace.defaultWorkspace(graph: graph, outputSize: outputFormat.size, formatID: outputFormat.id)
+        let defaultByLayerID = Dictionary(uniqueKeysWithValues: defaults.frames.compactMap { frame -> (UUID, WorkspaceFrame)? in
+            guard case .layer(let id) = frame.material else { return nil }
+            return (id, frame)
+        })
+        let existingByLayerID = Dictionary(uniqueKeysWithValues: workspace.frames.compactMap { frame -> (UUID, WorkspaceFrame)? in
+            guard case .layer(let id) = frame.material else { return nil }
+            return (id, frame)
+        })
+        let graphLayerIDs = Set(graph.layers.map(\.id))
+        let nonGraphFrames = workspace.frames.filter { frame in
+            guard case .layer(let id) = frame.material else { return true }
+            return !graphLayerIDs.contains(id)
+        }
+        let graphFrames = graph.layers.compactMap { layer -> WorkspaceFrame? in
+            guard var frame = existingByLayerID[layer.id] ?? defaultByLayerID[layer.id],
+                  let node = graph.node(layer.node) else { return nil }
+            frame.name = node.name
+            frame.material = .layer(layer.id)
+            return frame
+        }
+        workspace.frames = graphFrames + nonGraphFrames
+        if workspace.activeFrameID == nil || workspace.frame(id: workspace.activeFrameID) == nil {
+            workspace.activeFrameID = workspace.frames.first?.id
+            workspace.selectedFrameIDs = workspace.activeFrameID.map { [$0] } ?? []
+        }
+        settings.workspace = workspace
+    }
+
+    func mutateWorkspace(_ body: (inout CollageWorkspace) -> Void) {
+        ensureWorkspace()
+        guard var workspace = settings.workspace else { return }
+        workspaceUndoStack.append(workspace)
+        workspaceRedoStack.removeAll()
+        body(&workspace)
+        if workspace.containsRenderRouteCycle() {
+            _ = workspaceUndoStack.popLast()
+            return
+        }
+        settings.workspace = workspace
+    }
+
+    var canUndoWorkspaceAction: Bool { !workspaceUndoStack.isEmpty }
+    var canRedoWorkspaceAction: Bool { !workspaceRedoStack.isEmpty }
+
+    func undoWorkspaceAction() {
+        guard let current = settings.workspace,
+              let previous = workspaceUndoStack.popLast() else { return }
+        workspaceRedoStack.append(current)
+        settings.workspace = previous
+    }
+
+    func redoWorkspaceAction() {
+        guard let current = settings.workspace,
+              let next = workspaceRedoStack.popLast() else { return }
+        workspaceUndoStack.append(current)
+        settings.workspace = next
     }
 
     private func resolvedInkStrokeRecords() -> [InkStrokeRecord] {
@@ -837,6 +921,8 @@ final class SketchCamViewModel: ObservableObject {
                 return webLayer
             case .acrylic(let config):
                 return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
+            case .image(let config):
+                return self.imageMaterial(config)
             case .ink, .effect:
                 return nil
             }
@@ -914,14 +1000,35 @@ final class SketchCamViewModel: ObservableObject {
                     return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
                 case .web:
                     return webLayer
+                case .image(let config):
+                    return self.imageMaterial(config)
                 case .effect:
                     return nil
                 }
             },
             personMatte: personMatteImage
         )
+        let workspace = settings.workspace.map { workspace in
+            var resolved = workspace
+            resolved.outputViewport.frame = CGRect(origin: workspace.outputViewport.frame.origin, size: outputFormat.size)
+            return resolved
+        }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
-                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+                             workspace: workspace, frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+    }
+
+    private func imageMaterial(_ config: WorkspaceImageConfig) -> CIImage? {
+        guard !config.urlString.isEmpty else { return nil }
+        if let cached = imageCache[config.urlString] { return cached }
+        let url: URL?
+        if config.urlString.hasPrefix("file:") {
+            url = URL(string: config.urlString)
+        } else {
+            url = URL(fileURLWithPath: config.urlString)
+        }
+        guard let url, let image = CIImage(contentsOf: url) else { return nil }
+        imageCache[config.urlString] = image
+        return image
     }
 
     private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
@@ -972,6 +1079,9 @@ final class SketchCamViewModel: ObservableObject {
         let shouldUpdateStats = now - lastStatsTime >= statsInterval
         if shouldUpdateStats {
             lastStatsTime = now
+        }
+        DispatchQueue.main.async {
+            self.secondaryOutputDisplay.enqueue(pixelBuffer)
         }
         guard image != nil || displayBuffer != nil || shouldUpdateStats else { return }
 

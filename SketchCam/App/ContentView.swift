@@ -147,6 +147,7 @@ struct PanelGroup: Identifiable, Equatable {
 }
 
 enum ControlTab: String, CaseIterable, Identifiable {
+    case toolbar = "Toolbar"
     case layers = "Layers"
     case camera = "Camera"
     case movie = "Movie"
@@ -166,8 +167,9 @@ enum ControlTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     static let defaultLeftPanels: [ControlTab] = [.camera, .movie, .input]
+    static let defaultTopPanels: [ControlTab] = [.toolbar]
     static let defaultRightPanels: [ControlTab] = [.layers, .ink]
-    static let defaultVisible: Set<ControlTab> = Set(defaultLeftPanels + defaultRightPanels)
+    static let defaultVisible: Set<ControlTab> = Set(defaultLeftPanels + defaultTopPanels + defaultRightPanels)
     static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk]
     static let emptyDockValue = "__empty__"
 
@@ -220,6 +222,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .toolbar: "wrench.and.screwdriver"
         case .input: "gearshape"
         case .camera: "camera"
         case .movie: "film"
@@ -255,10 +258,11 @@ private enum InkTool: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    @StateObject private var model = SketchCamViewModel()
+    @ObservedObject var model: SketchCamViewModel
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
     @EnvironmentObject private var appUI: AppUIState
+    @Environment(\.openWindow) private var openWindow
     @State private var newPresetName = ""
     @State private var recallWholeState = false
     @State private var webURLField = ""
@@ -305,6 +309,10 @@ struct ContentView: View {
     @State private var bottomDockDropTargeted = false
     @State private var floatingDockDropTargeted = false
 
+    init(model: SketchCamViewModel) {
+        self.model = model
+    }
+
     var body: some View {
         dockedWorkspace
         .transaction { transaction in
@@ -325,6 +333,7 @@ struct ContentView: View {
         .onAppear {
             model.start()
             model.prepareInkStrokeRecordsForCurrentSettings()
+            model.reconcileWorkspaceWithGraph()
             registerShortcuts()
             ShortcutRegistry.shared.start()
         }
@@ -801,7 +810,7 @@ struct ContentView: View {
     }
 
     private var topGroups: [PanelGroup] {
-        groups(from: topTabsRaw)
+        groups(from: topTabsRaw, defaultPanels: ControlTab.defaultTopPanels)
     }
 
     private var bottomGroups: [PanelGroup] {
@@ -999,7 +1008,7 @@ struct ContentView: View {
         floatingDockDestination = nil
         leftTabsRaw = ControlTab.emptyDockValue
         visibleTabsRaw = ControlTab.dockStorageValue(for: allPanelsGroupedForDisplay())
-        topTabsRaw = ""
+        topTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultTopPanels.map { PanelGroup(panels: [$0]) })
         bottomTabsRaw = ""
         floatingTabsRaw = ""
         timelineDockVisible = false
@@ -1585,6 +1594,7 @@ struct ContentView: View {
 
     @ViewBuilder private func tabContent(_ tab: ControlTab) -> some View {
         switch tab {
+        case .toolbar: workspaceToolbarTab
         case .input: inputTab
         case .camera: cameraTab
         case .movie: movieTab
@@ -1612,6 +1622,125 @@ struct ContentView: View {
             return model.movieRate == 0 ? "Play" : "Pause"
         }
         return model.inputFrozen ? "Unfreeze" : "Freeze"
+    }
+
+    // MARK: - Toolbar tab
+
+    @ViewBuilder private var workspaceToolbarTab: some View {
+        let workspace = model.settings.workspace
+        let selected = workspace?.frame(id: workspace?.activeFrameID)
+        HStack(spacing: 10) {
+            Picker("Tool", selection: workspaceToolBinding) {
+                ForEach(WorkspaceTool.allCases) { tool in
+                    Label(workspaceToolTitle(tool), systemImage: workspaceToolIcon(tool)).tag(tool)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 620)
+
+            Divider()
+                .frame(height: 24)
+
+            if let selected {
+                Label(selected.name, systemImage: workspaceRoleIcon(selected.role))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text("No frame selected")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                model.undoWorkspaceAction()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canUndoWorkspaceAction)
+            .help("Undo workspace edit")
+
+            Button {
+                model.redoWorkspaceAction()
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canRedoWorkspaceAction)
+            .help("Redo workspace edit")
+
+            Button {
+                openWindow(id: "output")
+            } label: {
+                Image(systemName: "rectangle.inset.filled")
+            }
+            .buttonStyle(.borderless)
+            .help("Open secondary output window")
+        }
+        .controlSize(.small)
+        .onAppear { model.ensureWorkspace() }
+    }
+
+    private var workspaceToolBinding: Binding<WorkspaceTool> {
+        Binding {
+            model.settings.workspace?.activeTool ?? .select
+        } set: { tool in
+            model.mutateWorkspace { workspace in
+                workspace.activeTool = tool
+            }
+            switch tool {
+            case .pen:
+                model.settings.landmarks.inkEnabled = true
+                model.settings.landmarks.inkBrushMode = .pen
+                inkTool = .draw
+            case .wash:
+                model.settings.landmarks.inkEnabled = true
+                model.settings.landmarks.inkBrushMode = .brush
+                inkTool = .draw
+            case .select, .transform, .crop, .mask:
+                inkTool = .select
+            case .artboard, .pan:
+                break
+            }
+        }
+    }
+
+    private func workspaceToolTitle(_ tool: WorkspaceTool) -> String {
+        switch tool {
+        case .select: return "Select"
+        case .artboard: return "Artboard"
+        case .pan: return "Pan"
+        case .transform: return "Transform"
+        case .crop: return "Crop"
+        case .mask: return "Mask"
+        case .pen: return "Pen"
+        case .wash: return "Wash"
+        }
+    }
+
+    private func workspaceToolIcon(_ tool: WorkspaceTool) -> String {
+        switch tool {
+        case .select: return "cursorarrow"
+        case .artboard: return "rectangle.dashed"
+        case .pan: return "hand.draw"
+        case .transform: return "arrow.up.left.and.arrow.down.right"
+        case .crop: return "crop"
+        case .mask: return "camera.filters"
+        case .pen: return "pencil.tip"
+        case .wash: return "paintbrush.pointed"
+        }
+    }
+
+    private func workspaceRoleIcon(_ role: WorkspaceFrameRole) -> String {
+        switch role {
+        case .output: return "record.circle"
+        case .layer: return "square.3.layers.3d"
+        case .reference: return "photo"
+        case .preview: return "eye"
+        }
     }
 
 
@@ -1844,8 +1973,8 @@ struct ContentView: View {
     // MARK: - Layers tab
 
     @ViewBuilder private var layersTab: some View {
-        LayerStackEditor(model: model)
-            .help("Reorder, show/hide, and set opacity for the composited layers. Drawing (marks + algorithms) is one layer for now; per-algorithm layers are coming.")
+        WorkspaceFrameStackEditor(model: model)
+            .help("Reorder, show/hide, transform, crop, and route artboard frames. Output-visible frames are rendered through the active output viewport.")
     }
 
     // (The legacy Background and Effect tabs are gone. v2: background is just a
@@ -3762,6 +3891,422 @@ private struct PaperControls: View {
 
     private var seedBinding: Binding<Int> {
         Binding(get: { config.seed ?? 0 }, set: { config.seed = $0 })
+    }
+}
+
+private struct WorkspaceFrameStackEditor: View {
+    @ObservedObject var model: SketchCamViewModel
+    @State private var expanded: Set<UUID> = []
+    @State private var draggedFrameID: UUID?
+    @FocusState private var nameFocused: Bool
+
+    private static let availableBlendModes: [SketchCamCore.BlendMode] = [
+        .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract, .softLight
+    ]
+
+    private var workspace: CollageWorkspace? { model.settings.workspace }
+    private var displayFrames: [WorkspaceFrame] { (workspace?.frames ?? []).reversed() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                SectionHeader("Frame stack")
+                addFrameMenu
+                    .padding(.top, 6)
+                Spacer()
+            }
+            ForEach(displayFrames) { frame in
+                let isSelected = workspace?.activeFrameID == frame.id
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Button { toggleExpanded(frame.id) } label: {
+                            Image(systemName: expanded.contains(frame.id) ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: 16)
+                        }
+                        .buttonStyle(.borderless)
+
+                        Button { toggleVisible(frame.id) } label: {
+                            Image(systemName: frame.visible ? "eye" : "eye.slash")
+                                .frame(width: 20)
+                        }
+                        .buttonStyle(.borderless)
+
+                        Label(frame.name, systemImage: icon(for: frame.role))
+                            .labelStyle(.titleAndIcon)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(width: 98, alignment: .leading)
+
+                        Menu(frame.role.rawValue.capitalized) {
+                            ForEach(WorkspaceFrameRole.allCases) { role in
+                                Button(role.rawValue.capitalized) { setRole(frame.id, role) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 76, alignment: .leading)
+
+                        Toggle("", isOn: includeBinding(frame.id))
+                            .labelsHidden()
+                            .help("Include in output viewport render")
+
+                        Slider(value: opacity(frame.id), in: 0...1)
+                            .controlSize(.small)
+                            .frame(width: 58)
+
+                        Menu(frame.blend.title) {
+                            ForEach(Self.availableBlendModes, id: \.self) { blend in
+                                Button(blend.title) { setBlend(frame.id, blend) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 68, alignment: .leading)
+
+                        Spacer(minLength: 0)
+
+                        Button(role: .destructive) { delete(frame.id) } label: {
+                            Image(systemName: "trash")
+                                .frame(width: 22)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .onTapGesture { select(frame.id) }
+                    .opacity(draggedFrameID == frame.id ? 0.55 : 1)
+                    .onDrag {
+                        draggedFrameID = frame.id
+                        return NSItemProvider(object: frame.id.uuidString as NSString)
+                    }
+                    .onDrop(
+                        of: [UTType.plainText],
+                        delegate: LayerDropDelegate(
+                            targetID: frame.id,
+                            draggedID: $draggedFrameID,
+                            move: reorderForDisplay
+                        )
+                    )
+
+                    if expanded.contains(frame.id) {
+                        frameDetails(frame)
+                            .padding(.leading, 20)
+                            .padding(.top, 2)
+                            .background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                }
+            }
+        }
+        .onAppear { model.reconcileWorkspaceWithGraph() }
+        .onChange(of: featureKey) { _, _ in model.reconcileWorkspaceWithGraph() }
+    }
+
+    private var addFrameMenu: some View {
+        Menu {
+            Section("Materials") {
+                Button("Camera") { addGraphFrame(kind: .video, name: "Camera", role: .layer) }
+                Button("Movie") { addGraphFrame(kind: .movie, name: "Movie", role: .layer) }
+                Button("Solid color") {
+                    addGraphFrame(kind: .solid(SolidConfig(color: RGBAColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1))), name: "Solid", role: .layer)
+                }
+                Button("Paper") { addGraphFrame(kind: .paper(PaperConfig()), name: "Paper", role: .layer) }
+                Button("Acrylic") { addGraphFrame(kind: .acrylic(AcrylicConfig()), name: "Acrylic", role: .layer) }
+                Button("Image...") { openImageFrame() }
+            }
+            Section("Streams") {
+                Button("Drawing") { enableStream(.drawing) }
+                Button("Ink") { enableStream(.ink) }
+                Button("Web") { enableStream(.web) }
+            }
+        } label: {
+            Label("Add frame", systemImage: "plus")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    @ViewBuilder private func frameDetails(_ frame: WorkspaceFrame) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                field("X", value: transformValue(frame.id, get: { $0.tx }, set: { $0.tx = $1 }))
+                field("Y", value: transformValue(frame.id, get: { $0.ty }, set: { $0.ty = $1 }))
+                field("W", value: boundsValue(frame.id, get: { $0.width }, set: { $0.size.width = max(1, $1) }))
+                field("H", value: boundsValue(frame.id, get: { $0.height }, set: { $0.size.height = max(1, $1) }))
+            }
+            HStack {
+                field("Rot", value: rotation(frame.id))
+                Picker("Fit", selection: contentFitBinding(frame.id)) {
+                    ForEach(WorkspaceContentFit.allCases) { fit in
+                        Text(fit.rawValue.capitalized).tag(fit)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 100)
+            }
+            HStack {
+                field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x))
+                field("Y", value: cropValue(frame.id, keyPath: \.origin.y))
+                field("W", value: cropValue(frame.id, keyPath: \.size.width))
+                field("H", value: cropValue(frame.id, keyPath: \.size.height))
+            }
+            MaskEditor(mask: frameMaskBinding(frame.id),
+                       personMatteQuality: $model.settings.segmentation.quality,
+                       sources: maskSources(excluding: frame.id))
+            if let layerID = linkedLayerID(frame) {
+                EffectChainEditor(effects: effectsBinding(layerID),
+                                  personMatteQuality: $model.settings.segmentation.quality)
+            }
+        }
+    }
+
+    private func field(_ label: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            TextField(label, value: value, format: .number.precision(.fractionLength(1)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 54)
+        }
+    }
+
+    private var featureKey: String {
+        let l = model.settings.landmarks
+        return [l.enabled, l.inkEnabled, l.showDots, l.showStick,
+                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled, model.settings.web.enabled]
+            .map { $0 ? "1" : "0" }.joined()
+    }
+
+    private func icon(for role: WorkspaceFrameRole) -> String {
+        switch role {
+        case .output: return "record.circle"
+        case .layer: return "square.3.layers.3d"
+        case .reference: return "photo"
+        case .preview: return "eye"
+        }
+    }
+
+    private func toggleExpanded(_ id: UUID) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
+
+    private func select(_ id: UUID) {
+        model.ensureWorkspace()
+        model.settings.workspace?.activeFrameID = id
+        model.settings.workspace?.selectedFrameIDs = [id]
+    }
+
+    private func mutateFrame(_ id: UUID, _ body: @escaping (inout WorkspaceFrame) -> Void) {
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }) else { return }
+            body(&workspace.frames[index])
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+        }
+    }
+
+    private func linkedLayerID(_ frame: WorkspaceFrame) -> UUID? {
+        guard case .layer(let id) = frame.material else { return nil }
+        return id
+    }
+
+    private func toggleVisible(_ id: UUID) {
+        mutateFrame(id) { $0.visible.toggle() }
+    }
+
+    private func includeBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { model.settings.workspace?.frame(id: id)?.includeInOutput ?? true },
+            set: { value in mutateFrame(id) { $0.includeInOutput = value } }
+        )
+    }
+
+    private func opacity(_ id: UUID) -> Binding<Double> {
+        Binding(
+            get: { Double(model.settings.workspace?.frame(id: id)?.opacity ?? 1) },
+            set: { value in mutateFrame(id) { $0.opacity = Float(max(0, min(1, value))) } }
+        )
+    }
+
+    private func setBlend(_ id: UUID, _ blend: SketchCamCore.BlendMode) {
+        mutateFrame(id) { $0.blend = blend }
+    }
+
+    private func setRole(_ id: UUID, _ role: WorkspaceFrameRole) {
+        mutateFrame(id) {
+            $0.role = role
+            $0.includeInOutput = role == .layer || role == .output
+        }
+    }
+
+    private func transformValue(_ id: UUID, get: @escaping (WorkspaceAffineTransform) -> Double, set: @escaping (inout WorkspaceAffineTransform, Double) -> Void) -> Binding<Double> {
+        Binding(
+            get: { model.settings.workspace?.frame(id: id).map { get($0.transform) } ?? 0 },
+            set: { value in mutateFrame(id) { set(&$0.transform, value) } }
+        )
+    }
+
+    private func boundsValue(_ id: UUID, get: @escaping (CGRect) -> CGFloat, set: @escaping (inout CGRect, CGFloat) -> Void) -> Binding<Double> {
+        Binding(
+            get: { Double(model.settings.workspace?.frame(id: id).map { get($0.localBounds) } ?? 0) },
+            set: { value in mutateFrame(id) { set(&$0.localBounds, CGFloat(value)) } }
+        )
+    }
+
+    private func cropValue(_ id: UUID, keyPath: WritableKeyPath<CGRect, CGFloat>) -> Binding<Double> {
+        Binding(
+            get: { Double(model.settings.workspace?.frame(id: id)?.cropRect[keyPath: keyPath] ?? 0) },
+            set: { value in
+                mutateFrame(id) {
+                    $0.cropRect[keyPath: keyPath] = max(0, min(1, CGFloat(value)))
+                }
+            }
+        )
+    }
+
+    private func rotation(_ id: UUID) -> Binding<Double> {
+        Binding(
+            get: {
+                guard let t = model.settings.workspace?.frame(id: id)?.transform else { return 0 }
+                return atan2(t.b, t.a) * 180 / .pi
+            },
+            set: { degrees in
+                mutateFrame(id) { frame in
+                    let t = frame.transform
+                    let sx = max(0.0001, hypot(t.a, t.b))
+                    let sy = max(0.0001, hypot(t.c, t.d))
+                    let radians = degrees * .pi / 180
+                    frame.transform.a = cos(radians) * sx
+                    frame.transform.b = sin(radians) * sx
+                    frame.transform.c = -sin(radians) * sy
+                    frame.transform.d = cos(radians) * sy
+                }
+            }
+        )
+    }
+
+    private func contentFitBinding(_ id: UUID) -> Binding<WorkspaceContentFit> {
+        Binding(
+            get: { model.settings.workspace?.frame(id: id)?.contentFit ?? .stretch },
+            set: { fit in mutateFrame(id) { $0.contentFit = fit } }
+        )
+    }
+
+    private func frameMaskBinding(_ id: UUID) -> Binding<MaskBinding?> {
+        Binding(
+            get: { model.settings.workspace?.frame(id: id)?.mask },
+            set: { mask in mutateFrame(id) { $0.mask = mask } }
+        )
+    }
+
+    private func effectsBinding(_ layerID: UUID) -> Binding<[EffectConfig]> {
+        Binding(
+            get: { model.settings.layerGraph?.layers.first { $0.id == layerID }?.effects ?? [] },
+            set: { effects in
+                guard var graph = model.settings.layerGraph,
+                      let index = graph.layers.firstIndex(where: { $0.id == layerID }) else { return }
+                graph.layers[index].effects = effects
+                model.settings.layerGraph = graph
+            }
+        )
+    }
+
+    private func maskSources(excluding frameID: UUID) -> [(id: UUID, name: String)] {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return [] }
+        return workspace.frames.compactMap { frame in
+            guard frame.id != frameID,
+                  case .layer(let layerID) = frame.material,
+                  let layer = graph.layers.first(where: { $0.id == layerID }),
+                  let node = graph.node(layer.node) else { return nil }
+            return (id: node.id, name: frame.name)
+        }
+    }
+
+    private func addGraphFrame(kind: NodeKind, name: String, role: WorkspaceFrameRole) {
+        let node = Node(name: name, kind: kind, managed: false)
+        let layer = Layer(node: node.id)
+        guard var graph = model.settings.layerGraph else { return }
+        graph.nodes.append(node)
+        graph.layers.append(layer)
+        model.settings.layerGraph = graph
+        model.mutateWorkspace { workspace in
+            let outputRect = CGRect(origin: .zero, size: model.outputFormat.size)
+            let frame = WorkspaceFrame(
+                id: layer.id,
+                name: name,
+                role: role,
+                material: .layer(layer.id),
+                localBounds: outputRect,
+                visible: true,
+                includeInOutput: role == .layer || role == .output,
+                blend: layer.blend
+            )
+            workspace.frames.append(frame)
+            workspace.activeFrameID = frame.id
+            workspace.selectedFrameIDs = [frame.id]
+        }
+    }
+
+    private func openImageFrame() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            addGraphFrame(kind: .image(WorkspaceImageConfig(urlString: url.path)), name: url.deletingPathExtension().lastPathComponent, role: .reference)
+        }
+    }
+
+    private enum Stream { case drawing, ink, web }
+
+    private func enableStream(_ stream: Stream) {
+        switch stream {
+        case .drawing:
+            model.settings.landmarks.enabled = true
+            if !(model.settings.landmarks.showDots || model.settings.landmarks.showStick || model.settings.landmarks.yarnEnabled || model.settings.landmarks.wrapEnabled || model.settings.landmarks.lineWalkEnabled) {
+                model.settings.landmarks.showStick = true
+            }
+        case .ink:
+            model.settings.landmarks.inkEnabled = true
+        case .web:
+            model.settings.web.enabled = true
+        }
+        model.reconcileWorkspaceWithGraph()
+    }
+
+    private func delete(_ id: UUID) {
+        guard let frame = model.settings.workspace?.frame(id: id) else { return }
+        if case .layer(let layerID) = frame.material,
+           var graph = model.settings.layerGraph,
+           let layer = graph.layers.first(where: { $0.id == layerID }) {
+            graph.layers.removeAll { $0.id == layerID }
+            graph.nodes.removeAll { $0.id == layer.node }
+            model.settings.layerGraph = graph
+        }
+        model.mutateWorkspace { workspace in
+            workspace.frames.removeAll { $0.id == id }
+            if workspace.activeFrameID == id {
+                workspace.activeFrameID = workspace.frames.first?.id
+                workspace.selectedFrameIDs = workspace.activeFrameID.map { [$0] } ?? []
+            }
+        }
+    }
+
+    private func reorderForDisplay(_ draggedID: UUID, _ targetID: UUID) {
+        guard draggedID != targetID else { return }
+        model.mutateWorkspace { workspace in
+            var displayOrder = Array(workspace.frames.reversed())
+            guard let from = displayOrder.firstIndex(where: { $0.id == draggedID }),
+                  let to = displayOrder.firstIndex(where: { $0.id == targetID }) else { return }
+            let moved = displayOrder.remove(at: from)
+            let insertion = from < to ? to : max(0, to)
+            displayOrder.insert(moved, at: min(insertion, displayOrder.count))
+            workspace.frames = Array(displayOrder.reversed())
+        }
     }
 }
 

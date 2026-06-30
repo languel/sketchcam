@@ -385,6 +385,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
     case ink
     case acrylic(AcrylicConfig)
     case web
+    case image(WorkspaceImageConfig)
 
     /// Input ports this kind exposes, in binding order.
     public var ports: [Port] {
@@ -403,6 +404,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
                                Port(name: "texture", type: .pixel)]
         case .acrylic: return [Port(name: "strokes", type: .path), Port(name: "texture", type: .pixel)]
         case .web:     return []
+        case .image:   return []
         }
     }
 
@@ -425,6 +427,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .ink: return "ink"
         case .acrylic: return "acrylic"
         case .web: return "web"
+        case .image: return "image"
         }
     }
 
@@ -443,6 +446,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .ink:     return [.source(.mouse), .none]   // texture unrouted by default
         case .acrylic: return [.source(.mouse), .none]
         case .web:     return []
+        case .image:   return []
         }
     }
 }

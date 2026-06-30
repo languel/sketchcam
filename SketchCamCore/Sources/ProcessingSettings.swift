@@ -272,6 +272,9 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// the default graph from the feature flags. The compositor reconciles it
     /// against the current flags each frame.
     public var layerGraph: LayerGraph?
+    /// Collage workspace/artboard state. Nil means this preset predates the
+    /// workspace model and resolves to an identity workspace at runtime.
+    public var workspace: CollageWorkspace?
     /// Typed scalar/vector providers and routes used by material simulations.
     /// Nil preserves projects saved before control fields existed.
     public var controlFields: ControlFieldGraph?
@@ -310,6 +313,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewEnabled: Bool = true,
         useLayerGraph: Bool = true,
         layerGraph: LayerGraph? = nil,
+        workspace: CollageWorkspace? = nil,
         controlFields: ControlFieldGraph? = nil,
         useGPUCompositor: Bool = true,
         previewFPS: Double = 0,
@@ -337,6 +341,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewEnabled = previewEnabled
         self.useLayerGraph = useLayerGraph
         self.layerGraph = layerGraph
+        self.workspace = workspace
         self.controlFields = controlFields
         self.useGPUCompositor = useGPUCompositor
         self.previewFPS = previewFPS
