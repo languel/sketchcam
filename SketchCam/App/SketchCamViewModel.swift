@@ -75,6 +75,7 @@ final class SketchCamViewModel: ObservableObject {
     /// SwiftUI Picker tag projections / Observation registrars on every pass).
     /// Only the small views that show them observe this store.
     let live = LiveReadouts()
+    let exporter = OutputStreamExporter()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -155,6 +156,18 @@ final class SketchCamViewModel: ObservableObject {
         movieSource.onPixelBuffer = { [weak self] pixelBuffer in
             self?.handleMovieFrame(pixelBuffer)
         }
+        exporter.onAcceptedFrame = { [weak self] _ in
+            guard let self, self.frameSource == .movie else { return }
+            let config = self.exporter.configuration
+            let seconds = config.sourceAdvanceSeconds + Double(config.sourceAdvanceFrames) / 30.0
+            if seconds > 0, !self.movieSource.step(seconds: seconds, loop: config.loopSource) {
+                self.exporter.stop()
+            }
+        }
+        exporter.sourceTimeProvider = { [weak self] in
+            guard let self, self.frameSource == .movie else { return nil }
+            return self.movieSource.currentTimeSeconds
+        }
     }
 
     func openMoviePanel() {
@@ -221,8 +234,7 @@ final class SketchCamViewModel: ObservableObject {
         }
     }
 
-    /// Export the most recently published frame (full output resolution,
-    /// PNG with alpha) via a save panel.
+    /// Export the most recently published frame using the Export panel's still settings.
     func exportCurrentFrame() {
         let frame = exportLock.withLock { lastPublishedFrame }
         guard let frame else {
@@ -230,31 +242,53 @@ final class SketchCamViewModel: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        let format = exporter.configuration.imageFormat
+        panel.allowedContentTypes = [Self.contentType(for: format)]
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        panel.nameFieldStringValue = "sketchcam-\(stamp).png"
+        panel.nameFieldStringValue = "sketchcam-\(stamp).\(format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        exporter.exportCurrent(frame, to: url)
+    }
 
-        let image = CIImage(cvPixelBuffer: frame)
-        guard let cgImage = Self.sharedCIContext.createCGImage(
-            image,
-            from: image.extent,
-            format: .BGRA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        ) else {
-            errorText = "Could not render export image."
+    func chooseExportDestination() {
+        let config = exporter.configuration
+        if config.outputKind == .imageSequence {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.canCreateDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Choose"
+            if panel.runModal() == .OK { exporter.destinationURL = panel.url }
             return
         }
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = rep.representation(using: .png, properties: [:]) else {
-            errorText = "Could not encode PNG."
-            return
+
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        switch config.outputKind {
+        case .still:
+            panel.allowedContentTypes = [Self.contentType(for: config.imageFormat)]
+        case .gif:
+            panel.allowedContentTypes = [.gif]
+        case .movie:
+            panel.allowedContentTypes = [config.container == .mp4 ? .mpeg4Movie : .quickTimeMovie]
+        case .imageSequence:
+            break
         }
-        do {
-            try data.write(to: url)
-        } catch {
-            errorText = "Export failed: \(error.localizedDescription)"
+        let suffix = exporter.expectedFileExtension(config)
+        panel.nameFieldStringValue = suffix.isEmpty ? config.takeName : "\(config.takeName).\(suffix)"
+        if panel.runModal() == .OK {
+            exporter.destinationURL = panel.url
+        }
+    }
+
+    private static func contentType(for format: ExportImageFormat) -> UTType {
+        switch format {
+        case .png: .png
+        case .tiff: .tiff
+        case .jpeg: .jpeg
+        case .heif: .heic
         }
     }
 
@@ -296,6 +330,7 @@ final class SketchCamViewModel: ObservableObject {
         var immediate = record
         immediate.isEditable = false
         canvasActions.commitImmediate(immediate)
+        exporter.signal(.anyCanvasAction, actionID: immediate.id)
         syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
     }
@@ -304,6 +339,7 @@ final class SketchCamViewModel: ObservableObject {
         var editable = record
         editable.isEditable = true
         canvasActions.commit(editable)
+        exporter.signal(.anyCanvasAction, actionID: editable.id)
         syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
     }
@@ -335,6 +371,7 @@ final class SketchCamViewModel: ObservableObject {
         cancelInkLiveStroke()
         let action = canvasActions.undo()
         if action != nil {
+            exporter.signal(.anyCanvasAction, actionID: action?.id)
             syncSettingsFromCanvasActions()
             canvasHistoryRevision &+= 1
         }
@@ -346,6 +383,7 @@ final class SketchCamViewModel: ObservableObject {
         cancelInkLiveStroke()
         let action = canvasActions.redo()
         if action != nil {
+            exporter.signal(.anyCanvasAction, actionID: action?.id)
             syncSettingsFromCanvasActions()
             canvasHistoryRevision &+= 1
         }
@@ -355,6 +393,7 @@ final class SketchCamViewModel: ObservableObject {
     func clearCanvasActions() {
         cancelInkLiveStroke()
         canvasActions.clear()
+        exporter.signal(.anyCanvasAction)
         syncSettingsFromCanvasActions()
         canvasHistoryRevision &+= 1
     }
@@ -893,6 +932,11 @@ final class SketchCamViewModel: ObservableObject {
             publisher.publish(sampleBuffer)
         }
         exportLock.withLock { lastPublishedFrame = pixelBuffer }
+        exporter.updateInkActivity(
+            solverActive: settings.landmarks.inkEnabled && (settings.landmarks.inkImmediatePen || settings.landmarks.inkImmediateWash),
+            change: 0
+        )
+        exporter.offerFrame(pixelBuffer, frameIndex: frameIndex)
         let fps = updateFPS()
 
         // Preview/display is decoupled from publishing: the virtual camera gets

@@ -1640,13 +1640,11 @@ struct ContentView: View {
 
     @ViewBuilder private var inputTab: some View {
         SectionHeader("Output")
-        Button {
-            model.exportCurrentFrame()
-        } label: {
-            Label("Export current frame", systemImage: "square.and.arrow.down")
-        }
-        .controlSize(.small)
-        .help("Export current frame as PNG")
+        OutputExportControls(
+            exporter: model.exporter,
+            chooseDestination: model.chooseExportDestination,
+            exportCurrent: model.exportCurrentFrame
+        )
         Picker("Format", selection: $model.outputFormat) {
             ForEach(SketchCamFormats.all) { format in
                 Text(format.displayName).tag(format)
@@ -4214,6 +4212,244 @@ private struct SliderRow: View {
         }
         .contentShape(Rectangle())
         .help("\(hint ?? title) Double-click the label to restore the default; type an exact value in the number field and press Return.")
+    }
+}
+
+private struct OutputExportControls: View {
+    @ObservedObject var exporter: OutputStreamExporter
+    let chooseDestination: () -> Void
+    let exportCurrent: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button {
+                    exportCurrent()
+                } label: {
+                    Label("Export current", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    chooseDestination()
+                } label: {
+                    Label("Destination", systemImage: "folder")
+                }
+            }
+            .controlSize(.small)
+
+            Text(exporter.destinationURL?.path(percentEncoded: false) ?? "No export destination")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+
+            Picker("Type", selection: outputKind) {
+                ForEach(ExportOutputKind.allCases) { kind in
+                    Text(outputKindLabel(kind)).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if exporter.configuration.outputKind == .still || exporter.configuration.outputKind == .imageSequence {
+                Picker("Image", selection: imageFormat) {
+                    ForEach(ExportImageFormat.allCases) { format in
+                        Text(format.rawValue.uppercased()).tag(format)
+                    }
+                }
+            }
+
+            if exporter.configuration.outputKind == .movie {
+                Picker("Codec", selection: movieCodec) {
+                    ForEach(ExportMovieCodec.allCases) { codec in
+                        Text(codecLabel(codec)).tag(codec)
+                    }
+                }
+                Picker("Container", selection: container) {
+                    ForEach(ExportContainer.allCases) { container in
+                        Text(container.rawValue.uppercased()).tag(container)
+                    }
+                }
+            }
+
+            HStack {
+                Text("Size")
+                TextField("W", value: width, format: .number)
+                    .frame(width: 64)
+                Text("x")
+                TextField("H", value: height, format: .number)
+                    .frame(width: 64)
+            }
+            .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Text("FPS")
+                TextField("Capture", value: captureFPS, format: .number.precision(.fractionLength(0)))
+                    .frame(width: 72)
+                Text("->")
+                TextField("Playback", value: playbackFPS, format: .number.precision(.fractionLength(0)))
+                    .frame(width: 72)
+            }
+            .textFieldStyle(.roundedBorder)
+
+            Picker("Trigger", selection: trigger) {
+                ForEach(CaptureTrigger.allCases) { trigger in
+                    Text(triggerLabel(trigger)).tag(trigger)
+                }
+            }
+
+            HStack {
+                TextField("Take", text: takeName)
+                    .textFieldStyle(.roundedBorder)
+                Button("Capture Next") { exporter.captureNext() }
+                    .disabled(exporter.state != .recording)
+            }
+
+            HStack {
+                Button("Start") { exporter.start() }
+                    .disabled(exporter.destinationURL == nil || exporter.state == .recording || exporter.state == .finishing)
+                Button("Stop") { exporter.stop() }
+                    .disabled(exporter.state != .recording)
+                Button("Cancel") { exporter.stop(cancelled: true) }
+                    .disabled(exporter.state != .recording)
+            }
+            .controlSize(.small)
+
+            Text("\(exporter.statusText) - \(exporter.capturedFrames) frames, \(exporter.droppedFrames) dropped")
+                .font(.caption)
+                .foregroundStyle(exporter.state == .failed ? .red : .secondary)
+            if let progress = exporter.progress {
+                ProgressView(value: progress)
+            }
+        }
+        .onChange(of: exporter.configuration) { _, _ in exporter.persistConfiguration() }
+    }
+
+    private var outputKind: Binding<ExportOutputKind> {
+        Binding {
+            exporter.configuration.outputKind
+        } set: {
+            exporter.configuration.outputKind = $0
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var imageFormat: Binding<ExportImageFormat> {
+        Binding {
+            exporter.configuration.imageFormat
+        } set: {
+            exporter.configuration.imageFormat = $0
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var movieCodec: Binding<ExportMovieCodec> {
+        Binding {
+            exporter.configuration.movieCodec
+        } set: {
+            exporter.configuration.movieCodec = $0
+            exporter.configuration.clamp()
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var container: Binding<ExportContainer> {
+        Binding {
+            exporter.configuration.container
+        } set: {
+            exporter.configuration.container = $0
+            exporter.invalidateIncompatibleDestination()
+        }
+    }
+
+    private var width: Binding<Int> {
+        Binding {
+            exporter.configuration.width
+        } set: {
+            exporter.configuration.width = $0
+            exporter.configuration.clamp()
+        }
+    }
+
+    private var height: Binding<Int> {
+        Binding {
+            exporter.configuration.height
+        } set: {
+            exporter.configuration.height = $0
+            exporter.configuration.clamp()
+        }
+    }
+
+    private var captureFPS: Binding<Double> {
+        Binding {
+            exporter.configuration.captureFPS
+        } set: {
+            exporter.configuration.captureFPS = $0
+            exporter.configuration.clamp()
+        }
+    }
+
+    private var playbackFPS: Binding<Double> {
+        Binding {
+            exporter.configuration.playbackFPS
+        } set: {
+            exporter.configuration.playbackFPS = $0
+            exporter.configuration.clamp()
+        }
+    }
+
+    private var trigger: Binding<CaptureTrigger> {
+        Binding {
+            exporter.configuration.trigger
+        } set: {
+            exporter.configuration.trigger = $0
+        }
+    }
+
+    private var takeName: Binding<String> {
+        Binding {
+            exporter.configuration.takeName
+        } set: {
+            exporter.configuration.takeName = $0
+        }
+    }
+
+    private func outputKindLabel(_ value: ExportOutputKind) -> String {
+        switch value {
+        case .still: "Still"
+        case .movie: "Movie"
+        case .imageSequence: "Sequence"
+        case .gif: "GIF"
+        }
+    }
+
+    private func codecLabel(_ value: ExportMovieCodec) -> String {
+        switch value {
+        case .h264: "H.264"
+        case .hevc: "HEVC"
+        case .proRes422: "ProRes 422"
+        case .proRes422HQ: "ProRes HQ"
+        case .proRes4444: "ProRes 4444"
+        }
+    }
+
+    private func triggerLabel(_ value: CaptureTrigger) -> String {
+        switch value {
+        case .cadence: "Continuous rate"
+        case .interval: "Interval"
+        case .manual: "Manual"
+        case .mouseDown: "Mouse down"
+        case .mouseUp: "Mouse up"
+        case .click: "Click"
+        case .dragBegin: "Drag begin"
+        case .dragEnd: "Drag end"
+        case .drawBegin: "Draw begin"
+        case .drawEnd: "Draw end"
+        case .drawBoth: "Draw begin/end"
+        case .washBegin: "Wash begin"
+        case .washEnd: "Wash end"
+        case .washBoth: "Wash begin/end"
+        case .anyCanvasAction: "Canvas action"
+        case .streamCrossing: "Stream crossing"
+        }
     }
 }
 

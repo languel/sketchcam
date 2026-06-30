@@ -20,6 +20,7 @@ final class MoviePlaybackSource {
     private var currentRate: Float = 1
 
     var isPlaying: Bool { timer != nil }
+    var currentTimeSeconds: Double { player.currentTime().seconds }
 
     func play(url: URL, rate: Float) {
         stop()
@@ -54,6 +55,30 @@ final class MoviePlaybackSource {
         currentRate = rate
         guard isPlaying else { return }
         player.rate = rate
+    }
+
+    /// Advances the current movie deterministically for stop-motion capture.
+    @discardableResult
+    func step(seconds: Double, loop: Bool) -> Bool {
+        guard seconds != 0, let item = player.currentItem else { return true }
+        let duration = item.duration.seconds
+        var target = player.currentTime().seconds + seconds
+        var canContinue = true
+        if duration.isFinite, duration > 0 {
+            if loop {
+                target = target.truncatingRemainder(dividingBy: duration)
+                if target < 0 { target += duration }
+            } else {
+                canContinue = target < duration
+                target = min(max(0, target), duration)
+            }
+        }
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600_000),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+        return canContinue
     }
 
     func stop() {
