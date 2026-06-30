@@ -56,7 +56,10 @@ final class WorkspaceModelTests: XCTestCase {
             guard case .layer(let id) = frame.material,
                   let layer = graph.layers.first(where: { $0.id == id }),
                   let node = graph.node(layer.node) else { return false }
-            return node.kind.family == "ink" && frame.bleed > 0
+            return node.kind.family == "ink" &&
+                frame.bleed == 0 &&
+                frame.localBounds.origin == .zero &&
+                frame.localBounds.size == workspace.outputViewport.frame.size
         })
     }
 

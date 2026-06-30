@@ -288,7 +288,6 @@ public struct CollageWorkspace: Equatable, Sendable, Codable {
         let frames = graph.layers.compactMap { layer -> WorkspaceFrame? in
             guard let node = graph.node(layer.node) else { return nil }
             let role: WorkspaceFrameRole = node.kind.family == "ink" ? .layer : .layer
-            let bleed: CGFloat = node.kind.family == "ink" ? 96 : 0
             return WorkspaceFrame(
                 id: layer.id,
                 name: node.name,
@@ -300,8 +299,7 @@ public struct CollageWorkspace: Equatable, Sendable, Codable {
                 includeInOutput: true,
                 previewPolicy: .throttled,
                 opacity: layer.opacity,
-                blend: layer.blend,
-                bleed: bleed
+                blend: layer.blend
             )
         }
         return CollageWorkspace(

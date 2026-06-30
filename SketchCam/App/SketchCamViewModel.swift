@@ -442,6 +442,9 @@ final class SketchCamViewModel: ObservableObject {
                   let node = graph.node(layer.node) else { return nil }
             frame.name = node.name
             frame.material = .layer(layer.id)
+            if node.kind.family == "ink" {
+                frame.bleed = 0
+            }
             return frame
         }
         workspace.frames = graphFrames + nonGraphFrames
