@@ -293,6 +293,7 @@ struct ContentView: View {
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
+    @State private var dockDragStartLocations: [PanelDropDestination: CGFloat] = [:]
     @State private var liveDockSizes: [PanelDropDestination: Double] = [:]
     @State private var dockResizeActive = false
     @State private var selectedPanelByGroup: [String: String] = [:]
@@ -315,6 +316,7 @@ struct ContentView: View {
         .overlay { debugOverlay }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
+        .background(FocusEscapeHandler())
         .background {
             TitlebarAccessory(isVisible: windowMode.decorated) {
                 panelChromeTitlebarControls
@@ -1292,22 +1294,25 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1)
-                    .onChanged { value in
+                    .onChanged { _ in
                         dockResizeActive = true
                         if dockDragBaselines[destination] == nil {
                             dockDragBaselines[destination] = size.wrappedValue
+                            dockDragStartLocations[destination] = dockDragPointerLocation(destination)
                         }
                         let baseline = dockDragBaselines[destination] ?? size.wrappedValue
+                        let startLocation = dockDragStartLocations[destination] ?? dockDragPointerLocation(destination)
+                        let currentLocation = dockDragPointerLocation(destination)
                         let delta: CGFloat
                         switch destination {
                         case .left:
-                            delta = value.translation.width
+                            delta = currentLocation - startLocation
                         case .right:
-                            delta = -value.translation.width
+                            delta = startLocation - currentLocation
                         case .top:
-                            delta = value.translation.height
+                            delta = startLocation - currentLocation
                         case .bottom:
-                            delta = -value.translation.height
+                            delta = currentLocation - startLocation
                         case .floating:
                             delta = 0
                         }
@@ -1322,11 +1327,24 @@ struct ContentView: View {
                             size.wrappedValue = liveSize
                         }
                         dockDragBaselines[destination] = nil
+                        dockDragStartLocations[destination] = nil
                         liveDockSizes[destination] = nil
                         dockResizeActive = false
                     }
             )
             .help("Drag to resize or minimize this dock")
+    }
+
+    private func dockDragPointerLocation(_ destination: PanelDropDestination) -> CGFloat {
+        let location = NSEvent.mouseLocation
+        switch destination {
+        case .left, .right:
+            return location.x
+        case .top, .bottom:
+            return location.y
+        case .floating:
+            return 0
+        }
     }
 
     private func dockSize(_ destination: PanelDropDestination, stored: Double) -> Double {
@@ -3713,14 +3731,14 @@ private struct LayerStackEditor: View {
     @State private var editingLayer: UUID?
     @State private var editText: String = ""
     @State private var draggedLayerID: UUID?
+    @State private var selectedLayerID: UUID?
     @FocusState private var nameFieldFocused: Bool
     private static let availableBlendModes: [SketchCamCore.BlendMode] = [
         .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract, .softLight
     ]
-    private static let effectControlWidth: CGFloat = 38
-    private static let opacitySliderWidth: CGFloat = 92
-    private static let layerIconWidth: CGFloat = 22
-    private static let layerButtonWidth: CGFloat = 22
+    private static let effectControlWidth: CGFloat = 16
+    private static let opacitySliderWidth: CGFloat = 58
+    private static let layerIconWidth: CGFloat = 20
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
     private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
@@ -3770,9 +3788,17 @@ private struct LayerStackEditor: View {
                     .padding(.top, 6)
                 Spacer()
             }
-            ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
+            ForEach(displayLayers, id: \.id) { layer in
+                let isSelected = selectedLayerID == layer.id || editingLayer == layer.id
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
+                        Button { toggleExpanded(layer.id) } label: {
+                            Image(systemName: expanded.contains(layer.id) ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: Self.effectControlWidth, alignment: .center)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Effect chain for this layer")
                         Button { toggleVisible(layer.id) } label: {
                             Image(systemName: layer.visible ? "eye" : "eye.slash")
                                 .frame(width: Self.layerIconWidth)
@@ -3784,30 +3810,25 @@ private struct LayerStackEditor: View {
                         }
                         if editingLayer == layer.id {
                             TextField("", text: $editText)
-                                .textFieldStyle(.roundedBorder).frame(width: 80)
+                                .textFieldStyle(.roundedBorder).frame(width: 68)
                                 .focused($nameFieldFocused)
                                 .onSubmit { commitRename(layer.id) }
                         } else {
-                            Text(displayName(layer)).frame(width: 64, alignment: .leading)
+                            Text(displayName(layer))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(width: 56, alignment: .leading)
                                 .help("Double-click to rename. The name lets other streams reference this layer as a source.")
+                                .onTapGesture {
+                                    selectedLayerID = layer.id
+                                }
                                 .onTapGesture(count: 2) {
+                                    selectedLayerID = layer.id
                                     editText = displayName(layer)
                                     editingLayer = layer.id
                                     DispatchQueue.main.async { nameFieldFocused = true }
                                 }
                         }
-                        Button { toggleExpanded(layer.id) } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: expanded.contains(layer.id) ? "chevron.down.circle.fill" : "chevron.down.circle")
-                                Text(layer.effects.isEmpty ? "0" : "\(layer.effects.count)")
-                                    .font(.caption2.monospacedDigit())
-                                    .frame(width: 12, alignment: .leading)
-                                    .opacity(layer.effects.isEmpty ? 0 : 1)
-                            }
-                            .frame(width: Self.effectControlWidth, alignment: .leading)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Effect chain for this layer")
                         Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
                             .frame(width: Self.opacitySliderWidth)
                             .help("Layer opacity")
@@ -3817,25 +3838,23 @@ private struct LayerStackEditor: View {
                             }
                         }
                         .menuStyle(.borderlessButton)
-                        .frame(width: 78, alignment: .leading)
+                        .frame(width: 68, alignment: .leading)
                         .help("Layer blend mode")
-                        Button { move(layer.id, towardTop: true) } label: {
-                            Image(systemName: "chevron.up")
-                                .frame(width: Self.layerButtonWidth)
-                        }
-                            .buttonStyle(.borderless).disabled(display == 0)
-                        Button { move(layer.id, towardTop: false) } label: {
-                            Image(systemName: "chevron.down")
-                                .frame(width: Self.layerButtonWidth)
-                        }
-                            .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
+                        Spacer(minLength: 0)
                         Button(role: .destructive) { delete(layer.id) } label: {
                             Image(systemName: "trash")
-                                .frame(width: Self.layerButtonWidth)
+                                .frame(width: 22)
                         }
                             .buttonStyle(.borderless).help("Delete layer")
                     }
                     .contentShape(Rectangle())
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .onTapGesture {
+                        selectedLayerID = layer.id
+                    }
                     .opacity(draggedLayerID == layer.id ? 0.55 : 1)
                     .onDrag {
                         draggedLayerID = layer.id
@@ -3871,6 +3890,9 @@ private struct LayerStackEditor: View {
                                               personMatteQuality: $model.settings.segmentation.quality)
                         }
                         .padding(.leading, 20)
+                        .padding(.top, 2)
+                        .background(isSelected ? Color.accentColor.opacity(0.06) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                 }
             }
@@ -4096,6 +4118,7 @@ private struct LayerStackEditor: View {
             g.layers.removeAll { $0.id == id }
             g.nodes.removeAll { $0.id == layer.node }
         }
+        if selectedLayerID == id { selectedLayerID = nil }
     }
 
     private func mutate(_ body: (inout LayerGraph) -> Void) {
@@ -4129,16 +4152,6 @@ private struct LayerStackEditor: View {
     private func setBlend(_ id: UUID, _ blend: SketchCamCore.BlendMode) {
         mutate { g in
             if let i = g.layers.firstIndex(where: { $0.id == id }) { g.layers[i].blend = blend }
-        }
-    }
-
-    /// towardTop = toward the visual top = later in the bottom→top array.
-    private func move(_ id: UUID, towardTop: Bool) {
-        mutate { g in
-            guard let i = g.layers.firstIndex(where: { $0.id == id }) else { return }
-            let j = towardTop ? i + 1 : i - 1
-            guard g.layers.indices.contains(j) else { return }
-            g.layers.swapAt(i, j)
         }
     }
 
@@ -4731,6 +4744,42 @@ private struct TitlebarAccessory<Content: View>: NSViewRepresentable {
     }
 }
 
+private struct FocusEscapeHandler: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.install()
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.install()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        private var monitor: Any?
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+
+        func install() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                guard event.keyCode == 53 else { return event }
+                guard let window = event.window ?? NSApp.keyWindow else { return event }
+                guard window.firstResponder != nil else { return event }
+                window.makeFirstResponder(nil)
+                return nil
+            }
+        }
+    }
+}
+
 private struct TimelineMetric: View {
     let label: String
     let value: String
@@ -5019,6 +5068,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func mouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(nil)
             // Ctrl-drag smears like a right-drag (wash), without needing a second
             // mouse button. (If the system already promoted ctrl-click to a
             // rightMouseDown, that path handles it; otherwise we see it here.)
@@ -5034,6 +5084,7 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            window?.makeFirstResponder(nil)
             begin(event, secondary: true)
         }
 
