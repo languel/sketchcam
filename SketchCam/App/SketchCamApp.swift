@@ -49,6 +49,10 @@ struct SketchCamApp: App {
                 }
                 Divider()
                 Menu("Layout Presets") {
+                    Button("Default Layout") {
+                        appUI.sendLayoutCommand(.reset)
+                    }
+                    Divider()
                     ForEach(1...3, id: \.self) { slot in
                         Button("Save Layout \(slot)") {
                             appUI.sendLayoutCommand(.save(slot: slot))
@@ -94,11 +98,11 @@ struct SketchCamApp: App {
     }
 
     private var leftGroups: [PanelGroup] {
-        groups(from: leftTabsRaw)
+        groups(from: leftTabsRaw, defaultPanels: ControlTab.defaultLeftPanels)
     }
 
     private var rightGroups: [PanelGroup] {
-        groups(from: visibleTabsRaw, defaultPanels: ControlTab.allCases.filter { ControlTab.defaultVisible.contains($0) })
+        groups(from: visibleTabsRaw, defaultPanels: ControlTab.defaultRightPanels)
     }
 
     private var topGroups: [PanelGroup] {
@@ -197,7 +201,7 @@ struct SketchCamApp: App {
     private func setGroups(_ groups: [PanelGroup], for destination: PanelDropDestination) {
         switch destination {
         case .left:
-            leftTabsRaw = ControlTab.dockStorageValue(for: groups)
+            leftTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .right:
             visibleTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .top:

@@ -165,7 +165,9 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    static let defaultVisible: Set<ControlTab> = [.layers, .camera, .ink, .input]
+    static let defaultLeftPanels: [ControlTab] = [.camera, .movie, .input]
+    static let defaultRightPanels: [ControlTab] = [.layers, .ink]
+    static let defaultVisible: Set<ControlTab> = Set(defaultLeftPanels + defaultRightPanels)
     static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk]
     static let emptyDockValue = "__empty__"
 
@@ -292,6 +294,7 @@ struct ContentView: View {
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
     @State private var selectedPanelByGroup: [String: String] = [:]
+    @State private var layoutBeforePresentation: LayoutSnapshot?
     @State private var leftDockDropTargeted = false
     @State private var rightDockDropTargeted = false
     @State private var topDockDropTargeted = false
@@ -303,9 +306,9 @@ struct ContentView: View {
         .overlay { debugOverlay }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                panelChromeToolbar
+        .background {
+            TitlebarAccessory(isVisible: windowMode.decorated) {
+                panelChromeTitlebarControls
             }
         }
         .onAppear {
@@ -318,6 +321,9 @@ struct ContentView: View {
             applyLayoutCommand(command)
             appUI.layoutCommand = nil
         }
+        .onChange(of: windowMode.presentationMode) { _, isPresentation in
+            syncLayoutWithPresentationMode(isPresentation)
+        }
         .onDisappear { model.stop() }
     }
 
@@ -325,19 +331,23 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if !leftTabs.isEmpty {
                 dockSection(title: "Left", systemImage: "rectangle.leftthird.inset.filled", groups: leftGroups, destination: .left, isCollapsed: $leftDockCollapsed)
-                    .frame(width: leftDockCollapsed ? 34 : max(leftDockSize, dockMinimumSize(.left)))
+                    .frame(width: leftDockCollapsed ? 0 : max(leftDockSize, dockMinimumSize(.left)))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .trailing) {
-                        dockResizeHandle(destination: .left, isCollapsed: $leftDockCollapsed, size: $leftDockSize)
+                        if !leftDockCollapsed {
+                            dockResizeHandle(destination: .left, isCollapsed: $leftDockCollapsed, size: $leftDockSize)
+                        }
                     }
             }
             canvasDock
             if windowMode.panelVisible && windowMode.panelFit && !visibleTabs.isEmpty {
                 dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
-                    .frame(width: rightDockCollapsed ? 34 : max(rightDockSize, dockMinimumSize(.right)))
+                    .frame(width: rightDockCollapsed ? 0 : max(rightDockSize, dockMinimumSize(.right)))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .leading) {
-                        dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                        if !rightDockCollapsed {
+                            dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                        }
                     }
             }
         }
@@ -347,10 +357,12 @@ struct ContentView: View {
                     HStack(spacing: 0) {
                         Spacer(minLength: 0)
                         dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
-                            .frame(width: rightDockCollapsed ? 34 : max(rightDockSize, dockMinimumSize(.right)))
+                            .frame(width: rightDockCollapsed ? 0 : max(rightDockSize, dockMinimumSize(.right)))
                             .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
                             .overlay(alignment: .leading) {
-                                dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                                if !rightDockCollapsed {
+                                    dockResizeHandle(destination: .right, isCollapsed: $rightDockCollapsed, size: $rightDockSize)
+                                }
                             }
                     }
                 }
@@ -405,8 +417,8 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var panelChromeToolbar: some View {
-        HStack(spacing: 6) {
+    private var panelChromeTitlebarControls: some View {
+        HStack(spacing: 18) {
             dockToolbarButton(
                 destination: .left,
                 systemImage: "rectangle.leftthird.inset.filled",
@@ -435,25 +447,22 @@ struct ContentView: View {
                 isActive: windowMode.panelVisible && !rightDockCollapsed && !visibleTabs.isEmpty,
                 help: rightDockCollapsed || !windowMode.panelVisible ? "Expand right dock" : "Minimize right dock"
             )
-            Divider()
+
             Menu {
                 Button("Show All Panels") { showAllPanels() }
-                Button("Reset Panel Layout") { resetLayout() }
+                Button("Default Layout") { resetLayout() }
                 Divider()
-                Button(windowMode.panelFit ? "Float Right Dock" : "Fit Right Dock") {
-                    windowMode.panelFit.toggle()
-                    if !visibleTabs.isEmpty {
-                        windowMode.panelVisible = true
-                    }
-                }
-                Button(windowMode.panelVisible ? "Hide Right Dock" : "Show Right Dock") {
-                    windowMode.panelVisible.toggle()
-                }
-                .disabled(visibleTabs.isEmpty)
+                dockMenu(destination: .left, title: "Left Dock", isCollapsed: leftDockCollapsed, hasPanels: !leftTabs.isEmpty)
+                dockMenu(destination: .top, title: "Top Dock", isCollapsed: topDockCollapsed, hasPanels: !topTabs.isEmpty)
+                dockMenu(destination: .bottom, title: "Bottom Dock", isCollapsed: bottomDockCollapsed, hasPanels: !bottomTabs.isEmpty)
+                dockMenu(destination: .right, title: "Right Dock", isCollapsed: rightDockCollapsed || !windowMode.panelVisible, hasPanels: !visibleTabs.isEmpty)
             } label: {
-                Image(systemName: "slider.horizontal.3")
+                Label("Panel layout", systemImage: "slider.horizontal.3")
+                    .labelStyle(.iconOnly)
             }
             .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .fixedSize()
             .help("Panel layout")
 
             Button {
@@ -461,10 +470,31 @@ struct ContentView: View {
             } label: {
                 Image(systemName: appUI.debugOverlayVisible ? "chart.line.uptrend.xyaxis.circle.fill" : "chart.line.uptrend.xyaxis.circle")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .help("Toggle performance overlay")
         }
+        .font(.system(size: 16, weight: .medium))
         .controlSize(.small)
+        .padding(.trailing, 14)
+        .frame(height: 28)
+    }
+
+    @ViewBuilder private func dockMenu(
+        destination: PanelDropDestination,
+        title: String,
+        isCollapsed: Bool,
+        hasPanels: Bool
+    ) -> some View {
+        Menu(title) {
+            Button(isCollapsed ? "Show" : "Hide") {
+                setDock(destination, hidden: !isCollapsed)
+            }
+            .disabled(!hasPanels)
+            Button("Float") {
+                floatDock(destination)
+            }
+            .disabled(!hasPanels || destination == .floating)
+        }
     }
 
     private func dockToolbarButton(
@@ -479,8 +509,9 @@ struct ContentView: View {
         } label: {
             Image(systemName: systemImage)
                 .symbolVariant(isActive ? .fill : .none)
+                .frame(width: 24, height: 24)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .disabled(!isAvailable)
         .foregroundStyle(isActive ? Color.primary : Color.secondary)
         .help(help)
@@ -489,18 +520,74 @@ struct ContentView: View {
     private func toggleDockFromToolbar(_ destination: PanelDropDestination) {
         switch destination {
         case .left:
-            leftDockCollapsed.toggle()
+            toggleLeftDockSide()
         case .right:
-            if !windowMode.panelVisible {
-                windowMode.panelVisible = true
-                rightDockCollapsed = false
-            } else {
-                rightDockCollapsed.toggle()
-            }
+            toggleRightDockSide()
         case .top:
             topDockCollapsed.toggle()
         case .bottom:
             bottomDockCollapsed.toggle()
+        case .floating:
+            break
+        }
+    }
+
+    private func toggleLeftDockSide() {
+        guard !leftTabs.isEmpty else { return }
+        leftDockCollapsed.toggle()
+    }
+
+    private func toggleRightDockSide() {
+        guard !visibleTabs.isEmpty else { return }
+        if !windowMode.panelVisible {
+            windowMode.panelVisible = true
+            rightDockCollapsed = false
+        } else {
+            rightDockCollapsed.toggle()
+        }
+    }
+
+    private func setDock(_ destination: PanelDropDestination, hidden: Bool) {
+        switch destination {
+        case .left:
+            guard !leftTabs.isEmpty else { return }
+            leftDockCollapsed = hidden
+        case .right:
+            guard !visibleTabs.isEmpty else { return }
+            if hidden {
+                rightDockCollapsed = true
+            } else {
+                windowMode.panelVisible = true
+                rightDockCollapsed = false
+            }
+        case .top:
+            guard !topTabs.isEmpty else { return }
+            topDockCollapsed = hidden
+        case .bottom:
+            guard !bottomTabs.isEmpty else { return }
+            bottomDockCollapsed = hidden
+        case .floating:
+            break
+        }
+    }
+
+    private func floatDock(_ destination: PanelDropDestination) {
+        switch destination {
+        case .right:
+            guard !visibleTabs.isEmpty else { return }
+            windowMode.panelVisible = true
+            windowMode.panelFit = false
+            rightDockCollapsed = false
+        case .left, .top, .bottom:
+            let groups = groupsForDock(destination)
+            guard !groups.isEmpty else { return }
+            var floating = floatingGroups
+            floating.append(contentsOf: groups)
+            setGroups(floating, for: .floating)
+            setGroups([], for: destination)
+            if destination == .bottom {
+                timelineDockVisible = false
+            }
         case .floating:
             break
         }
@@ -651,11 +738,11 @@ struct ContentView: View {
     }
 
     private var leftGroups: [PanelGroup] {
-        groups(from: leftTabsRaw)
+        groups(from: leftTabsRaw, defaultPanels: ControlTab.defaultLeftPanels)
     }
 
     private var rightGroups: [PanelGroup] {
-        groups(from: visibleTabsRaw, defaultPanels: ControlTab.allCases.filter { ControlTab.defaultVisible.contains($0) })
+        groups(from: visibleTabsRaw, defaultPanels: ControlTab.defaultRightPanels)
     }
 
     private var topGroups: [PanelGroup] {
@@ -794,7 +881,7 @@ struct ContentView: View {
     private func setGroups(_ groups: [PanelGroup], for destination: PanelDropDestination) {
         switch destination {
         case .left:
-            leftTabsRaw = ControlTab.dockStorageValue(for: groups)
+            leftTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .right:
             visibleTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .top:
@@ -854,7 +941,7 @@ struct ContentView: View {
     }
 
     private func showAllPanels() {
-        leftTabsRaw = ""
+        leftTabsRaw = ControlTab.emptyDockValue
         visibleTabsRaw = ControlTab.dockStorageValue(for: allPanelsGroupedForDisplay())
         topTabsRaw = ""
         bottomTabsRaw = ""
@@ -871,8 +958,8 @@ struct ContentView: View {
     }
 
     private func resetLayout() {
-        leftTabsRaw = ""
-        visibleTabsRaw = ""
+        leftTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultLeftPanels.map { PanelGroup(panels: [$0]) })
+        visibleTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultRightPanels.map { PanelGroup(panels: [$0]) })
         topTabsRaw = ""
         bottomTabsRaw = ControlTab.dockStorageValue(for: [PanelGroup(panels: [.timeline])])
         floatingTabsRaw = ""
@@ -937,6 +1024,10 @@ struct ContentView: View {
     private func restoreLayout(slot: Int) {
         guard let data = UserDefaults.standard.data(forKey: LayoutStorageKeys.preset(slot)),
               let snapshot = try? JSONDecoder().decode(LayoutSnapshot.self, from: data) else { return }
+        applyLayoutSnapshot(snapshot)
+    }
+
+    private func applyLayoutSnapshot(_ snapshot: LayoutSnapshot) {
         visibleTabsRaw = snapshot.visibleTabsRaw
         leftTabsRaw = snapshot.leftTabsRaw
         topTabsRaw = snapshot.topTabsRaw
@@ -956,6 +1047,22 @@ struct ContentView: View {
         windowMode.panelFit = snapshot.inspectorFit
         tab = visibleTabs.first ?? .layers
         bottomTabID = bottomTabs.first?.id ?? ControlTab.ink.id
+    }
+
+    private func syncLayoutWithPresentationMode(_ isPresentation: Bool) {
+        if isPresentation {
+            layoutBeforePresentation = currentLayoutSnapshot()
+            leftDockCollapsed = true
+            rightDockCollapsed = true
+            topDockCollapsed = true
+            bottomDockCollapsed = true
+            windowMode.panelVisible = false
+        } else if let snapshot = layoutBeforePresentation {
+            layoutBeforePresentation = nil
+            DispatchQueue.main.async {
+                applyLayoutSnapshot(snapshot)
+            }
+        }
     }
 
     private func panelPlacementText(_ panel: ControlTab) -> String {
@@ -1085,7 +1192,7 @@ struct ContentView: View {
     private func closeDock(_ destination: PanelDropDestination) {
         switch destination {
         case .left:
-            leftTabsRaw = ""
+            leftTabsRaw = ControlTab.emptyDockValue
         case .right:
             visibleTabsRaw = ControlTab.emptyDockValue
             windowMode.panelVisible = false
@@ -2655,6 +2762,14 @@ struct ContentView: View {
                    default: KeyBinding(key: "u", modifiers: [.command, .option])) { [weak windowMode] in windowMode?.togglePanelFit() }
         r.register(id: "window.panelOverlay", title: "Toggle Side Panel (overlay)", category: "Window",
                    default: KeyBinding(key: "u", modifiers: [.shift, .option])) { [weak windowMode] in windowMode?.togglePanelOverlay() }
+        r.register(id: "window.leftDock", title: "Toggle Left Dock", category: "Window",
+                   default: KeyBinding(key: "b", modifiers: .command)) {
+            toggleLeftDockSide()
+        }
+        r.register(id: "window.rightDock", title: "Toggle Right Dock", category: "Window",
+                   default: KeyBinding(key: "b", modifiers: [.command, .option])) {
+            toggleRightDockSide()
+        }
         r.register(id: "window.decoration", title: "Toggle Window Decoration", category: "Window",
                    default: KeyBinding(key: "d", modifiers: [.option, .shift])) { [weak windowMode] in windowMode?.decorated.toggle() }
         r.register(id: "window.transparent", title: "Toggle Transparent Window", category: "Window",
@@ -4179,6 +4294,72 @@ private struct DockPanelHeader<Trailing: View>: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+private struct TitlebarAccessory<Content: View>: NSViewRepresentable {
+    var isVisible: Bool
+    let content: Content
+
+    init(isVisible: Bool, @ViewBuilder content: () -> Content) {
+        self.isVisible = isVisible
+        self.content = content()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.isHidden = true
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.update(content: content, isVisible: isVisible, from: nsView)
+    }
+
+    final class Coordinator {
+        private var accessory: NSTitlebarAccessoryViewController?
+        private var host: NSHostingController<Content>?
+
+        func update(content: Content, isVisible: Bool, from anchor: NSView) {
+            DispatchQueue.main.async { [weak self, weak anchor] in
+                guard let self, let anchor else { return }
+                if !isVisible {
+                    self.removeAccessory()
+                    return
+                }
+                guard let window = anchor.window else { return }
+                if let host {
+                    host.rootView = content
+                    return
+                }
+                let host = NSHostingController(rootView: content)
+                host.view.setFrameSize(host.view.fittingSize)
+                host.view.translatesAutoresizingMaskIntoConstraints = false
+                let accessory = NSTitlebarAccessoryViewController()
+                accessory.layoutAttribute = .right
+                accessory.view = host.view
+                window.addTitlebarAccessoryViewController(accessory)
+                self.host = host
+                self.accessory = accessory
+            }
+        }
+
+        private func removeAccessory() {
+            guard let accessory, let window = accessory.view.window else {
+                accessory = nil
+                host = nil
+                return
+            }
+            if let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
+                window.removeTitlebarAccessoryViewController(at: index)
+            }
+            self.accessory = nil
+            self.host = nil
+        }
     }
 }
 
