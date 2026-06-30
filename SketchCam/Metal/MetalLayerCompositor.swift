@@ -247,9 +247,23 @@ final class MetalLayerCompositor {
         }
         result = result.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
         result = result.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-        result = result.transformed(by: frame.transform.cgAffineTransform)
+        result = result.transformed(by: renderTransform(for: frame.transform))
         result = result.transformed(by: CGAffineTransform(translationX: -viewport.minX, y: -viewport.minY))
         return result.cropped(to: CGRect(origin: .zero, size: outputFormat.size))
+    }
+
+    private func renderTransform(for transform: WorkspaceAffineTransform) -> CGAffineTransform {
+        // Workspace/UI coordinates are top-left/y-down. Core Image applies
+        // affine transforms in y-up coordinates, so convert the stored frame
+        // transform at the compositor boundary instead of changing the model.
+        CGAffineTransform(
+            a: transform.a,
+            b: -transform.b,
+            c: -transform.c,
+            d: transform.d,
+            tx: transform.tx,
+            ty: -transform.ty
+        )
     }
 
     /// Materialize a layer's post-effect pixels for downstream node routing.
