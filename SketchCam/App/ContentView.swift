@@ -293,8 +293,11 @@ struct ContentView: View {
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
+    @State private var liveDockSizes: [PanelDropDestination: Double] = [:]
+    @State private var dockResizeActive = false
     @State private var selectedPanelByGroup: [String: String] = [:]
     @State private var layoutBeforePresentation: LayoutSnapshot?
+    @State private var floatingDockDestination: PanelDropDestination?
     @State private var leftDockDropTargeted = false
     @State private var rightDockDropTargeted = false
     @State private var topDockDropTargeted = false
@@ -303,6 +306,12 @@ struct ContentView: View {
 
     var body: some View {
         dockedWorkspace
+        .transaction { transaction in
+            if dockResizeActive {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         .overlay { debugOverlay }
         .background(windowMode.transparent ? Color.clear : Color(nsColor: .windowBackgroundColor))
         .background(WindowAccessor(controller: windowMode))
@@ -329,9 +338,9 @@ struct ContentView: View {
 
     private var dockedWorkspace: some View {
         HStack(spacing: 0) {
-            if !leftTabs.isEmpty {
+            if !leftTabs.isEmpty, floatingDockDestination != .left {
                 dockSection(title: "Left", systemImage: "rectangle.leftthird.inset.filled", groups: leftGroups, destination: .left, isCollapsed: $leftDockCollapsed)
-                    .frame(width: leftDockCollapsed ? 0 : max(leftDockSize, dockMinimumSize(.left)))
+                    .frame(width: leftDockCollapsed ? 0 : dockSize(.left, stored: leftDockSize))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .trailing) {
                         if !leftDockCollapsed {
@@ -342,7 +351,7 @@ struct ContentView: View {
             canvasDock
             if windowMode.panelVisible && windowMode.panelFit && !visibleTabs.isEmpty {
                 dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
-                    .frame(width: rightDockCollapsed ? 0 : max(rightDockSize, dockMinimumSize(.right)))
+                    .frame(width: rightDockCollapsed ? 0 : dockSize(.right, stored: rightDockSize))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .leading) {
                         if !rightDockCollapsed {
@@ -352,12 +361,15 @@ struct ContentView: View {
             }
         }
         .overlay {
+            floatingDockOverlay
+        }
+        .overlay {
             if windowMode.panelVisible && !windowMode.panelFit && !visibleTabs.isEmpty {
                 GeometryReader { _ in
                     HStack(spacing: 0) {
                         Spacer(minLength: 0)
                         dockSection(title: "Right", systemImage: "rectangle.rightthird.inset.filled", groups: rightGroups, destination: .right, isCollapsed: $rightDockCollapsed)
-                            .frame(width: rightDockCollapsed ? 0 : max(rightDockSize, dockMinimumSize(.right)))
+                            .frame(width: rightDockCollapsed ? 0 : dockSize(.right, stored: rightDockSize))
                             .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
                             .overlay(alignment: .leading) {
                                 if !rightDockCollapsed {
@@ -376,18 +388,18 @@ struct ContentView: View {
 
     private var canvasDock: some View {
         VStack(spacing: 0) {
-            if !topTabs.isEmpty {
+            if !topTabs.isEmpty, floatingDockDestination != .top {
                 dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", groups: topGroups, destination: .top, isCollapsed: $topDockCollapsed)
-                    .frame(height: topDockCollapsed ? 34 : max(topDockSize, dockMinimumSize(.top)))
+                    .frame(height: topDockCollapsed ? 34 : dockSize(.top, stored: topDockSize))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .bottom) {
                         dockResizeHandle(destination: .top, isCollapsed: $topDockCollapsed, size: $topDockSize)
                     }
             }
             previewPane
-            if !bottomTabs.isEmpty {
+            if !bottomTabs.isEmpty, floatingDockDestination != .bottom {
                 bottomDock
-                    .frame(height: bottomDockCollapsed ? 34 : max(bottomDockSize, dockMinimumSize(.bottom)))
+                    .frame(height: bottomDockCollapsed ? 34 : dockSize(.bottom, stored: bottomDockSize))
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .top) {
                         dockResizeHandle(destination: .bottom, isCollapsed: $bottomDockCollapsed, size: $bottomDockSize)
@@ -414,6 +426,42 @@ struct ContentView: View {
         .dockDropHighlight(isTargeted: bottomDockDropTargeted)
         .onDrop(of: [UTType.plainText], isTargeted: $bottomDockDropTargeted) { providers in
             handlePanelDrop(providers, destination: .bottom)
+        }
+    }
+
+    @ViewBuilder private var floatingDockOverlay: some View {
+        GeometryReader { _ in
+            switch floatingDockDestination {
+            case .left:
+                if !leftTabs.isEmpty {
+                    HStack(spacing: 0) {
+                        dockSection(title: "Left", systemImage: "rectangle.leftthird.inset.filled", groups: leftGroups, destination: .left, isCollapsed: $leftDockCollapsed)
+                            .frame(width: leftDockCollapsed ? 0 : dockSize(.left, stored: leftDockSize))
+                            .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+                        Spacer(minLength: 0)
+                    }
+                }
+            case .top:
+                if !topTabs.isEmpty {
+                    VStack(spacing: 0) {
+                        dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", groups: topGroups, destination: .top, isCollapsed: $topDockCollapsed)
+                            .frame(height: topDockCollapsed ? 34 : dockSize(.top, stored: topDockSize))
+                            .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+                        Spacer(minLength: 0)
+                    }
+                }
+            case .bottom:
+                if !bottomTabs.isEmpty {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        bottomDock
+                            .frame(height: bottomDockCollapsed ? 34 : dockSize(.bottom, stored: bottomDockSize))
+                            .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+                    }
+                }
+            case .right, .floating, nil:
+                EmptyView()
+            }
         }
     }
 
@@ -490,8 +538,8 @@ struct ContentView: View {
                 setDock(destination, hidden: !isCollapsed)
             }
             .disabled(!hasPanels)
-            Button("Float") {
-                floatDock(destination)
+            Button(isDockFloating(destination) ? "Dock" : "Float") {
+                toggleDockFloating(destination)
             }
             .disabled(!hasPanels || destination == .floating)
         }
@@ -571,23 +619,28 @@ struct ContentView: View {
         }
     }
 
-    private func floatDock(_ destination: PanelDropDestination) {
+    private func isDockFloating(_ destination: PanelDropDestination) -> Bool {
+        switch destination {
+        case .right:
+            return windowMode.panelVisible && !windowMode.panelFit
+        case .left, .top, .bottom:
+            return floatingDockDestination == destination
+        case .floating:
+            return false
+        }
+    }
+
+    private func toggleDockFloating(_ destination: PanelDropDestination) {
         switch destination {
         case .right:
             guard !visibleTabs.isEmpty else { return }
             windowMode.panelVisible = true
-            windowMode.panelFit = false
+            windowMode.panelFit.toggle()
             rightDockCollapsed = false
         case .left, .top, .bottom:
-            let groups = groupsForDock(destination)
-            guard !groups.isEmpty else { return }
-            var floating = floatingGroups
-            floating.append(contentsOf: groups)
-            setGroups(floating, for: .floating)
-            setGroups([], for: destination)
-            if destination == .bottom {
-                timelineDockVisible = false
-            }
+            guard !groupsForDock(destination).isEmpty else { return }
+            floatingDockDestination = floatingDockDestination == destination ? nil : destination
+            setDock(destination, hidden: false)
         case .floating:
             break
         }
@@ -941,6 +994,7 @@ struct ContentView: View {
     }
 
     private func showAllPanels() {
+        floatingDockDestination = nil
         leftTabsRaw = ControlTab.emptyDockValue
         visibleTabsRaw = ControlTab.dockStorageValue(for: allPanelsGroupedForDisplay())
         topTabsRaw = ""
@@ -958,6 +1012,7 @@ struct ContentView: View {
     }
 
     private func resetLayout() {
+        floatingDockDestination = nil
         leftTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultLeftPanels.map { PanelGroup(panels: [$0]) })
         visibleTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultRightPanels.map { PanelGroup(panels: [$0]) })
         topTabsRaw = ""
@@ -1028,6 +1083,7 @@ struct ContentView: View {
     }
 
     private func applyLayoutSnapshot(_ snapshot: LayoutSnapshot) {
+        floatingDockDestination = nil
         visibleTabsRaw = snapshot.visibleTabsRaw
         leftTabsRaw = snapshot.leftTabsRaw
         topTabsRaw = snapshot.topTabsRaw
@@ -1190,6 +1246,9 @@ struct ContentView: View {
     }
 
     private func closeDock(_ destination: PanelDropDestination) {
+        if floatingDockDestination == destination {
+            floatingDockDestination = nil
+        }
         switch destination {
         case .left:
             leftTabsRaw = ControlTab.emptyDockValue
@@ -1234,6 +1293,7 @@ struct ContentView: View {
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
+                        dockResizeActive = true
                         if dockDragBaselines[destination] == nil {
                             dockDragBaselines[destination] = size.wrappedValue
                         }
@@ -1254,18 +1314,23 @@ struct ContentView: View {
                         let proposed = baseline + Double(delta)
                         let minimum = dockMinimumSize(destination)
                         let maximum = dockMaximumSize(destination)
-                        if proposed < minimum * 0.45 {
-                            isCollapsed.wrappedValue = true
-                        } else {
-                            isCollapsed.wrappedValue = false
-                            size.wrappedValue = min(max(proposed, minimum), maximum)
-                        }
+                        isCollapsed.wrappedValue = false
+                        liveDockSizes[destination] = min(max(proposed, minimum), maximum)
                     }
                     .onEnded { _ in
+                        if let liveSize = liveDockSizes[destination] {
+                            size.wrappedValue = liveSize
+                        }
                         dockDragBaselines[destination] = nil
+                        liveDockSizes[destination] = nil
+                        dockResizeActive = false
                     }
             )
             .help("Drag to resize or minimize this dock")
+    }
+
+    private func dockSize(_ destination: PanelDropDestination, stored: Double) -> Double {
+        max(liveDockSizes[destination] ?? stored, dockMinimumSize(destination))
     }
 
     private func dockMinimumSize(_ destination: PanelDropDestination) -> Double {
@@ -3649,10 +3714,15 @@ private struct LayerStackEditor: View {
     @State private var expanded: Set<UUID> = []
     @State private var editingLayer: UUID?
     @State private var editText: String = ""
+    @State private var draggedLayerID: UUID?
     @FocusState private var nameFieldFocused: Bool
     private static let availableBlendModes: [SketchCamCore.BlendMode] = [
         .normal, .multiply, .screen, .add, .overlay, .darken, .lighten, .difference, .subtract, .softLight
     ]
+    private static let effectControlWidth: CGFloat = 38
+    private static let opacitySliderWidth: CGFloat = 92
+    private static let layerIconWidth: CGFloat = 22
+    private static let layerButtonWidth: CGFloat = 22
 
     /// Layers top→bottom for display (the graph stores them bottom→top).
     private var displayLayers: [Layer] { (model.settings.layerGraph?.layers ?? []).reversed() }
@@ -3704,9 +3774,10 @@ private struct LayerStackEditor: View {
             }
             ForEach(Array(displayLayers.enumerated()), id: \.element.id) { display, layer in
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Button { toggleVisible(layer.id) } label: {
                             Image(systemName: layer.visible ? "eye" : "eye.slash")
+                                .frame(width: Self.layerIconWidth)
                         }
                         .buttonStyle(.borderless)
                         .help(layer.visible ? "Hide layer" : "Show layer")
@@ -3727,7 +3798,20 @@ private struct LayerStackEditor: View {
                                     DispatchQueue.main.async { nameFieldFocused = true }
                                 }
                         }
+                        Button { toggleExpanded(layer.id) } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: expanded.contains(layer.id) ? "chevron.down.circle.fill" : "chevron.down.circle")
+                                Text(layer.effects.isEmpty ? "0" : "\(layer.effects.count)")
+                                    .font(.caption2.monospacedDigit())
+                                    .frame(width: 12, alignment: .leading)
+                                    .opacity(layer.effects.isEmpty ? 0 : 1)
+                            }
+                            .frame(width: Self.effectControlWidth, alignment: .leading)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Effect chain for this layer")
                         Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
+                            .frame(width: Self.opacitySliderWidth)
                             .help("Layer opacity")
                         Menu(layer.blend.title) {
                             ForEach(Self.availableBlendModes, id: \.self) { blend in
@@ -3737,21 +3821,36 @@ private struct LayerStackEditor: View {
                         .menuStyle(.borderlessButton)
                         .frame(width: 78, alignment: .leading)
                         .help("Layer blend mode")
-                        Button { toggleExpanded(layer.id) } label: {
-                            Image(systemName: expanded.contains(layer.id) ? "chevron.down.circle.fill" : "chevron.down.circle")
-                            if layer.effects.isEmpty == false {
-                                Text("\(layer.effects.count)").font(.caption2)
-                            }
+                        Button { move(layer.id, towardTop: true) } label: {
+                            Image(systemName: "chevron.up")
+                                .frame(width: Self.layerButtonWidth)
                         }
-                        .buttonStyle(.borderless)
-                        .help("Effect chain for this layer")
-                        Button { move(layer.id, towardTop: true) } label: { Image(systemName: "chevron.up") }
                             .buttonStyle(.borderless).disabled(display == 0)
-                        Button { move(layer.id, towardTop: false) } label: { Image(systemName: "chevron.down") }
+                        Button { move(layer.id, towardTop: false) } label: {
+                            Image(systemName: "chevron.down")
+                                .frame(width: Self.layerButtonWidth)
+                        }
                             .buttonStyle(.borderless).disabled(display == displayLayers.count - 1)
-                        Button(role: .destructive) { delete(layer.id) } label: { Image(systemName: "trash") }
+                        Button(role: .destructive) { delete(layer.id) } label: {
+                            Image(systemName: "trash")
+                                .frame(width: Self.layerButtonWidth)
+                        }
                             .buttonStyle(.borderless).help("Delete layer")
                     }
+                    .contentShape(Rectangle())
+                    .opacity(draggedLayerID == layer.id ? 0.55 : 1)
+                    .onDrag {
+                        draggedLayerID = layer.id
+                        return NSItemProvider(object: layer.id.uuidString as NSString)
+                    }
+                    .onDrop(
+                        of: [UTType.plainText],
+                        delegate: LayerDropDelegate(
+                            targetID: layer.id,
+                            draggedID: $draggedLayerID,
+                            move: reorderLayerForDisplay
+                        )
+                    )
                     if expanded.contains(layer.id) {
                         VStack(alignment: .leading, spacing: 4) {
                             if let node = node(for: layer) {
@@ -4043,6 +4142,39 @@ private struct LayerStackEditor: View {
             guard g.layers.indices.contains(j) else { return }
             g.layers.swapAt(i, j)
         }
+    }
+
+    private func reorderLayerForDisplay(_ draggedID: UUID, _ targetID: UUID) {
+        guard draggedID != targetID else { return }
+        mutate { g in
+            var displayOrder = Array(g.layers.reversed())
+            guard let from = displayOrder.firstIndex(where: { $0.id == draggedID }),
+                  let to = displayOrder.firstIndex(where: { $0.id == targetID }) else { return }
+            let moved = displayOrder.remove(at: from)
+            let insertion = from < to ? to : max(0, to)
+            displayOrder.insert(moved, at: min(insertion, displayOrder.count))
+            g.layers = Array(displayOrder.reversed())
+        }
+    }
+}
+
+private struct LayerDropDelegate: DropDelegate {
+    let targetID: UUID
+    @Binding var draggedID: UUID?
+    let move: (UUID, UUID) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID, draggedID != targetID else { return }
+        move(draggedID, targetID)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedID = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
     }
 }
 

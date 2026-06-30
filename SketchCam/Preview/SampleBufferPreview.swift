@@ -63,13 +63,19 @@ private final class LayerHostingView: NSView {
         didSet {
             guard let hostedLayer else { return }
             layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             hostedLayer.frame = bounds
+            CATransaction.commit()
             layer?.addSublayer(hostedLayer)
         }
     }
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         hostedLayer?.frame = bounds
+        CATransaction.commit()
     }
 }
