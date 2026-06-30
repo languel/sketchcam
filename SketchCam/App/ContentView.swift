@@ -696,6 +696,11 @@ struct ContentView: View {
 
     private var previewPane: some View {
         GeometryReader { geo in
+            let outputRect = workspaceOutputRect(
+                container: geo.size,
+                outputSize: model.outputFormat.size,
+                workspace: model.settings.workspace
+            )
             ZStack {
                 // Checkerboard backdrop so an Alpha background (or ink-only
                 // threshold) is visibly transparent in the preview instead of
@@ -707,13 +712,19 @@ struct ContentView: View {
                 if !model.settings.previewEnabled {
                     Text("Preview off — still publishing")
                         .foregroundStyle(.secondary)
+                        .frame(width: outputRect.width, height: outputRect.height)
+                        .position(x: outputRect.midX, y: outputRect.midY)
                 } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
                     // Zero-readback GPU display (also the presentation-mode output).
                     SampleBufferDisplayView(controller: model.previewDisplay)
+                        .frame(width: outputRect.width, height: outputRect.height)
+                        .position(x: outputRect.midX, y: outputRect.midY)
                 } else {
                     // Observes the live store, so the ~4 Hz image updates don't
                     // re-evaluate the whole ContentView body.
                     LivePreviewImage(live: model.live)
+                        .frame(width: outputRect.width, height: outputRect.height)
+                        .position(x: outputRect.midX, y: outputRect.midY)
                 }
                 if model.settings.landmarks.inkEnabled {
                     InkPreviewDrawingLayer(
@@ -726,6 +737,7 @@ struct ContentView: View {
                         onLiveEnd: { model.endInkLiveStroke() },
                         onStrokeCommitted: { commitCanvasStrokeRecord($0) },
                         outputSize: model.outputFormat.size,
+                        outputRect: outputRect,
                         activeFrameID: activeInkFrameID,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
@@ -784,9 +796,9 @@ struct ContentView: View {
 
     private var workspaceOverlayHandlesInput: Bool {
         switch model.settings.workspace?.activeTool {
-        case .artboard, .transform, .crop, .mask:
+        case .artboard, .pan, .transform, .crop, .mask:
             return true
-        case .select, .pan, .pen, .wash, nil:
+        case .select, .pen, .wash, nil:
             return false
         }
     }
@@ -1685,6 +1697,27 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
+            HStack(spacing: 4) {
+                Button { zoomWorkspace(by: 0.8) } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .help("Zoom artboard out")
+
+                Button { resetWorkspaceView() } label: {
+                    Image(systemName: "viewfinder")
+                }
+                .help("Fit output viewport")
+
+                Button { zoomWorkspace(by: 1.25) } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .help("Zoom artboard in")
+            }
+            .buttonStyle(.borderless)
+
+            Divider()
+                .frame(height: 24)
+
             Button {
                 model.undoWorkspaceAction()
             } label: {
@@ -1713,6 +1746,19 @@ struct ContentView: View {
         }
         .controlSize(.small)
         .onAppear { model.ensureWorkspace() }
+    }
+
+    private func zoomWorkspace(by factor: Double) {
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.zoom = max(0.05, min(16, workspace.zoom * factor))
+        }
+    }
+
+    private func resetWorkspaceView() {
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.zoom = 1
+            workspace.viewCenter = CGPoint(x: workspace.outputViewport.frame.midX, y: workspace.outputViewport.frame.midY)
+        }
     }
 
     private var workspaceToolBinding: Binding<WorkspaceTool> {
@@ -5778,6 +5824,24 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
     }
 }
 
+private func workspaceOutputRect(container: CGSize, outputSize: CGSize, workspace: CollageWorkspace?) -> CGRect {
+    let fallbackViewport = CGRect(origin: .zero, size: outputSize)
+    let viewport = workspace?.outputViewport.frame ?? fallbackViewport
+    guard container.width > 0, container.height > 0,
+          viewport.width > 0, viewport.height > 0 else {
+        return CGRect(origin: .zero, size: container)
+    }
+    let fitScale = min(container.width / viewport.width, container.height / viewport.height)
+    let scale = fitScale * CGFloat(max(0.05, min(16, workspace?.zoom ?? 1)))
+    let center = workspace?.viewCenter ?? CGPoint(x: viewport.midX, y: viewport.midY)
+    return CGRect(
+        x: container.width * 0.5 + (viewport.minX - center.x) * scale,
+        y: container.height * 0.5 + (viewport.minY - center.y) * scale,
+        width: viewport.width * scale,
+        height: viewport.height * scale
+    )
+}
+
 private struct WorkspaceArtboardOverlay: View {
     @ObservedObject var model: SketchCamViewModel
     let outputSize: CGSize
@@ -5786,13 +5850,14 @@ private struct WorkspaceArtboardOverlay: View {
     @State private var dragOperation: DragOperation?
 
     private enum DragOperation {
+        case pan(startView: CGPoint, startCenter: CGPoint)
         case move(frameID: UUID, startWorld: CGPoint, transform: WorkspaceAffineTransform)
         case scale(frameID: UUID, centerWorld: CGPoint, startDistance: CGFloat, transform: WorkspaceAffineTransform)
     }
 
     var body: some View {
         GeometryReader { geo in
-            let outputRect = fittedRect(container: geo.size, content: outputSize)
+            let outputRect = workspaceOutputRect(container: geo.size, outputSize: outputSize, workspace: model.settings.workspace)
             ZStack {
                 Canvas { context, _ in
                     drawOverlay(context: &context, outputRect: outputRect)
@@ -5896,6 +5961,10 @@ private struct WorkspaceArtboardOverlay: View {
         guard outputRect.width > 0,
               outputRect.height > 0,
               let workspace = model.settings.workspace else { return }
+        if workspace.activeTool == .pan {
+            handlePan(value, outputRect: outputRect, workspace: workspace)
+            return
+        }
         let world = worldPoint(view: value.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
         if !dragStarted {
             dragStarted = true
@@ -5933,6 +6002,8 @@ private struct WorkspaceArtboardOverlay: View {
         }
 
         switch dragOperation {
+        case .pan:
+            break
         case .move(let id, let start, let transform):
             let delta = CGPoint(x: world.x - start.x, y: world.y - start.y)
             model.updateWorkspaceLiveEdit { workspace in
@@ -5954,9 +6025,29 @@ private struct WorkspaceArtboardOverlay: View {
     }
 
     private func handleDragEnded() {
-        model.endWorkspaceLiveEdit(commit: dragOperation != nil)
+        if case .pan = dragOperation {
+            model.endWorkspaceLiveEdit(commit: false)
+        } else {
+            model.endWorkspaceLiveEdit(commit: dragOperation != nil)
+        }
         dragStarted = false
         dragOperation = nil
+    }
+
+    private func handlePan(_ value: DragGesture.Value, outputRect: CGRect, workspace: CollageWorkspace) {
+        let scale = max(0.0001, outputRect.width / max(1, workspace.outputViewport.frame.width))
+        if !dragStarted {
+            dragStarted = true
+            dragOperation = .pan(startView: value.location, startCenter: workspace.viewCenter)
+        }
+        guard case .pan(let startView, let startCenter) = dragOperation else { return }
+        let delta = CGPoint(
+            x: (value.location.x - startView.x) / scale,
+            y: (value.location.y - startView.y) / scale
+        )
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.viewCenter = CGPoint(x: startCenter.x - delta.x, y: startCenter.y - delta.y)
+        }
     }
 
     private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, centerWorld: CGPoint)? {
@@ -6041,19 +6132,6 @@ private struct WorkspaceArtboardOverlay: View {
         }
     }
 
-    private func fittedRect(container: CGSize, content: CGSize) -> CGRect {
-        guard container.width > 0, container.height > 0, content.width > 0, content.height > 0 else {
-            return CGRect(origin: .zero, size: container)
-        }
-        let scale = min(container.width / content.width, container.height / content.height)
-        let size = CGSize(width: content.width * scale, height: content.height * scale)
-        return CGRect(
-            x: (container.width - size.width) / 2,
-            y: (container.height - size.height) / 2,
-            width: size.width,
-            height: size.height
-        )
-    }
 }
 
 private struct InkPreviewDrawingLayer: View {
@@ -6066,6 +6144,7 @@ private struct InkPreviewDrawingLayer: View {
     let onLiveEnd: () -> Void
     let onStrokeCommitted: (InkStrokeRecord) -> Void
     let outputSize: CGSize
+    let outputRect: CGRect?
     let activeFrameID: UUID?
     let inkColor: Color
     let inkRGBA: RGBAColor
@@ -6099,7 +6178,7 @@ private struct InkPreviewDrawingLayer: View {
 
     var body: some View {
         GeometryReader { geo in
-            let rect = fittedRect(container: geo.size, content: outputSize)
+            let rect = outputRect ?? fittedRect(container: geo.size, content: outputSize)
             ZStack {
                 Color.black.opacity(0.001)
                 if showsEditorPaths {

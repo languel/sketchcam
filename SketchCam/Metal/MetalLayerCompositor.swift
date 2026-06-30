@@ -57,6 +57,7 @@ final class MetalLayerCompositor {
         let items = renderItems(graph: graph, streams: streams, workspace: workspace, outputFormat: outputFormat)
         for item in items where item.opacity > 0.001 {
             guard let img = item.image else { continue }
+            clear(content)
             rasterize(img, into: content)
 
             // Layer masks clip the raw source first. Effect-chain Person Key still
@@ -336,6 +337,11 @@ final class MetalLayerCompositor {
     private func rasterize(_ image: CIImage, into buffer: CVPixelBuffer) {
         let rect = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         ciContext.render(image, to: buffer, bounds: rect, colorSpace: colorSpace)
+    }
+
+    private func clear(_ buffer: CVPixelBuffer) {
+        let rect = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
+        ciContext.render(CIImage(color: .clear).cropped(to: rect), to: buffer, bounds: rect, colorSpace: colorSpace)
     }
 
     private func ensureBuffers(for format: FrameFormat) -> Bool {
