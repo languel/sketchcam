@@ -5877,6 +5877,98 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
     }
 }
 
+private struct ArtboardNavigationEvent {
+    var location: CGPoint
+    var deltaX: CGFloat
+    var deltaY: CGFloat
+    var modifiers: NSEvent.ModifierFlags
+}
+
+private struct ArtboardMagnifyEvent {
+    var location: CGPoint
+    var magnification: CGFloat
+}
+
+private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
+    var onScroll: (ArtboardNavigationEvent) -> Void
+    var onMagnify: (ArtboardMagnifyEvent) -> Void
+
+    func makeNSView(context: Context) -> EventView {
+        let view = EventView()
+        view.onScroll = onScroll
+        view.onMagnify = onMagnify
+        view.installMonitors()
+        return view
+    }
+
+    func updateNSView(_ nsView: EventView, context: Context) {
+        nsView.onScroll = onScroll
+        nsView.onMagnify = onMagnify
+    }
+
+    static func dismantleNSView(_ nsView: EventView, coordinator: ()) {
+        nsView.removeMonitors()
+    }
+
+    final class EventView: NSView {
+        var onScroll: ((ArtboardNavigationEvent) -> Void)?
+        var onMagnify: ((ArtboardMagnifyEvent) -> Void)?
+        private var scrollMonitor: Any?
+        private var magnifyMonitor: Any?
+
+        override var isFlipped: Bool { true }
+
+        func installMonitors() {
+            guard scrollMonitor == nil, magnifyMonitor == nil else { return }
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handleScroll(event)
+                return event
+            }
+            magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+                self?.handleMagnify(event)
+                return event
+            }
+        }
+
+        func removeMonitors() {
+            if let scrollMonitor {
+                NSEvent.removeMonitor(scrollMonitor)
+                self.scrollMonitor = nil
+            }
+            if let magnifyMonitor {
+                NSEvent.removeMonitor(magnifyMonitor)
+                self.magnifyMonitor = nil
+            }
+        }
+
+        private func handleScroll(_ event: NSEvent) {
+            guard let point = localPoint(for: event) else { return }
+            onScroll?(ArtboardNavigationEvent(
+                location: point,
+                deltaX: event.scrollingDeltaX,
+                deltaY: event.scrollingDeltaY,
+                modifiers: event.modifierFlags
+            ))
+        }
+
+        private func handleMagnify(_ event: NSEvent) {
+            guard let point = localPoint(for: event) else { return }
+            onMagnify?(ArtboardMagnifyEvent(location: point, magnification: event.magnification))
+        }
+
+        private func localPoint(for event: NSEvent) -> CGPoint? {
+            guard let window,
+                  event.window === window else { return nil }
+            let point = convert(event.locationInWindow, from: nil)
+            return bounds.contains(point) ? point : nil
+        }
+
+        deinit {
+            removeMonitors()
+        }
+    }
+}
+
 private func workspaceOutputRect(container: CGSize, outputSize: CGSize, workspace: CollageWorkspace?) -> CGRect {
     let fallbackViewport = CGRect(origin: .zero, size: outputSize)
     let viewport = workspace?.outputViewport.frame ?? fallbackViewport
@@ -6008,6 +6100,14 @@ private struct WorkspaceArtboardOverlay: View {
                 Canvas { context, _ in
                     drawOverlay(context: &context, outputRect: outputRect)
                 }
+                ArtboardNavigationEventMonitor(
+                    onScroll: { event in
+                        handleScroll(event, outputRect: outputRect)
+                    },
+                    onMagnify: { event in
+                        handleMagnifyEvent(event, outputRect: outputRect)
+                    }
+                )
                 Color.black.opacity(0.001)
             }
             .contentShape(Rectangle())
@@ -6203,6 +6303,71 @@ private struct WorkspaceArtboardOverlay: View {
         model.updateWorkspaceLiveEdit { workspace in
             workspace.viewCenter = CGPoint(x: startCenter.x - delta.x, y: startCenter.y - delta.y)
         }
+    }
+
+    private func handleScroll(_ event: ArtboardNavigationEvent, outputRect: CGRect) {
+        guard outputRect.width > 0,
+              let workspace = model.settings.workspace else { return }
+        if event.modifiers.contains(.option) {
+            let factor = pow(1.0018, Double(event.deltaY))
+            zoomWorkspace(by: factor, around: event.location, outputRect: outputRect, workspace: workspace)
+            return
+        }
+        let scale = max(0.0001, outputRect.width / max(1, workspace.outputViewport.frame.width))
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.viewCenter = CGPoint(
+                x: workspace.viewCenter.x + event.deltaX / scale,
+                y: workspace.viewCenter.y + event.deltaY / scale
+            )
+        }
+    }
+
+    private func handleMagnifyEvent(_ event: ArtboardMagnifyEvent, outputRect: CGRect) {
+        guard let workspace = model.settings.workspace else { return }
+        zoomWorkspace(by: 1 + Double(event.magnification), around: event.location, outputRect: outputRect, workspace: workspace)
+    }
+
+    private func zoomWorkspace(
+        by factor: Double,
+        around viewPoint: CGPoint,
+        outputRect: CGRect,
+        workspace: CollageWorkspace
+    ) {
+        let oldZoom = max(0.05, min(16, workspace.zoom))
+        let newZoom = max(0.05, min(16, oldZoom * factor))
+        guard abs(newZoom - oldZoom) > 0.0001 else { return }
+        let viewport = workspace.outputViewport.frame
+        let worldBefore = worldPoint(view: viewPoint, viewport: viewport, outputRect: outputRect)
+        let nextOutputRect = outputRectFor(
+            container: outputRect,
+            viewport: viewport,
+            center: workspace.viewCenter,
+            zoomRatio: CGFloat(newZoom / oldZoom)
+        )
+        let worldAfter = worldPoint(view: viewPoint, viewport: viewport, outputRect: nextOutputRect)
+        model.updateWorkspaceLiveEdit { workspace in
+            workspace.zoom = newZoom
+            workspace.viewCenter = CGPoint(
+                x: workspace.viewCenter.x + (worldBefore.x - worldAfter.x),
+                y: workspace.viewCenter.y + (worldBefore.y - worldAfter.y)
+            )
+        }
+    }
+
+    private func outputRectFor(
+        container current: CGRect,
+        viewport: CGRect,
+        center: CGPoint,
+        zoomRatio: CGFloat
+    ) -> CGRect {
+        let width = current.width * zoomRatio
+        let height = current.height * zoomRatio
+        return CGRect(
+            x: current.midX - width * 0.5,
+            y: current.midY - height * 0.5,
+            width: width,
+            height: height
+        )
     }
 
     private func handleMagnifyChanged(_ value: CGFloat) {
