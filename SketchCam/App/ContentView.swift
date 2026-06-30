@@ -415,12 +415,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !bottomDockCollapsed {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
                         ForEach(bottomGroups) { group in
                             panelGroupCard(group, destination: .bottom)
                         }
                     }
-                    .padding(10)
+                    .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1385,12 +1385,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !isCollapsed.wrappedValue {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
                         ForEach(groups) { group in
                             panelGroupCard(group, destination: destination)
                         }
                     }
-                    .padding(10)
+                    .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1419,22 +1419,26 @@ struct ContentView: View {
     private func panelGroupCard(_ group: PanelGroup, destination: PanelDropDestination) -> some View {
         let activePanel = selectedPanel(in: group) ?? group.activeDefault ?? .layers
         let isMinimized = minimizedPanels.contains(activePanel)
-        return VStack(alignment: .leading, spacing: 10) {
-            panelHeader(for: activePanel, group: group, destination: destination)
-                .padding(.top, 8)
-                .padding(.horizontal, 12)
+        let isActive = group.panels.contains(tab)
+        let panelSurface = Color(nsColor: isActive ? .controlBackgroundColor : .windowBackgroundColor)
+        let headerSurface = Color(nsColor: .windowBackgroundColor).opacity(0.38)
+        return VStack(alignment: .leading, spacing: 0) {
+            panelHeader(for: activePanel, group: group, destination: destination, activeTabSurface: panelSurface)
+                .frame(height: 36)
+                .background(headerSurface)
             if !isMinimized {
                 tabContent(activePanel)
+                    .padding(.top, 10)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
             }
         }
         .frame(minWidth: panelMinimumWidth(for: destination), alignment: .leading)
-        .background(group.panels.contains(tab) ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor).opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(panelSurface)
+        .clipShape(Rectangle())
         .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(group.panels.contains(tab) ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
+            Rectangle()
+                .stroke(isActive ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.08), lineWidth: 1)
         }
         .onTapGesture { tab = activePanel }
         .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
@@ -1451,9 +1455,14 @@ struct ContentView: View {
         }
     }
 
-    private func panelHeader(for activePanel: ControlTab, group: PanelGroup, destination: PanelDropDestination) -> some View {
-        HStack(spacing: 8) {
-            panelTabStrip(group: group, activePanel: activePanel, destination: destination)
+    private func panelHeader(
+        for activePanel: ControlTab,
+        group: PanelGroup,
+        destination: PanelDropDestination,
+        activeTabSurface: Color
+    ) -> some View {
+        HStack(spacing: 0) {
+            panelTabStrip(group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
             Spacer(minLength: 0)
             Button {
                 hidePanel(activePanel)
@@ -1462,14 +1471,20 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
+            .frame(width: 34, height: 34)
             .help("Hide \(activePanel.rawValue)")
         }
     }
 
-    private func panelTabStrip(group: PanelGroup, activePanel: ControlTab, destination: PanelDropDestination) -> some View {
-        HStack(spacing: 2) {
+    private func panelTabStrip(
+        group: PanelGroup,
+        activePanel: ControlTab,
+        destination: PanelDropDestination,
+        activeTabSurface: Color
+    ) -> some View {
+        HStack(spacing: 0) {
             ForEach(group.panels) { panel in
-                panelTabButton(panel, group: group, activePanel: activePanel, destination: destination)
+                panelTabButton(panel, group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
             }
         }
     }
@@ -1478,13 +1493,14 @@ struct ContentView: View {
         _ panel: ControlTab,
         group: PanelGroup,
         activePanel: ControlTab,
-        destination: PanelDropDestination
+        destination: PanelDropDestination,
+        activeTabSurface: Color
     ) -> some View {
         if group.panels.count == 1 || panel == activePanel {
-            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination)
+            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
                 .labelStyle(.titleAndIcon)
         } else {
-            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination)
+            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
                 .labelStyle(.iconOnly)
         }
     }
@@ -1493,14 +1509,20 @@ struct ContentView: View {
         _ panel: ControlTab,
         group: PanelGroup,
         activePanel: ControlTab,
-        destination: PanelDropDestination
+        destination: PanelDropDestination,
+        activeTabSurface: Color
     ) -> some View {
         Label(panel.rawValue, systemImage: panel.icon)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(draggingPanel == panel || panel == activePanel ? Color.accentColor : Color.secondary)
-            .padding(.horizontal, panel == activePanel ? 5 : 4)
-            .padding(.vertical, 3)
-            .background(panel == activePanel ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .foregroundStyle(draggingPanel == panel ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, panel == activePanel ? 12 : 8)
+            .frame(height: 36)
+            .background {
+                if panel == activePanel {
+                    activeTabSurface
+                }
+            }
+            .compositingGroup()
             .contentShape(Rectangle())
             .help("Double-click to minimize \(panel.rawValue)")
             .onTapGesture(count: 2) {
@@ -1590,6 +1612,7 @@ struct ContentView: View {
             } label: {
                 Label(freezeButtonTitle, systemImage: isHeld ? "play.fill" : "pause.fill")
             }
+            .panelButton()
             .help("Freeze live camera input")
             Spacer()
             Text(model.inputFrozen ? "held" : "live")
@@ -1631,6 +1654,7 @@ struct ContentView: View {
             } label: {
                 Label(freezeButtonTitle, systemImage: isHeld ? "play.fill" : "pause.fill")
             }
+            .panelButton()
             .help("Pause or resume movie input")
             Spacer()
             Text(model.movieRate == 0 ? "paused" : "playing")
@@ -1640,7 +1664,9 @@ struct ContentView: View {
         .controlSize(.small)
         HStack {
             Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
+                .panelButton()
             Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
+                .panelButton()
             Text(model.movieURL?.lastPathComponent ?? "No movie selected")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1651,6 +1677,7 @@ struct ContentView: View {
             TextField("https://… (stream URL)", text: $movieURLField)
                 .textFieldStyle(.roundedBorder)
             Button("Load") { model.frameSource = .movie; model.openMovieURL(movieURLField) }
+                .panelButton()
                 .disabled(movieURLField.isEmpty)
         }
         SliderRow(title: "Speed", value: $model.movieRate, range: 0...2, defaultValue: 1, hint: "0 pauses")
@@ -2025,7 +2052,7 @@ struct ContentView: View {
 
     @ViewBuilder private var inkTab: some View {
         Toggle("Enable Ink", isOn: $model.settings.landmarks.inkEnabled)
-            .font(.headline)
+            .font(.callout.weight(.semibold))
             .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
         Group {
             SectionHeader("Paper")
@@ -3067,10 +3094,10 @@ private struct SectionHeader: View {
 
     var body: some View {
         Text(title.uppercased())
-            .font(.caption)
-            .fontWeight(.semibold)
+            .font(.caption2.weight(.bold))
+            .tracking(0.5)
             .foregroundStyle(.secondary)
-            .padding(.top, 6)
+            .padding(.top, 8)
     }
 }
 
@@ -4201,6 +4228,8 @@ private struct SliderRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.primary)
                 .frame(width: 64, alignment: .leading)
                 .contentShape(Rectangle())
                 // Double-click the label to reset this parameter to its default.
@@ -4241,13 +4270,14 @@ private struct OutputExportControls: View {
                 } label: {
                     Label("Export current", systemImage: "square.and.arrow.down")
                 }
+                .panelButton()
                 Button {
                     chooseDestination()
                 } label: {
                     Label("Destination", systemImage: "folder")
                 }
+                .panelButton()
             }
-            .controlSize(.small)
 
             Text(exporter.destinationURL?.path(percentEncoded: false) ?? "No export destination")
                 .font(.caption)
@@ -4313,18 +4343,21 @@ private struct OutputExportControls: View {
                 TextField("Take", text: takeName)
                     .textFieldStyle(.roundedBorder)
                 Button("Capture Next") { exporter.captureNext() }
+                    .panelButton()
                     .disabled(exporter.state != .recording)
             }
 
             HStack {
                 Button("Start") { exporter.start() }
+                    .panelButton()
                     .disabled(exporter.destinationURL == nil || exporter.state == .recording || exporter.state == .finishing)
                 Button("Stop") { exporter.stop() }
+                    .panelButton()
                     .disabled(exporter.state != .recording)
                 Button("Cancel") { exporter.stop(cancelled: true) }
+                    .panelButton()
                     .disabled(exporter.state != .recording)
             }
-            .controlSize(.small)
 
             Text("\(exporter.statusText) - \(exporter.capturedFrames) frames, \(exporter.droppedFrames) dropped")
                 .font(.caption)
@@ -4797,6 +4830,13 @@ private struct TimelineMetric: View {
 }
 
 private extension View {
+    func panelButton() -> some View {
+        self
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .font(.callout.weight(.medium))
+    }
+
     func dockDropHighlight(isTargeted: Bool) -> some View {
         self
             .background(isTargeted ? Color.accentColor.opacity(0.10) : Color.clear)
