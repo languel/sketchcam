@@ -1428,9 +1428,14 @@ struct ContentView: View {
                 .background(headerSurface)
             if !isMinimized {
                 tabContent(activePanel)
+                    .id(activePanel.id)
                     .padding(.top, 10)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
+                    .transaction { transaction in
+                        transaction.animation = nil
+                        transaction.disablesAnimations = true
+                    }
             }
         }
         .frame(minWidth: panelMinimumWidth(for: destination), alignment: .leading)
@@ -1512,32 +1517,40 @@ struct ContentView: View {
         destination: PanelDropDestination,
         activeTabSurface: Color
     ) -> some View {
-        Label(panel.rawValue, systemImage: panel.icon)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(draggingPanel == panel ? Color.accentColor : Color.secondary)
-            .padding(.horizontal, panel == activePanel ? 12 : 8)
-            .frame(height: 36)
-            .background {
-                if panel == activePanel {
-                    activeTabSurface
+        Button {
+            selectPanel(panel, in: group)
+        } label: {
+            Label(panel.rawValue, systemImage: panel.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(draggingPanel == panel ? Color.accentColor : Color.secondary)
+                .padding(.horizontal, panel == activePanel ? 12 : 8)
+                .frame(height: 36)
+                .background {
+                    if panel == activePanel {
+                        activeTabSurface
+                    }
                 }
-            }
-            .compositingGroup()
-            .contentShape(Rectangle())
-            .help("Double-click to minimize \(panel.rawValue)")
-            .onTapGesture(count: 2) {
-                selectPanel(panel, in: group)
-                togglePanelMinimized(panel)
-            }
-            .onTapGesture {
-                selectPanel(panel, in: group)
-            }
-            .onDrag { panelDragProvider(for: panel) }
-            .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
-                handlePanelGroupDrop(providers, destination: destination, target: panel)
-            }
+                .compositingGroup()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Double-click to minimize \(panel.rawValue)")
+        .simultaneousGesture(
+            TapGesture(count: 2)
+                .onEnded {
+                    selectPanel(panel, in: group)
+                    togglePanelMinimized(panel)
+                }
+        )
+        .onDrag { panelDragProvider(for: panel) }
+        .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
+            handlePanelGroupDrop(providers, destination: destination, target: panel)
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
     }
-
     private func panelDragHandle(for panel: ControlTab) -> some View {
         Label(panel.rawValue, systemImage: panel.icon)
             .font(.caption.weight(.semibold))
