@@ -726,6 +726,7 @@ struct ContentView: View {
                         onLiveEnd: { model.endInkLiveStroke() },
                         onStrokeCommitted: { commitCanvasStrokeRecord($0) },
                         outputSize: model.outputFormat.size,
+                        activeFrameID: activeInkFrameID,
                         inkColor: rgbaColor(model.settings.landmarks.inkColor),
                         inkRGBA: model.settings.landmarks.inkColor,
                         tool: inkTool,
@@ -743,6 +744,9 @@ struct ContentView: View {
                     )
                     .zIndex(20)
                 }
+                WorkspaceArtboardOverlay(model: model, outputSize: model.outputFormat.size)
+                    .allowsHitTesting(workspaceOverlayHandlesInput)
+                    .zIndex(25)
                 if model.settings.landmarks.inkEnabled, inkHUDVisible {
                     InkBottomHUD(
                         mode: inkModeBinding,
@@ -776,6 +780,33 @@ struct ContentView: View {
         }
         .frame(minWidth: 120, minHeight: 68)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var workspaceOverlayHandlesInput: Bool {
+        switch model.settings.workspace?.activeTool {
+        case .artboard, .transform, .crop, .mask:
+            return true
+        case .select, .pan, .pen, .wash, nil:
+            return false
+        }
+    }
+
+    private var activeInkFrameID: UUID? {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return nil }
+        if let activeID = workspace.activeFrameID,
+           isInkFrame(activeID, workspace: workspace, graph: graph) {
+            return activeID
+        }
+        return workspace.frames.first { isInkFrame($0.id, workspace: workspace, graph: graph) }?.id
+    }
+
+    private func isInkFrame(_ frameID: UUID, workspace: CollageWorkspace, graph: LayerGraph) -> Bool {
+        guard let frame = workspace.frame(id: frameID),
+              case .layer(let layerID) = frame.material,
+              let layer = graph.layers.first(where: { $0.id == layerID }),
+              let node = graph.node(layer.node) else { return false }
+        return node.kind.family == "ink"
     }
 
     // MARK: - Controls
@@ -5492,6 +5523,12 @@ private struct InkStrokeDetail: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if let frameID = record.frameID {
+                Text("frame \(frameID.uuidString)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Text("raw \(record.capture.rawSamples.count) / canonical \(record.capture.canonicalSamples.count), seed \(record.capture.seed), \(recipeSummary(record.activeRender))")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -5741,6 +5778,284 @@ private struct InkCanvasEventOverlay: NSViewRepresentable {
     }
 }
 
+private struct WorkspaceArtboardOverlay: View {
+    @ObservedObject var model: SketchCamViewModel
+    let outputSize: CGSize
+
+    @State private var dragStarted = false
+    @State private var dragOperation: DragOperation?
+
+    private enum DragOperation {
+        case move(frameID: UUID, startWorld: CGPoint, transform: WorkspaceAffineTransform)
+        case scale(frameID: UUID, centerWorld: CGPoint, startDistance: CGFloat, transform: WorkspaceAffineTransform)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let outputRect = fittedRect(container: geo.size, content: outputSize)
+            ZStack {
+                Canvas { context, _ in
+                    drawOverlay(context: &context, outputRect: outputRect)
+                }
+                Color.black.opacity(0.001)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        handleDragChanged(value, outputRect: outputRect)
+                    }
+                    .onEnded { _ in
+                        handleDragEnded()
+                    }
+            )
+        }
+    }
+
+    private func drawOverlay(context: inout GraphicsContext, outputRect: CGRect) {
+        guard let workspace = model.settings.workspace else { return }
+        var viewportPath = Path()
+        viewportPath.addRect(outputRect)
+        context.stroke(
+            viewportPath,
+            with: .color(Color.white.opacity(0.34)),
+            style: StrokeStyle(lineWidth: 1, dash: [7, 5])
+        )
+
+        for frame in workspace.frames where frame.visible {
+            let selected = workspace.selectedFrameIDs.contains(frame.id)
+            let corners = frameCorners(frame, viewport: workspace.outputViewport.frame, outputRect: outputRect)
+            guard corners.count == 4 else { continue }
+            var path = Path()
+            path.move(to: corners[0])
+            for point in corners.dropFirst() {
+                path.addLine(to: point)
+            }
+            path.closeSubpath()
+
+            let color = frameColor(frame, selected: selected)
+            if selected {
+                context.fill(path, with: .color(color.opacity(0.08)))
+            }
+            context.stroke(
+                path,
+                with: .color(color.opacity(selected ? 0.92 : 0.5)),
+                style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: frame.role == .reference ? [5, 4] : [])
+            )
+
+            if selected {
+                for point in corners {
+                    let handle = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
+                    context.fill(Path(ellipseIn: handle), with: .color(color.opacity(0.95)))
+                }
+                drawCrop(frame, context: &context, viewport: workspace.outputViewport.frame, outputRect: outputRect, color: color)
+            }
+
+            let labelPoint = corners.reduce(corners[0]) { best, point in
+                point.y < best.y || (point.y == best.y && point.x < best.x) ? point : best
+            }
+            let label = context.resolve(
+                Text(frame.name)
+                    .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                    .foregroundColor(color.opacity(selected ? 0.95 : 0.65))
+            )
+            context.draw(label, at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 12), anchor: .leading)
+        }
+    }
+
+    private func drawCrop(
+        _ frame: WorkspaceFrame,
+        context: inout GraphicsContext,
+        viewport: CGRect,
+        outputRect: CGRect,
+        color: Color
+    ) {
+        guard frame.cropRect != CGRect(x: 0, y: 0, width: 1, height: 1) else { return }
+        let crop = frame.cropRect.standardized
+        let bounds = frame.localBounds
+        let local = CGRect(
+            x: bounds.minX + crop.minX * bounds.width,
+            y: bounds.minY + crop.minY * bounds.height,
+            width: crop.width * bounds.width,
+            height: crop.height * bounds.height
+        )
+        let points = rectCorners(local)
+            .map { $0.applying(frame.transform.cgAffineTransform) }
+            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+        guard points.count == 4 else { return }
+        var path = Path()
+        path.move(to: points[0])
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+        context.stroke(path, with: .color(color.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+    }
+
+    private func handleDragChanged(_ value: DragGesture.Value, outputRect: CGRect) {
+        guard outputRect.width > 0,
+              outputRect.height > 0,
+              let workspace = model.settings.workspace else { return }
+        let world = worldPoint(view: value.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
+        if !dragStarted {
+            dragStarted = true
+            if let handleHit = hitScaleHandle(at: value.location, workspace: workspace, outputRect: outputRect) {
+                model.updateWorkspaceLiveEdit {
+                    $0.activeFrameID = handleHit.frame.id
+                    $0.selectedFrameIDs = [handleHit.frame.id]
+                }
+                model.beginWorkspaceLiveEdit()
+                dragOperation = .scale(
+                    frameID: handleHit.frame.id,
+                    centerWorld: handleHit.centerWorld,
+                    startDistance: max(1, distance(world, handleHit.centerWorld)),
+                    transform: handleHit.frame.transform
+                )
+            }
+            guard let hit = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else {
+                if dragOperation != nil { return }
+                model.updateWorkspaceLiveEdit {
+                    $0.activeFrameID = nil
+                    $0.selectedFrameIDs = []
+                }
+                return
+            }
+            if dragOperation == nil {
+                dragOperation = .move(frameID: hit.id, startWorld: world, transform: hit.transform)
+            }
+            model.updateWorkspaceLiveEdit {
+                $0.activeFrameID = hit.id
+                $0.selectedFrameIDs = [hit.id]
+            }
+            if !hit.locked {
+                model.beginWorkspaceLiveEdit()
+            }
+        }
+
+        switch dragOperation {
+        case .move(let id, let start, let transform):
+            let delta = CGPoint(x: world.x - start.x, y: world.y - start.y)
+            model.updateWorkspaceLiveEdit { workspace in
+                guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                      !workspace.frames[index].locked else { return }
+                workspace.frames[index].transform.tx = transform.tx + delta.x
+                workspace.frames[index].transform.ty = transform.ty + delta.y
+            }
+        case .scale(let id, let center, let startDistance, let transform):
+            let scale = max(0.05, distance(world, center) / max(1, startDistance))
+            model.updateWorkspaceLiveEdit { workspace in
+                guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                      !workspace.frames[index].locked else { return }
+                scaleFrame(&workspace.frames[index], from: transform, around: center, scale: scale)
+            }
+        case nil:
+            break
+        }
+    }
+
+    private func handleDragEnded() {
+        model.endWorkspaceLiveEdit(commit: dragOperation != nil)
+        dragStarted = false
+        dragOperation = nil
+    }
+
+    private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, centerWorld: CGPoint)? {
+        for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
+            let corners = frameCorners(frame, viewport: workspace.outputViewport.frame, outputRect: outputRect)
+            if corners.contains(where: { distance($0, view) <= 12 }) {
+                return (frame, centerWorld(frame))
+            }
+        }
+        return nil
+    }
+
+    private func centerWorld(_ frame: WorkspaceFrame) -> CGPoint {
+        CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
+            .applying(frame.transform.cgAffineTransform)
+    }
+
+    private func scaleFrame(
+        _ frame: inout WorkspaceFrame,
+        from transform: WorkspaceAffineTransform,
+        around centerWorld: CGPoint,
+        scale: CGFloat
+    ) {
+        let centerLocal = CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
+        let factor = Double(scale)
+        frame.transform.a = transform.a * factor
+        frame.transform.b = transform.b * factor
+        frame.transform.c = transform.c * factor
+        frame.transform.d = transform.d * factor
+        frame.transform.tx = Double(centerWorld.x) - (Double(centerLocal.x) * frame.transform.a + Double(centerLocal.y) * frame.transform.c)
+        frame.transform.ty = Double(centerWorld.y) - (Double(centerLocal.x) * frame.transform.b + Double(centerLocal.y) * frame.transform.d)
+    }
+
+    private func hitFrame(at world: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> WorkspaceFrame? {
+        let tolerance = max(2, workspace.outputViewport.frame.width / max(1, outputRect.width) * 8)
+        return workspace.frames.reversed().first { frame in
+            guard frame.visible else { return false }
+            return frame.worldBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(world)
+        }
+    }
+
+    private func frameCorners(_ frame: WorkspaceFrame, viewport: CGRect, outputRect: CGRect) -> [CGPoint] {
+        rectCorners(frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed))
+            .map { $0.applying(frame.transform.cgAffineTransform) }
+            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+    }
+
+    private func rectCorners(_ rect: CGRect) -> [CGPoint] {
+        [
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.maxY),
+            CGPoint(x: rect.minX, y: rect.maxY)
+        ]
+    }
+
+    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        hypot(a.x - b.x, a.y - b.y)
+    }
+
+    private func viewPoint(world: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
+        CGPoint(
+            x: outputRect.minX + ((world.x - viewport.minX) / max(1, viewport.width)) * outputRect.width,
+            y: outputRect.minY + ((world.y - viewport.minY) / max(1, viewport.height)) * outputRect.height
+        )
+    }
+
+    private func worldPoint(view: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
+        CGPoint(
+            x: viewport.minX + ((view.x - outputRect.minX) / max(1, outputRect.width)) * viewport.width,
+            y: viewport.minY + ((view.y - outputRect.minY) / max(1, outputRect.height)) * viewport.height
+        )
+    }
+
+    private func frameColor(_ frame: WorkspaceFrame, selected: Bool) -> Color {
+        if selected { return .accentColor }
+        switch frame.role {
+        case .output: return .green
+        case .layer: return .white
+        case .reference: return .cyan
+        case .preview: return .purple
+        }
+    }
+
+    private func fittedRect(container: CGSize, content: CGSize) -> CGRect {
+        guard container.width > 0, container.height > 0, content.width > 0, content.height > 0 else {
+            return CGRect(origin: .zero, size: container)
+        }
+        let scale = min(container.width / content.width, container.height / content.height)
+        let size = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(
+            x: (container.width - size.width) / 2,
+            y: (container.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+}
+
 private struct InkPreviewDrawingLayer: View {
     @Binding var paths: [InkEditorPath]
     let showLivePath: Bool
@@ -5751,6 +6066,7 @@ private struct InkPreviewDrawingLayer: View {
     let onLiveEnd: () -> Void
     let onStrokeCommitted: (InkStrokeRecord) -> Void
     let outputSize: CGSize
+    let activeFrameID: UUID?
     let inkColor: Color
     let inkRGBA: RGBAColor
     let tool: InkTool
@@ -5944,6 +6260,7 @@ private struct InkPreviewDrawingLayer: View {
         return InkStrokeRecord(
             capture: capture,
             activeRender: recipe,
+            frameID: activeFrameID,
             isEditable: !(immediate || currentWetOnly)
         )
     }

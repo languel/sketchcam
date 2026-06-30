@@ -18,6 +18,7 @@ final class MetalLayerCompositor {
     /// output-sized stream pixels. Returns nil for a node with no pixels yet.
     struct Streams {
         var image: (Node) -> CIImage?
+        var imageMaterial: (WorkspaceImageConfig) -> CIImage? = { _ in nil }
         var personMatte: CIImage?
     }
 
@@ -182,9 +183,9 @@ final class MetalLayerCompositor {
             layer = graph.layers.first { $0.node == nodeID }
             guard let node = graph.node(nodeID) else { return nil }
             image = streams.image(node)
-        case .image:
+        case .image(let config):
             layer = nil
-            image = nil
+            image = streams.imageMaterial(config)
         case .outputViewport:
             layer = nil
             image = nil

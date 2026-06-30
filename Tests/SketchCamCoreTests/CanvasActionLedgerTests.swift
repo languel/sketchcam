@@ -13,6 +13,7 @@ final class CanvasActionLedgerTests: XCTestCase {
 
     private func record(_ x: CGFloat, editable: Bool = true, mode: InkStrokeCaptureMode = .pen) -> InkStrokeRecord {
         let id = UUID()
+        let frameID = UUID()
         let samples = [
             InkStrokeSample(point: CGPoint(x: x, y: 0), time: 0),
             InkStrokeSample(point: CGPoint(x: x, y: 1), time: 0.25, modifiers: InkStrokeModifierFlags(shift: true), charge: 0.5)
@@ -37,6 +38,7 @@ final class CanvasActionLedgerTests: XCTestCase {
                 brushInk: mode == .pen ? 0 : 0.2,
                 smoothing: 0.6
             ),
+            frameID: frameID,
             isEditable: editable
         )
     }
@@ -105,6 +107,7 @@ final class CanvasActionLedgerTests: XCTestCase {
         let encodedRecord = try JSONEncoder().encode(stroke)
         let decodedRecord = try JSONDecoder().decode(InkStrokeRecord.self, from: encodedRecord)
         XCTAssertEqual(decodedRecord, stroke)
+        XCTAssertEqual(decodedRecord.frameID, stroke.frameID)
     }
 
     func testLegacyPathMigratesWithoutLosingMetadata() throws {

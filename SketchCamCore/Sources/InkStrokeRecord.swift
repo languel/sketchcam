@@ -124,6 +124,7 @@ public struct InkRenderRecipe: Equatable, Sendable, Codable {
 public struct InkStrokeRecord: Equatable, Sendable, Codable, Identifiable {
     public var capture: InkStrokeCapture
     public var activeRender: InkRenderRecipe
+    public var frameID: UUID?
     public var isVisible: Bool
     public var isEditable: Bool
 
@@ -132,11 +133,13 @@ public struct InkStrokeRecord: Equatable, Sendable, Codable, Identifiable {
     public init(
         capture: InkStrokeCapture,
         activeRender: InkRenderRecipe,
+        frameID: UUID? = nil,
         isVisible: Bool = true,
         isEditable: Bool
     ) {
         self.capture = capture
         self.activeRender = activeRender
+        self.frameID = frameID
         self.isVisible = isVisible
         self.isEditable = isEditable
     }

@@ -116,6 +116,7 @@ final class SketchCamViewModel: ObservableObject {
     @Published private(set) var canvasHistoryRevision = 0
     private var workspaceUndoStack: [CollageWorkspace] = []
     private var workspaceRedoStack: [CollageWorkspace] = []
+    private var workspaceLiveEditBaseline: CollageWorkspace?
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
@@ -466,6 +467,28 @@ final class SketchCamViewModel: ObservableObject {
             return
         }
         settings.workspace = workspace
+    }
+
+    func beginWorkspaceLiveEdit() {
+        ensureWorkspace()
+        guard workspaceLiveEditBaseline == nil else { return }
+        workspaceLiveEditBaseline = settings.workspace
+    }
+
+    func updateWorkspaceLiveEdit(_ body: (inout CollageWorkspace) -> Void) {
+        ensureWorkspace()
+        guard var workspace = settings.workspace else { return }
+        body(&workspace)
+        guard !workspace.containsRenderRouteCycle() else { return }
+        settings.workspace = workspace
+    }
+
+    func endWorkspaceLiveEdit(commit: Bool = true) {
+        guard let baseline = workspaceLiveEditBaseline else { return }
+        defer { workspaceLiveEditBaseline = nil }
+        guard commit, let current = settings.workspace, current != baseline else { return }
+        workspaceUndoStack.append(baseline)
+        workspaceRedoStack.removeAll()
     }
 
     var canUndoWorkspaceAction: Bool { !workspaceUndoStack.isEmpty }
