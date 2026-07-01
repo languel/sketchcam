@@ -845,9 +845,9 @@ struct ContentView: View {
                     InkPreviewDrawingLayer(
                         paths: inkPathsBinding,
                         showLivePath: model.settings.landmarks.inkShowLivePath,
-                        immediatePen: model.settings.landmarks.inkImmediatePen,
-                        immediateWash: model.settings.landmarks.inkImmediateWash,
-                        smoothing: model.settings.landmarks.inkSmoothing,
+                        immediatePen: activeInkConfig.immediatePen,
+                        immediateWash: activeInkConfig.immediateWash,
+                        smoothing: activeInkConfig.smoothing,
                         onLive: { model.updateInkLiveStroke($0) },
                         onLiveEnd: { model.endInkLiveStroke() },
                         onStrokeCommitted: { commitCanvasStrokeRecord($0) },
@@ -855,16 +855,16 @@ struct ContentView: View {
                         outputRect: outputRect,
                         workspace: model.settings.workspace,
                         activeFrameID: activeInkFrameID,
-                        inkColor: rgbaColor(model.settings.landmarks.inkColor),
-                        inkRGBA: model.settings.landmarks.inkColor,
+                        inkColor: rgbaColor(activeInkConfig.inkColor),
+                        inkRGBA: activeInkConfig.inkColor,
                         tool: inkTool,
                         brushMode: currentInkMode,
                         inkKind: currentInkKind,
                         width: Float(inkSizeBinding.wrappedValue),
                         washWidth: Float(inkWashSizeBinding.wrappedValue),
-                        flow: model.settings.landmarks.inkFlow,
-                        bleed: model.settings.landmarks.inkBleed,
-                        dry: model.settings.landmarks.inkDry,
+                        flow: activeInkConfig.flow,
+                        bleed: activeInkConfig.bleed,
+                        dry: activeInkConfig.dry,
                         colorSeparation: Float(inkColorSeparationBinding.wrappedValue),
                         brushInk: Float(inkBrushInkBinding.wrappedValue),
                         selectedPathID: $selectedInkPathID,
@@ -879,11 +879,11 @@ struct ContentView: View {
                     InkBottomHUD(
                         mode: inkModeBinding,
                         inkKind: inkKindBinding,
-                        inkColor: rgbaBinding(\.landmarks.inkColor),
+                        inkColor: inkColorPickerBinding,
                         size: inkSizeBinding,
-                        flow: floatBinding(\.landmarks.inkFlow),
-                        bleed: floatBinding(\.landmarks.inkBleed),
-                        dry: floatBinding(\.landmarks.inkDry),
+                        flow: inkConfigFloatBinding(\.flow),
+                        bleed: inkConfigFloatBinding(\.bleed),
+                        dry: inkConfigFloatBinding(\.dry),
                         colorSeparation: inkColorSeparationBinding,
                         brushInk: inkBrushInkBinding,
                         fix: fixInk,
@@ -927,6 +927,12 @@ struct ContentView: View {
            isInkFrame(activeID, workspace: workspace, graph: graph) {
             return activeID
         }
+        return workspace.frames.first { isInkFrame($0.id, workspace: workspace, graph: graph) }?.id
+    }
+
+    private var defaultInkFrameID: UUID? {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return nil }
         return workspace.frames.first { isInkFrame($0.id, workspace: workspace, graph: graph) }?.id
     }
 
@@ -2470,11 +2476,11 @@ struct ContentView: View {
             switch tool {
             case .pen:
                 model.settings.landmarks.inkEnabled = true
-                model.settings.landmarks.inkBrushMode = .pen
+                mutateActiveInkConfig { $0.brushMode = .pen }
                 inkTool = .draw
             case .wash:
                 model.settings.landmarks.inkEnabled = true
-                model.settings.landmarks.inkBrushMode = .brush
+                mutateActiveInkConfig { $0.brushMode = .brush }
                 inkTool = .draw
             case .select, .transform, .crop, .mask:
                 inkTool = .select
@@ -2986,17 +2992,13 @@ struct ContentView: View {
             inkInputMenu(
                 title: "Surface input",
                 label: inkSurfaceInputLabel,
-                help: "Layer or internal paper used as the ink surface/substrate. This affects the material response and visible texture input.",
-                includeInternalPaper: true,
-                includeSameAsSurface: false,
+                help: "Layer used as the ink surface/substrate. None means the ink sim has no routed surface texture.",
                 binding: inkSurfaceInputMenuBinding
             )
             inkInputMenu(
                 title: "Dynamic input",
                 label: inkDynamicInputLabel,
-                help: "Layer used for motion, wetness, and live-flow response. Leave as Same as surface for legacy behavior.",
-                includeInternalPaper: false,
-                includeSameAsSurface: true,
+                help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
                 binding: inkDynamicInputMenuBinding
             )
             if inkTextureBinding.wrappedValue != .none {
@@ -3014,19 +3016,19 @@ struct ContentView: View {
             }
 
             DisclosureGroup("Ink response") {
-                SliderRow(title: "Surface influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                SliderRow(title: "Surface influence", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
                           hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
-                SliderRow(title: "Dynamic influence", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                SliderRow(title: "Dynamic influence", value: optionalInkConfigFloatBinding(\.dynamicInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
                           hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
-                SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
+                SliderRow(title: "Motion force", value: optionalInkConfigFloatBinding(\.motionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
                           hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
-                SliderRow(title: "Motion wetness", value: optionalLandmarkFloatBinding(\.inkMotionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
+                SliderRow(title: "Motion wetness", value: optionalInkConfigFloatBinding(\.motionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
                           hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
-                SliderRow(title: "Dynamic absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
+                SliderRow(title: "Dynamic absorbency", value: optionalInkConfigFloatBinding(\.dynamicAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
                           hint: "How strongly the dynamic input accelerates wetting and drying locally.")
-                SliderRow(title: "Dynamic drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
+                SliderRow(title: "Dynamic drag", value: optionalInkConfigFloatBinding(\.dynamicDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
                           hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
-                SliderRow(title: "Dynamic resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1,
+                SliderRow(title: "Dynamic resist", value: optionalInkConfigFloatBinding(\.dynamicResist, defaultValue: 1), range: 0...1, defaultValue: 1,
                           hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
                 HStack(spacing: 6) {
                     Button("Fix") { fixInk() }
@@ -3083,7 +3085,7 @@ struct ContentView: View {
             .controlSize(.small)
             Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
                 .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
-            SliderRow(title: "Smooth", value: floatBinding(\.landmarks.inkSmoothing), defaultValue: 0.5,
+            SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5,
                       hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.")
 
             SectionHeader("Pen / Wash")
@@ -3098,7 +3100,7 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 HStack(spacing: 6) {
                     RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset ink color") { model.settings.landmarks.inkColor = .ink }
+                    colorResetButton("Reset ink color") { mutateActiveInkConfig { $0.inkColor = .ink } }
                     Toggle("", isOn: savePenStrokeBinding)
                         .labelsHidden()
                         .toggleStyle(.checkbox)
@@ -3107,7 +3109,7 @@ struct ContentView: View {
                 Spacer(minLength: 6)
                 HStack(spacing: 6) {
                     RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset wash color") { model.settings.landmarks.inkWashColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) }
+                    colorResetButton("Reset wash color") { mutateActiveInkConfig { $0.washColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) } }
                     Toggle("", isOn: saveWashStrokeBinding)
                         .labelsHidden()
                         .toggleStyle(.checkbox)
@@ -3123,28 +3125,28 @@ struct ContentView: View {
                       hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.")
             SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5,
                       hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.")
-            SliderRow(title: "Smear", value: floatBinding(\.landmarks.inkSmearStrength), defaultValue: 0.5,
+            SliderRow(title: "Smear", value: inkConfigFloatBinding(\.smearStrength), defaultValue: 0.5,
                       hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.")
-            SliderRow(title: "Flow", value: floatBinding(\.landmarks.inkFlow), defaultValue: 0.9,
+            SliderRow(title: "Flow", value: inkConfigFloatBinding(\.flow), defaultValue: 0.9,
                       hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.")
-            SliderRow(title: "Bleed", value: floatBinding(\.landmarks.inkBleed), defaultValue: 0.8,
+            SliderRow(title: "Bleed", value: inkConfigFloatBinding(\.bleed), defaultValue: 0.8,
                       hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)")
-            SliderRow(title: "Dry", value: floatBinding(\.landmarks.inkDry), defaultValue: 0.25,
+            SliderRow(title: "Dry", value: inkConfigFloatBinding(\.dry), defaultValue: 0.25,
                       hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.")
-            SliderRow(title: "Wet decay", value: optionalLandmarkFloatBinding(\.inkWetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1,
+            SliderRow(title: "Wet decay", value: optionalInkConfigFloatBinding(\.wetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1,
                       hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.")
-            SliderRow(title: "Fade", value: optionalLandmarkFloatBinding(\.inkFadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
+            SliderRow(title: "Fade", value: optionalInkConfigFloatBinding(\.fadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
                       hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.")
             SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5,
                       hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.")
             SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0,
                       hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).")
-            Picker("Curve", selection: $model.settings.landmarks.inkCurveFit) {
+            Picker("Curve", selection: inkCurveFitBinding) {
                 ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
             }
             .pickerStyle(.segmented)
             .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
-            seedRow(\.landmarks.inkSeed)
+            inkSeedRow
 
         }
         .disabled(!model.settings.landmarks.inkEnabled)
@@ -3216,64 +3218,69 @@ struct ContentView: View {
 
     private func clearInk() {
         model.cancelInkLiveStroke()
-        model.clearCanvasActions()
+        let frameID = activeInkFrameID
+        model.clearCanvasActions(frameID: frameID, includeUntagged: frameID == defaultInkFrameID)
         // Fade the canvas out over the Fade duration, then wipe — the engine
         // fades the live-baked + committed ink (incl. immediate-mode marks) and
         // clears the textures when the fade completes.
-        model.settings.landmarks.inkClearFadeRevision = (model.settings.landmarks.inkClearFadeRevision ?? 0) + 1
+        mutateActiveInkConfig { $0.clearFadeRevision = ($0.clearFadeRevision ?? 0) + 1 }
         clearInkSelection()
     }
 
     private func fixInk() {
-        model.settings.landmarks.inkFixRevision = (model.settings.landmarks.inkFixRevision ?? 0) + 1
+        mutateActiveInkConfig { $0.fixRevision = ($0.fixRevision ?? 0) + 1 }
     }
 
     private func unfixInk() {
-        model.settings.landmarks.inkUnfixRevision = (model.settings.landmarks.inkUnfixRevision ?? 0) + 1
+        mutateActiveInkConfig { $0.unfixRevision = ($0.unfixRevision ?? 0) + 1 }
     }
 
     private func wetInkCanvas() {
-        model.settings.landmarks.inkWetCanvasRevision = (model.settings.landmarks.inkWetCanvasRevision ?? 0) + 1
+        mutateActiveInkConfig { $0.wetCanvasRevision = ($0.wetCanvasRevision ?? 0) + 1 }
     }
 
     private func dryInkCanvas() {
-        model.settings.landmarks.inkDryCanvasRevision = (model.settings.landmarks.inkDryCanvasRevision ?? 0) + 1
+        mutateActiveInkConfig { $0.dryCanvasRevision = ($0.dryCanvasRevision ?? 0) + 1 }
     }
 
     private func rerenderInk() {
         model.cancelInkLiveStroke()
         clearInkSelection()
-        model.settings.landmarks.inkRebuildRevision += 1
+        mutateActiveInkConfig { $0.rebuildRevision += 1 }
     }
 
     private func toggleInkMode() {
-        model.settings.landmarks.inkBrushMode = currentInkMode.toggled
+        mutateActiveInkConfig { $0.brushMode = currentInkMode.toggled }
     }
 
     private func toggleInkKind() {
-        model.settings.landmarks.inkKind = currentInkKind.toggled
+        mutateActiveInkConfig { $0.inkKind = currentInkKind.toggled }
     }
 
     private func toggleImmediatePen() {
-        model.settings.landmarks.inkImmediatePen.toggle()
+        mutateActiveInkConfig { $0.immediatePen.toggle() }
     }
 
     private func toggleImmediateWash() {
-        model.settings.landmarks.inkImmediateWash.toggle()
+        mutateActiveInkConfig { $0.immediateWash.toggle() }
     }
 
     private func adjustInkWidth(by delta: Float) {
-        model.settings.landmarks.inkWidth = min(1.5, max(0, model.settings.landmarks.inkWidth + delta))
+        mutateActiveInkConfig { $0.penWidth = min(1.5, max(0, $0.penWidth + delta)) }
     }
 
     private func adjustInkWashWidth(by delta: Float) {
-        let v = (model.settings.landmarks.inkWashWidth ?? 0.5) + delta
-        model.settings.landmarks.inkWashWidth = min(1.5, max(0, v))
+        mutateActiveInkConfig {
+            let v = ($0.washWidth ?? 0.5) + delta
+            $0.washWidth = min(1.5, max(0, v))
+        }
     }
 
     private func adjustInkBrushInk(by delta: Float) {
-        let v = (model.settings.landmarks.inkBrushInk ?? 0) + delta
-        model.settings.landmarks.inkBrushInk = min(1, max(0, v))
+        mutateActiveInkConfig {
+            let v = ($0.brushInk ?? 0) + delta
+            $0.brushInk = min(1, max(0, v))
+        }
     }
 
     private func undoInk() {
@@ -3302,11 +3309,11 @@ struct ContentView: View {
     }
 
     private var currentInkMode: InkBrushMode {
-        model.settings.landmarks.inkBrushMode ?? .pen
+        activeInkConfig.brushMode ?? .pen
     }
 
     private var currentInkKind: InkKind {
-        model.settings.landmarks.inkKind ?? .black
+        activeInkConfig.inkKind ?? .black
     }
 
     private var inkPathsBinding: Binding<[InkEditorPath]> {
@@ -3323,14 +3330,14 @@ struct ContentView: View {
     private var inkModeBinding: Binding<InkBrushMode> {
         Binding(
             get: { currentInkMode },
-            set: { model.settings.landmarks.inkBrushMode = $0 }
+            set: { value in mutateActiveInkConfig { $0.brushMode = value } }
         )
     }
 
     private var inkKindBinding: Binding<InkKind> {
         Binding(
             get: { currentInkKind },
-            set: { model.settings.landmarks.inkKind = $0 }
+            set: { value in mutateActiveInkConfig { $0.inkKind = value } }
         )
     }
 
@@ -3338,24 +3345,24 @@ struct ContentView: View {
         Binding(
             // No upper clamp: the slider stays 0…1, but the editable field can
             // type past 1 for a bigger pen (engine caps it safely).
-            get: { Double(max(0, model.settings.landmarks.inkWidth)) },
-            set: { model.settings.landmarks.inkWidth = Float($0) }
+            get: { Double(max(0, activeInkConfig.penWidth)) },
+            set: { value in mutateActiveInkConfig { $0.penWidth = Float(value) } }
         )
     }
 
     private var inkWashSizeBinding: Binding<Double> {
         Binding(
-            get: { Double(max(0, model.settings.landmarks.inkWashWidth ?? 0.5)) },
-            set: { model.settings.landmarks.inkWashWidth = Float($0) }
+            get: { Double(max(0, activeInkConfig.washWidth ?? 0.5)) },
+            set: { value in mutateActiveInkConfig { $0.washWidth = Float(value) } }
         )
     }
 
     private var inkColorSeparationBinding: Binding<Double> {
-        optionalLandmarkFloatBinding(\.inkColorSeparation, defaultValue: 0.5)
+        optionalInkConfigFloatBinding(\.colorSeparation, defaultValue: 0.5)
     }
 
     private var inkBrushInkBinding: Binding<Double> {
-        optionalLandmarkFloatBinding(\.inkBrushInk, defaultValue: 0)
+        optionalInkConfigFloatBinding(\.brushInk, defaultValue: 0)
     }
 
     @ViewBuilder private func colorResetButton(_ help: String, _ action: @escaping () -> Void) -> some View {
@@ -3369,12 +3376,12 @@ struct ContentView: View {
     }
 
     private var inkColorRGBA: Binding<RGBAColor> {
-        Binding(get: { model.settings.landmarks.inkColor },
-                set: { model.settings.landmarks.inkColor = $0 })
+        Binding(get: { activeInkConfig.inkColor },
+                set: { value in mutateActiveInkConfig { $0.inkColor = value } })
     }
     private var inkWashColorRGBA: Binding<RGBAColor> {
-        Binding(get: { model.settings.landmarks.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89) },
-                set: { model.settings.landmarks.inkWashColor = $0 })
+        Binding(get: { activeInkConfig.washColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89) },
+                set: { value in mutateActiveInkConfig { $0.washColor = value } })
     }
     private var inkPaperColorRGBA: Binding<RGBAColor> {
         Binding(get: { model.settings.landmarks.inkPaperColor },
@@ -3400,8 +3407,8 @@ struct ContentView: View {
 
     private var inkPaperCompositeBinding: Binding<InkPaperCompositeMode> {
         Binding(
-            get: { model.settings.landmarks.inkPaperCompositeMode ?? .multiply },
-            set: { model.settings.landmarks.inkPaperCompositeMode = $0 }
+            get: { activeInkConfig.surfaceCompositeMode ?? .none },
+            set: { value in mutateActiveInkConfig { $0.surfaceCompositeMode = value } }
         )
     }
     private var inkPaperOpacityBinding: Binding<Double> {
@@ -3443,22 +3450,24 @@ struct ContentView: View {
     }
     private var inkDynamicInputMenuBinding: Binding<PortBinding?> {
         Binding(
-            get: { model.settings.landmarks.inkDynamicInput },
-            set: { model.settings.landmarks.inkDynamicInput = $0 }
+            get: { activeInkConfig.dynamicInput ?? .none },
+            set: { value in mutateActiveInkConfig { $0.dynamicInput = value } }
         )
     }
     private var inkTextureBinding: Binding<PortBinding> {
         Binding(
             get: {
                 let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
-                guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
+                guard let inkNodeID = activeInkNodeID(in: graph),
+                      let inkNode = graph.node(inkNodeID),
                       let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
                       inkNode.inputs.indices.contains(textureIndex) else { return .none }
                 return inkNode.inputs[textureIndex]
             },
             set: { newValue in
                 var graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
-                guard let nodeIndex = graph.nodes.firstIndex(where: { $0.kind.family == "ink" }),
+                guard let inkNodeID = activeInkNodeID(in: graph),
+                      let nodeIndex = graph.nodes.firstIndex(where: { $0.id == inkNodeID }),
                       let textureIndex = graph.nodes[nodeIndex].kind.ports.firstIndex(where: { $0.name == "texture" }),
                       graph.nodes[nodeIndex].inputs.indices.contains(textureIndex) else { return }
                 graph.nodes[nodeIndex].inputs[textureIndex] = newValue
@@ -3469,32 +3478,22 @@ struct ContentView: View {
         )
     }
     private var inkSurfaceInputLabel: String {
-        portBindingLabel(inkTextureBinding.wrappedValue, noneLabel: "Internal paper", nilLabel: "Internal paper")
+        portBindingLabel(inkTextureBinding.wrappedValue, noneLabel: "None", nilLabel: "None")
     }
     private var inkDynamicInputLabel: String {
-        portBindingLabel(model.settings.landmarks.inkDynamicInput, noneLabel: "None", nilLabel: "Same as surface")
+        portBindingLabel(activeInkConfig.dynamicInput ?? .none, noneLabel: "None", nilLabel: "None")
     }
 
     @ViewBuilder private func inkInputMenu(
         title: String,
         label: String,
         help: String,
-        includeInternalPaper: Bool,
-        includeSameAsSurface: Bool,
         binding: Binding<PortBinding?>
     ) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Menu(label) {
-                if includeSameAsSurface {
-                    Button("Same as surface") { binding.wrappedValue = nil }
-                    Divider()
-                }
-                if includeInternalPaper {
-                    Button("Internal paper") { binding.wrappedValue = .none }
-                } else {
-                    Button("None") { binding.wrappedValue = .none }
-                }
+                Button("None") { binding.wrappedValue = PortBinding.none }
                 Divider()
                 Button("Camera source") { binding.wrappedValue = .source(.camera) }
                 Button("Person Key") { binding.wrappedValue = .source(.personMatte) }
@@ -3528,40 +3527,83 @@ struct ContentView: View {
             return inkTextureSources().first { $0.id == id }?.name ?? "Layer"
         }
     }
+    private func activeInkNodeID(in graph: LayerGraph) -> UUID? {
+        if let activeFrameID = activeInkFrameID,
+           let workspace = model.settings.workspace,
+           let frame = workspace.frame(id: activeFrameID),
+           case .layer(let layerID) = frame.material,
+           let layer = graph.layers.first(where: { $0.id == layerID }),
+           let node = graph.node(layer.node),
+           node.kind.family == "ink" {
+            return node.id
+        }
+        return graph.nodes.first(where: { $0.kind.family == "ink" })?.id
+    }
+
+    private var activeInkConfig: InkFrameConfig {
+        let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        guard let nodeID = activeInkNodeID(in: graph),
+              let node = graph.node(nodeID) else {
+            return InkFrameConfig(landmarks: model.settings.landmarks)
+        }
+        return node.inkConfig ?? InkFrameConfig(landmarks: model.settings.landmarks)
+    }
+
+    private func mutateActiveInkConfig(_ mutate: (inout InkFrameConfig) -> Void) {
+        var graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        guard let nodeID = activeInkNodeID(in: graph),
+              let nodeIndex = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        var config = graph.nodes[nodeIndex].inkConfig ?? InkFrameConfig(landmarks: model.settings.landmarks)
+        mutate(&config)
+        graph.nodes[nodeIndex].inkConfig = config
+        model.settings.layerGraph = graph
+        model.settings.useLayerGraph = true
+    }
+
+    private func inkConfigFloatBinding(_ keyPath: WritableKeyPath<InkFrameConfig, Float>) -> Binding<Double> {
+        Binding(
+            get: { Double(activeInkConfig[keyPath: keyPath]) },
+            set: { value in mutateActiveInkConfig { $0[keyPath: keyPath] = Float(value) } }
+        )
+    }
+
+    private func optionalInkConfigFloatBinding(_ keyPath: WritableKeyPath<InkFrameConfig, Float?>, defaultValue: Float) -> Binding<Double> {
+        Binding(
+            get: { Double(activeInkConfig[keyPath: keyPath] ?? defaultValue) },
+            set: { value in mutateActiveInkConfig { $0[keyPath: keyPath] = Float(value) } }
+        )
+    }
+
+    private var inkCurveFitBinding: Binding<CurveFit> {
+        Binding(
+            get: { activeInkConfig.curveFit },
+            set: { value in mutateActiveInkConfig { $0.curveFit = value } }
+        )
+    }
+
+    private var inkSeedBinding: Binding<Int> {
+        Binding(
+            get: { activeInkConfig.seed },
+            set: { value in mutateActiveInkConfig { $0.seed = value } }
+        )
+    }
+
     private func inkTextureSources() -> [(id: UUID, name: String)] {
         let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
-        guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }) else { return [] }
+        guard let inkNodeID = activeInkNodeID(in: graph) else { return [] }
         return graph.layers.compactMap { layer in
-            guard layer.node != inkNode.id, let node = graph.node(layer.node), node.kind.output == .pixel else { return nil }
+            guard layer.node != inkNodeID, let node = graph.node(layer.node), node.kind.output == .pixel else { return nil }
             return (id: node.id, name: node.name)
         }
     }
     // "Save stroke" = the inverse of immediate mode (off = immediate).
     private var savePenStrokeBinding: Binding<Bool> {
-        Binding(get: { !model.settings.landmarks.inkImmediatePen },
-                set: { model.settings.landmarks.inkImmediatePen = !$0 })
+        Binding(get: { !activeInkConfig.immediatePen },
+                set: { value in mutateActiveInkConfig { $0.immediatePen = !value } })
     }
     private var saveWashStrokeBinding: Binding<Bool> {
-        Binding(get: { !model.settings.landmarks.inkImmediateWash },
-                set: { model.settings.landmarks.inkImmediateWash = !$0 })
-    }
-
-    private var inkWashColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                let c = model.settings.landmarks.inkWashColor ?? RGBAColor(red: 0.84, green: 0.85, blue: 0.89)
-                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
-            },
-            set: { newValue in
-                guard let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
-                model.settings.landmarks.inkWashColor = RGBAColor(
-                    red: Float(converted.redComponent),
-                    green: Float(converted.greenComponent),
-                    blue: Float(converted.blueComponent),
-                    alpha: Float(converted.alphaComponent)
-                )
-            }
-        )
+        Binding(get: { !activeInkConfig.immediateWash },
+                set: { value in mutateActiveInkConfig { $0.immediateWash = !value } })
     }
 
     @ViewBuilder private var overlayOffHint: some View {
@@ -3586,6 +3628,16 @@ struct ContentView: View {
                 Text("Seed \(model.settings[keyPath: keyPath])").monospacedDigit()
             }
             Button("Shuffle") { model.settings[keyPath: keyPath] = Int.random(in: 0..<100_000) }
+        }
+    }
+
+    @ViewBuilder private var inkSeedRow: some View {
+        SectionHeader("Seed")
+        HStack {
+            Stepper(value: inkSeedBinding, in: 0...99_999) {
+                Text("Seed \(activeInkConfig.seed)").monospacedDigit()
+            }
+            Button("Shuffle") { mutateActiveInkConfig { $0.seed = Int.random(in: 0..<100_000) } }
         }
     }
 
@@ -4080,6 +4132,26 @@ struct ContentView: View {
                     blue: Float(converted.blueComponent),
                     alpha: Float(converted.alphaComponent)
                 )
+            }
+        )
+    }
+
+    private var inkColorPickerBinding: Binding<Color> {
+        Binding(
+            get: {
+                let c = activeInkConfig.inkColor
+                return Color(.sRGB, red: Double(c.red), green: Double(c.green), blue: Double(c.blue), opacity: Double(c.alpha))
+            },
+            set: { newValue in
+                guard let converted = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                mutateActiveInkConfig {
+                    $0.inkColor = RGBAColor(
+                        red: Float(converted.redComponent),
+                        green: Float(converted.greenComponent),
+                        blue: Float(converted.blueComponent),
+                        alpha: Float(converted.alphaComponent)
+                    )
+                }
             }
         )
     }
@@ -4899,11 +4971,11 @@ private struct WorkspaceFrameStackEditor: View {
                 }
                 Button("Paper") { addGraphFrame(kind: .paper(PaperConfig()), name: "Paper", role: .layer) }
                 Button("Acrylic") { addGraphFrame(kind: .acrylic(AcrylicConfig()), name: "Acrylic", role: .layer) }
+                Button("Ink") { addGraphFrame(kind: .ink, name: "Ink", role: .layer) }
                 Button("Image...") { openImageFrame() }
             }
             Section("Streams") {
                 Button("Drawing") { enableStream(.drawing) }
-                Button("Ink") { enableStream(.ink) }
                 Button("Web") { enableStream(.web) }
             }
         } label: {
@@ -5158,17 +5230,28 @@ private struct WorkspaceFrameStackEditor: View {
     }
 
     private func addGraphFrame(kind: NodeKind, name: String, role: WorkspaceFrameRole) {
-        let node = Node(name: name, kind: kind, managed: false)
+        model.ensureWorkspace()
+        let frameName = nextGraphFrameName(base: name, family: kind.family)
+        let node = Node(
+            name: frameName,
+            kind: kind,
+            inkConfig: kind.family == "ink" ? InkFrameConfig(landmarks: model.settings.landmarks) : nil,
+            managed: false
+        )
         let layer = Layer(node: node.id)
-        guard var graph = model.settings.layerGraph else { return }
+        var graph = model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)
         graph.nodes.append(node)
         graph.layers.append(layer)
         model.settings.layerGraph = graph
+        model.settings.useLayerGraph = true
+        if kind.family == "ink" {
+            model.settings.landmarks.inkEnabled = true
+        }
         model.mutateWorkspace { workspace in
             let outputRect = CGRect(origin: .zero, size: model.outputFormat.size)
             let frame = WorkspaceFrame(
                 id: layer.id,
-                name: name,
+                name: frameName,
                 role: role,
                 material: .layer(layer.id),
                 localBounds: outputRect,
@@ -5180,6 +5263,18 @@ private struct WorkspaceFrameStackEditor: View {
             workspace.activeFrameID = frame.id
             workspace.selectedFrameIDs = [frame.id]
         }
+    }
+
+    private func nextGraphFrameName(base: String, family: String) -> String {
+        let graph = model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)
+        let existing = Set(graph.nodes.compactMap { node -> String? in
+            node.kind.family == family ? node.name : nil
+        })
+        var index = 1
+        while existing.contains("\(base) \(index)") || existing.contains("\(base)\(index)") {
+            index += 1
+        }
+        return "\(base) \(index)"
     }
 
     private func openImageFrame() {
@@ -5427,12 +5522,11 @@ private struct LayerStackEditor: View {
                 Button("Solid color") { addSolid() }
                 Button("Paper") { addPaper() }
                 Button("Acrylic") { addAcrylic() }
+                Button("Ink") { addInkLayer() }
             }
             Section("Streams") {
                 Button("Drawing") { addStream(.drawing) }
                     .disabled(streamPresent(.drawing))
-                Button("Ink") { addStream(.ink) }
-                    .disabled(streamPresent(.ink))
                 Button("Web") { addStream(.web) }
                     .disabled(streamPresent(.web))
             }
@@ -5600,7 +5694,12 @@ private struct LayerStackEditor: View {
 
     /// Add a user-created (unmanaged) stream layer on top of the stack.
     private func addNode(_ kind: NodeKind, name: String) {
-        let node = Node(name: name, kind: kind, managed: false)
+        let node = Node(
+            name: nextLayerName(base: name, family: kind.family),
+            kind: kind,
+            inkConfig: kind.family == "ink" ? InkFrameConfig(landmarks: model.settings.landmarks) : nil,
+            managed: false
+        )
         mutate { g in
             g.nodes.append(node)
             g.layers.append(Layer(node: node.id))
@@ -5608,7 +5707,7 @@ private struct LayerStackEditor: View {
     }
 
     private func addSolid() {
-        let node = Node(name: "Solid", kind: .solid(SolidConfig(color: RGBAColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1))), managed: false)
+        let node = Node(name: nextLayerName(base: "Solid", family: "solid"), kind: .solid(SolidConfig(color: RGBAColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1))), managed: false)
         mutate { g in
             g.nodes.append(node)
             g.layers.append(Layer(node: node.id))   // top of the stack
@@ -5616,13 +5715,28 @@ private struct LayerStackEditor: View {
     }
 
     private func addPaper() {
-        let node = Node(name: "Paper", kind: .paper(PaperConfig()), managed: false)
+        let node = Node(name: nextLayerName(base: "Paper", family: "paper"), kind: .paper(PaperConfig()), managed: false)
         mutate { g in
             g.nodes.append(node)
             g.layers.append(Layer(node: node.id))
         }
     }
 
+    private func addInkLayer() {
+        model.settings.landmarks.inkEnabled = true
+        addNode(.ink, name: "Ink")
+    }
+
+    private func nextLayerName(base: String, family: String) -> String {
+        let existing = Set((model.settings.layerGraph?.nodes ?? []).compactMap { node -> String? in
+            node.kind.family == family ? node.name : nil
+        })
+        var index = 1
+        while existing.contains("\(base) \(index)") || existing.contains("\(base)\(index)") {
+            index += 1
+        }
+        return "\(base) \(index)"
+    }
 
     private func addAcrylic() {
         addNode(.acrylic(AcrylicConfig()), name: "Acrylic")

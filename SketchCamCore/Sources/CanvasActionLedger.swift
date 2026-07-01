@@ -32,6 +32,12 @@ public struct CanvasActionLedger: Equatable, Sendable {
     public var canUndo: Bool { !actions.isEmpty }
     public var canRedo: Bool { !redoActions.isEmpty }
 
+    public func replayPaths(frameID: UUID?, includeUntagged: Bool = false) -> [InkEditorPath] {
+        actions.map(\.record).filter {
+            $0.isVisible && ($0.frameID == frameID || (includeUntagged && $0.frameID == nil))
+        }.map(\.renderPath)
+    }
+
     public mutating func replaceAll(_ records: [InkStrokeRecord]) {
         actions = records.map(CanvasStrokeAction.init(record:))
         redoActions.removeAll()
@@ -98,5 +104,14 @@ public struct CanvasActionLedger: Equatable, Sendable {
     public mutating func clear() {
         actions.removeAll()
         redoActions.removeAll()
+    }
+
+    public mutating func clear(frameID: UUID?, includeUntagged: Bool = false) {
+        actions.removeAll {
+            $0.record.frameID == frameID || (includeUntagged && $0.record.frameID == nil)
+        }
+        redoActions.removeAll {
+            $0.record.frameID == frameID || (includeUntagged && $0.record.frameID == nil)
+        }
     }
 }

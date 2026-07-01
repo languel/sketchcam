@@ -370,6 +370,196 @@ public enum PortBinding: Codable, Sendable, Equatable {
     case node(UUID)            // another node's output — the routing
 }
 
+/// Per-ink-frame recipe and routing controls. The legacy `LandmarkSettings`
+/// values remain the compatibility/default source; user-created ink nodes own
+/// this config so multiple ink frames can have independent brushes and sims.
+public struct InkFrameConfig: Codable, Sendable, Equatable {
+    public var dynamicInput: PortBinding?
+    public var surfaceCompositeMode: InkPaperCompositeMode?
+    public var surfaceInfluence: Float?
+    public var dynamicInfluence: Float?
+    public var motionForce: Float?
+    public var motionWetness: Float?
+    public var dynamicAbsorbency: Float?
+    public var dynamicDrag: Float?
+    public var dynamicResist: Float?
+    public var brushMode: InkBrushMode?
+    public var inkKind: InkKind?
+    public var inkColor: RGBAColor
+    public var washColor: RGBAColor?
+    public var penWidth: Float
+    public var washWidth: Float?
+    public var flow: Float
+    public var bleed: Float
+    public var dry: Float
+    public var wetnessDecay: Float?
+    public var colorSeparation: Float?
+    public var brushInk: Float?
+    public var smoothing: Float
+    public var fadeDuration: Float?
+    public var immediatePen: Bool
+    public var immediateWash: Bool
+    public var smearStrength: Float
+    public var curveFit: CurveFit
+    public var seed: Int
+    public var fixRevision: Int?
+    public var unfixRevision: Int?
+    public var wetCanvasRevision: Int?
+    public var dryCanvasRevision: Int?
+    public var rebuildRevision: Int
+    public var clearFadeRevision: Int?
+
+    public init(
+        dynamicInput: PortBinding? = nil,
+        surfaceCompositeMode: InkPaperCompositeMode? = InkPaperCompositeMode.none,
+        surfaceInfluence: Float? = 0,
+        dynamicInfluence: Float? = 0,
+        motionForce: Float? = 0,
+        motionWetness: Float? = 0,
+        dynamicAbsorbency: Float? = 0,
+        dynamicDrag: Float? = 0.5,
+        dynamicResist: Float? = 1,
+        brushMode: InkBrushMode? = .pen,
+        inkKind: InkKind? = .black,
+        inkColor: RGBAColor = .ink,
+        washColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
+        penWidth: Float = 0.5,
+        washWidth: Float? = 0.5,
+        flow: Float = 0.9,
+        bleed: Float = 0.8,
+        dry: Float = 0.25,
+        wetnessDecay: Float? = 1,
+        colorSeparation: Float? = 0.5,
+        brushInk: Float? = 0,
+        smoothing: Float = 0.5,
+        fadeDuration: Float? = 1.2,
+        immediatePen: Bool = true,
+        immediateWash: Bool = true,
+        smearStrength: Float = 0.5,
+        curveFit: CurveFit = .hobby,
+        seed: Int = 11,
+        fixRevision: Int? = 0,
+        unfixRevision: Int? = 0,
+        wetCanvasRevision: Int? = 0,
+        dryCanvasRevision: Int? = 0,
+        rebuildRevision: Int = 0,
+        clearFadeRevision: Int? = 0
+    ) {
+        self.dynamicInput = dynamicInput
+        self.surfaceCompositeMode = surfaceCompositeMode
+        self.surfaceInfluence = surfaceInfluence
+        self.dynamicInfluence = dynamicInfluence
+        self.motionForce = motionForce
+        self.motionWetness = motionWetness
+        self.dynamicAbsorbency = dynamicAbsorbency
+        self.dynamicDrag = dynamicDrag
+        self.dynamicResist = dynamicResist
+        self.brushMode = brushMode
+        self.inkKind = inkKind
+        self.inkColor = inkColor
+        self.washColor = washColor
+        self.penWidth = penWidth
+        self.washWidth = washWidth
+        self.flow = flow
+        self.bleed = bleed
+        self.dry = dry
+        self.wetnessDecay = wetnessDecay
+        self.colorSeparation = colorSeparation
+        self.brushInk = brushInk
+        self.smoothing = smoothing
+        self.fadeDuration = fadeDuration
+        self.immediatePen = immediatePen
+        self.immediateWash = immediateWash
+        self.smearStrength = smearStrength
+        self.curveFit = curveFit
+        self.seed = seed
+        self.fixRevision = fixRevision
+        self.unfixRevision = unfixRevision
+        self.wetCanvasRevision = wetCanvasRevision
+        self.dryCanvasRevision = dryCanvasRevision
+        self.rebuildRevision = rebuildRevision
+        self.clearFadeRevision = clearFadeRevision
+    }
+
+    public init(landmarks: LandmarkSettings) {
+        self.init(
+            dynamicInput: landmarks.inkDynamicInput,
+            surfaceCompositeMode: landmarks.inkPaperCompositeMode,
+            surfaceInfluence: landmarks.inkPaperInfluence,
+            dynamicInfluence: landmarks.inkLiveSurfaceInfluence,
+            motionForce: landmarks.inkMotionForce,
+            motionWetness: landmarks.inkMotionWetness,
+            dynamicAbsorbency: landmarks.inkLiveAbsorbency,
+            dynamicDrag: landmarks.inkLiveDrag,
+            dynamicResist: landmarks.inkLiveResist,
+            brushMode: landmarks.inkBrushMode,
+            inkKind: landmarks.inkKind,
+            inkColor: landmarks.inkColor,
+            washColor: landmarks.inkWashColor,
+            penWidth: landmarks.inkWidth,
+            washWidth: landmarks.inkWashWidth,
+            flow: landmarks.inkFlow,
+            bleed: landmarks.inkBleed,
+            dry: landmarks.inkDry,
+            wetnessDecay: landmarks.inkWetnessDecay,
+            colorSeparation: landmarks.inkColorSeparation,
+            brushInk: landmarks.inkBrushInk,
+            smoothing: landmarks.inkSmoothing,
+            fadeDuration: landmarks.inkFadeDuration,
+            immediatePen: landmarks.inkImmediatePen,
+            immediateWash: landmarks.inkImmediateWash,
+            smearStrength: landmarks.inkSmearStrength,
+            curveFit: landmarks.inkCurveFit,
+            seed: landmarks.inkSeed,
+            fixRevision: landmarks.inkFixRevision,
+            unfixRevision: landmarks.inkUnfixRevision,
+            wetCanvasRevision: landmarks.inkWetCanvasRevision,
+            dryCanvasRevision: landmarks.inkDryCanvasRevision,
+            rebuildRevision: landmarks.inkRebuildRevision,
+            clearFadeRevision: landmarks.inkClearFadeRevision
+        )
+    }
+
+    public func applying(to settings: ProcessingSettings) -> ProcessingSettings {
+        var copy = settings
+        copy.landmarks.inkDynamicInput = dynamicInput
+        copy.landmarks.inkPaperCompositeMode = surfaceCompositeMode
+        copy.landmarks.inkPaperInfluence = surfaceInfluence
+        copy.landmarks.inkLiveSurfaceInfluence = dynamicInfluence
+        copy.landmarks.inkMotionForce = motionForce
+        copy.landmarks.inkMotionWetness = motionWetness
+        copy.landmarks.inkLiveAbsorbency = dynamicAbsorbency
+        copy.landmarks.inkLiveDrag = dynamicDrag
+        copy.landmarks.inkLiveResist = dynamicResist
+        copy.landmarks.inkBrushMode = brushMode
+        copy.landmarks.inkKind = inkKind
+        copy.landmarks.inkColor = inkColor
+        copy.landmarks.inkWashColor = washColor
+        copy.landmarks.inkWidth = penWidth
+        copy.landmarks.inkWashWidth = washWidth
+        copy.landmarks.inkFlow = flow
+        copy.landmarks.inkBleed = bleed
+        copy.landmarks.inkDry = dry
+        copy.landmarks.inkWetnessDecay = wetnessDecay
+        copy.landmarks.inkColorSeparation = colorSeparation
+        copy.landmarks.inkBrushInk = brushInk
+        copy.landmarks.inkSmoothing = smoothing
+        copy.landmarks.inkFadeDuration = fadeDuration
+        copy.landmarks.inkImmediatePen = immediatePen
+        copy.landmarks.inkImmediateWash = immediateWash
+        copy.landmarks.inkSmearStrength = smearStrength
+        copy.landmarks.inkCurveFit = curveFit
+        copy.landmarks.inkSeed = seed
+        copy.landmarks.inkFixRevision = fixRevision
+        copy.landmarks.inkUnfixRevision = unfixRevision
+        copy.landmarks.inkWetCanvasRevision = wetCanvasRevision
+        copy.landmarks.inkDryCanvasRevision = dryCanvasRevision
+        copy.landmarks.inkRebuildRevision = rebuildRevision
+        copy.landmarks.inkClearFadeRevision = clearFadeRevision
+        return copy
+    }
+}
+
 /// What a node is. Payloads slim in Phase 1 (identity + params needed to declare
 /// ports); full config re-homes here in Phase 2.
 public enum NodeKind: Codable, Sendable, Equatable {
@@ -457,15 +647,18 @@ public struct Node: Identifiable, Codable, Sendable, Equatable {
     public var kind: NodeKind
     /// One binding per `kind.ports`, same order.
     public var inputs: [PortBinding]
+    public var inkConfig: InkFrameConfig?
     /// true = derived from the legacy feature flags (reconciliation owns it);
     /// false = user-created in the Layers panel (preserved across reconcile).
     public var managed: Bool
 
-    public init(id: UUID = UUID(), name: String, kind: NodeKind, inputs: [PortBinding]? = nil, managed: Bool = true) {
+    public init(id: UUID = UUID(), name: String, kind: NodeKind, inputs: [PortBinding]? = nil,
+                inkConfig: InkFrameConfig? = nil, managed: Bool = true) {
         self.id = id
         self.name = name
         self.kind = kind
         self.inputs = inputs ?? kind.defaultBindings
+        self.inkConfig = inkConfig
         self.managed = managed
     }
 }
@@ -664,7 +857,7 @@ public extension LayerGraph {
         }
         // Ink is independent of the Marks/landmarks master toggle.
         if l.inkEnabled, l.inkPlacement == .behindDrawing {
-            emit(Node(name: "Ink", kind: .ink))
+            emit(Node(name: "Ink", kind: .ink, inkConfig: InkFrameConfig(landmarks: l)))
         }
 
         // The marks/drawing "overlay" — one merged image today, so one layer.
@@ -674,7 +867,7 @@ public extension LayerGraph {
         }
 
         if l.inkEnabled, l.inkPlacement == .aboveDrawing {
-            emit(Node(name: "Ink", kind: .ink))
+            emit(Node(name: "Ink", kind: .ink, inkConfig: InkFrameConfig(landmarks: l)))
         }
         if settings.web.enabled, settings.web.placement == .aboveDrawing {
             emit(Node(name: "Web", kind: .web))
@@ -717,7 +910,9 @@ public extension LayerGraph {
         let autoFamilies: Set<String> = ["overlay", "ink", "web"]
         for dl in desired.layers {
             guard let f = family(desired, dl), autoFamilies.contains(f),
-                  !keptFamilies.contains(f), let dn = desired.node(dl.node) else { continue }
+                  !keptFamilies.contains(f),
+                  !resultNodes.contains(where: { $0.kind.family == f }),
+                  let dn = desired.node(dl.node) else { continue }
             // How many desired-managed families precede f and were kept?
             let priorsKept = desired.layers.prefix(while: { family(desired, $0) != f })
                 .reduce(0) { acc, prior in keptFamilies.contains(family(desired, prior) ?? "") ? acc + 1 : acc }

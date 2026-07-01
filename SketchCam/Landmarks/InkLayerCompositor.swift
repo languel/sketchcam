@@ -8,35 +8,44 @@ import SketchCamCore
 /// compositor receives a flat image instead of a recursively growing CI graph.
 final class InkLayerCompositor {
     private let lock = NSLock()
-    private var engine: MetalInkEngine? = MetalInkEngine()
+    private var engines: [UUID: MetalInkEngine] = [:]
+    private let legacyEngineID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     private let paperRenderer = MetalPaperRenderer.shared
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
+    func layer(nodeID: UUID? = nil, settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint],
                endedLiveID: UUID?, outputSize: CGSize, frameIndex: Int, textureInput: CIImage? = nil,
                actionPaths: [InkEditorPath]? = nil,
                controlFields: ResolvedControlFields = .empty) -> CIImage? {
         let l = settings.landmarks
+        let key = nodeID ?? legacyEngineID
         guard l.inkEnabled else {
             return lock.withLock {
-                engine?.reset()
+                engines[key]?.reset()
                 return nil
             }
         }
         return lock.withLock {
-            if engine == nil { engine = MetalInkEngine() }
+            let engine: MetalInkEngine
+            if let existing = engines[key] {
+                engine = existing
+            } else if let created = MetalInkEngine() {
+                engines[key] = created
+                engine = created
+            } else {
+                return nil
+            }
             var renderSettings = settings
             if let actionPaths {
                 renderSettings.landmarks.inkPaths = actionPaths
             }
-            let paperOpacity = max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
             let hasRoutedTexture = textureInput != nil
-            renderSettings.landmarks.inkPaperEnabled = paperOpacity > 0.001
-            if hasRoutedTexture {
-                renderSettings.landmarks.inkPaperEnabled = false
-            }
-            let ink = engine?.layer(settings: renderSettings, live: live, livePoints: livePoints,
-                                    endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
-                                    controlFields: controlFields)
+            let paperOpacity = hasRoutedTexture
+                ? max(0, min(1, settings.landmarks.inkPaperOpacity ?? (settings.landmarks.inkPaperEnabled ? 1 : 0)))
+                : 0
+            renderSettings.landmarks.inkPaperEnabled = false
+            let ink = engine.layer(settings: renderSettings, live: live, livePoints: livePoints,
+                                   endedLiveID: endedLiveID, outputSize: outputSize, frameIndex: frameIndex,
+                                   controlFields: controlFields)
             let rect = CGRect(origin: .zero, size: outputSize)
             guard let routed = textureInput?.cropped(to: rect), paperOpacity > 0.001 else { return ink }
             let mode = settings.landmarks.inkPaperCompositeMode ?? .multiply

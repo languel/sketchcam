@@ -11,6 +11,10 @@ final class CanvasActionHistory: @unchecked Sendable {
         lock.withLock { ledger.replayPaths }
     }
 
+    func replayPaths(frameID: UUID?, includeUntagged: Bool = false) -> [InkEditorPath] {
+        lock.withLock { ledger.replayPaths(frameID: frameID, includeUntagged: includeUntagged) }
+    }
+
     func records() -> [InkStrokeRecord] {
         lock.withLock { ledger.records }
     }
@@ -57,5 +61,9 @@ final class CanvasActionHistory: @unchecked Sendable {
 
     func clear() {
         lock.withLock { ledger.clear() }
+    }
+
+    func clear(frameID: UUID?, includeUntagged: Bool = false) {
+        lock.withLock { ledger.clear(frameID: frameID, includeUntagged: includeUntagged) }
     }
 }
