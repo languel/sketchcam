@@ -31,6 +31,8 @@ struct LayoutSnapshot: Codable {
     var topTabsRaw: String
     var bottomTabsRaw: String
     var floatingTabsRaw: String
+    var floatingPanelPositionsRaw: String
+    var floatingPanelSizesRaw: String
     var timelineDockVisible: Bool
     var leftDockCollapsed: Bool
     var rightDockCollapsed: Bool
@@ -50,6 +52,8 @@ struct LayoutSnapshot: Codable {
         topTabsRaw: String,
         bottomTabsRaw: String,
         floatingTabsRaw: String,
+        floatingPanelPositionsRaw: String,
+        floatingPanelSizesRaw: String,
         timelineDockVisible: Bool,
         leftDockCollapsed: Bool,
         rightDockCollapsed: Bool,
@@ -68,6 +72,8 @@ struct LayoutSnapshot: Codable {
         self.topTabsRaw = topTabsRaw
         self.bottomTabsRaw = bottomTabsRaw
         self.floatingTabsRaw = floatingTabsRaw
+        self.floatingPanelPositionsRaw = floatingPanelPositionsRaw
+        self.floatingPanelSizesRaw = floatingPanelSizesRaw
         self.timelineDockVisible = timelineDockVisible
         self.leftDockCollapsed = leftDockCollapsed
         self.rightDockCollapsed = rightDockCollapsed
@@ -89,6 +95,8 @@ struct LayoutSnapshot: Codable {
         topTabsRaw = try container.decodeIfPresent(String.self, forKey: .topTabsRaw) ?? ""
         bottomTabsRaw = try container.decodeIfPresent(String.self, forKey: .bottomTabsRaw) ?? ""
         floatingTabsRaw = try container.decodeIfPresent(String.self, forKey: .floatingTabsRaw) ?? ""
+        floatingPanelPositionsRaw = try container.decodeIfPresent(String.self, forKey: .floatingPanelPositionsRaw) ?? ""
+        floatingPanelSizesRaw = try container.decodeIfPresent(String.self, forKey: .floatingPanelSizesRaw) ?? ""
         timelineDockVisible = try container.decodeIfPresent(Bool.self, forKey: .timelineDockVisible) ?? true
         leftDockCollapsed = try container.decodeIfPresent(Bool.self, forKey: .leftDockCollapsed) ?? false
         rightDockCollapsed = try container.decodeIfPresent(Bool.self, forKey: .rightDockCollapsed) ?? false
@@ -110,6 +118,8 @@ enum LayoutStorageKeys {
     static let topTabs = "topControlTabs"
     static let bottomTabs = "bottomControlTabs"
     static let floatingTabs = "floatingControlTabs"
+    static let floatingPanelPositions = "floatingControlPanelPositions"
+    static let floatingPanelSizes = "floatingControlPanelSizes"
     static let timelineDockVisible = "timelineDockVisible"
     static let leftDockCollapsed = "leftDockCollapsed"
     static let rightDockCollapsed = "rightDockCollapsed"
@@ -134,6 +144,11 @@ enum PanelDropDestination: Hashable {
     case floating
 }
 
+private struct PanelInsertTarget: Equatable {
+    var destination: PanelDropDestination
+    var beforeGroupID: String?
+}
+
 struct PanelGroup: Identifiable, Equatable {
     var panels: [ControlTab]
 
@@ -156,6 +171,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case wrap = "Wrap"
     case lineWalk = "Line walk"
     case ink = "Ink"
+    case paper = "Paper"
     case history = "History"
     case timeline = "Timeline"
     case web = "Web"
@@ -168,7 +184,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
 
     static let defaultLeftPanels: [ControlTab] = [.camera, .movie, .input]
     static let defaultTopPanels: [ControlTab] = [.toolbar]
-    static let defaultRightPanels: [ControlTab] = [.layers, .ink]
+    static let defaultRightPanels: [ControlTab] = [.layers, .paper, .ink]
     static let defaultVisible: Set<ControlTab> = Set(defaultLeftPanels + defaultTopPanels + defaultRightPanels)
     static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk]
     static let emptyDockValue = "__empty__"
@@ -232,6 +248,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .wrap: "figure.stand"
         case .lineWalk: "lasso"
         case .ink: "paintbrush.pointed"
+        case .paper: "doc.text.image"
         case .history: "clock.arrow.circlepath"
         case .timeline: "timeline.selection"
         case .web: "globe"
@@ -277,6 +294,8 @@ struct ContentView: View {
     @AppStorage(LayoutStorageKeys.topTabs) private var topTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.bottomTabs) private var bottomTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.floatingTabs) private var floatingTabsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.floatingPanelPositions) private var floatingPanelPositionsRaw: String = ""
+    @AppStorage(LayoutStorageKeys.floatingPanelSizes) private var floatingPanelSizesRaw: String = ""
     @AppStorage(LayoutStorageKeys.timelineDockVisible) private var timelineDockVisible = true
     @AppStorage(LayoutStorageKeys.leftDockCollapsed) private var leftDockCollapsed = false
     @AppStorage(LayoutStorageKeys.rightDockCollapsed) private var rightDockCollapsed = false
@@ -294,6 +313,7 @@ struct ContentView: View {
     @State private var selectedInkPointIndex: Int?
     @State private var inkHUDVisible = false
     @State private var inkPaperSettingsExpanded = false
+    @State private var inkMaterialMapExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
@@ -308,6 +328,21 @@ struct ContentView: View {
     @State private var topDockDropTargeted = false
     @State private var bottomDockDropTargeted = false
     @State private var floatingDockDropTargeted = false
+    @State private var floatingDragOrigins: [String: CGPoint] = [:]
+    @State private var floatingDragOffsets: [String: CGSize] = [:]
+    @State private var panelDragLocation: CGPoint?
+    @State private var panelDragGhost: ControlTab?
+    @State private var panelGroupFrames: [String: CGRect] = [:]
+    @State private var panelTabFrames: [String: CGRect] = [:]
+    @State private var panelDockTarget: PanelDropDestination?
+    @State private var panelGroupTargetID: String?
+    @State private var panelInsertTarget: PanelInsertTarget?
+    @State private var floatingResizeOrigins: [String: CGSize] = [:]
+    @State private var floatingResizePositionOrigins: [String: CGPoint] = [:]
+    @State private var floatingResizeLiveSizes: [String: CGSize] = [:]
+    @State private var floatingResizeLivePositions: [String: CGPoint] = [:]
+    @State private var hoveredFloatingResizeGroupID: String?
+    @State private var workspaceRootSize = CGSize(width: 1200, height: 800)
 
     init(model: SketchCamViewModel) {
         self.model = model
@@ -393,7 +428,85 @@ struct ContentView: View {
         }
         .overlay(alignment: .topLeading) {
             floatingPanelsOverlay
-                .padding(18)
+        }
+        .overlay {
+            panelDockTargetOverlay
+        }
+        .overlay {
+            panelDragGhostOverlay
+        }
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { workspaceRootSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in
+                        workspaceRootSize = newSize
+                    }
+            }
+        }
+        .coordinateSpace(name: "workspaceRoot")
+    }
+
+    @ViewBuilder private var panelDragGhostOverlay: some View {
+        if let ghost = panelDragGhost, let location = panelDragLocation {
+            Label(ghost.rawValue, systemImage: ghost.icon)
+                .labelStyle(.iconOnly)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 22, height: 22)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.92))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.65), lineWidth: 1.5)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .shadow(color: Color.black.opacity(0.24), radius: 10, y: 4)
+                .position(x: location.x, y: location.y)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder private var panelDockTargetOverlay: some View {
+        if draggingPanel != nil {
+            GeometryReader { geo in
+                ZStack {
+                    dockEdgeTargetView(.left, size: geo.size)
+                    dockEdgeTargetView(.right, size: geo.size)
+                    dockEdgeTargetView(.top, size: geo.size)
+                    dockEdgeTargetView(.bottom, size: geo.size)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func dockEdgeTargetView(_ destination: PanelDropDestination, size: CGSize) -> some View {
+        let active = panelDockTarget == destination
+        let thickness: CGFloat = active ? 8 : 2
+        let opacity = active ? 0.75 : 0.18
+        return Rectangle()
+            .fill(Color.accentColor.opacity(opacity))
+            .frame(
+                width: destination == .left || destination == .right ? thickness : nil,
+                height: destination == .top || destination == .bottom ? thickness : nil
+            )
+            .overlay {
+                if active {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: dockEdgeAlignment(destination))
+    }
+
+    private func dockEdgeAlignment(_ destination: PanelDropDestination) -> Alignment {
+        switch destination {
+        case .left: return .leading
+        case .right: return .trailing
+        case .top: return .top
+        case .bottom: return .bottom
+        case .floating: return .center
         }
     }
 
@@ -426,15 +539,17 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(bottomGroups) { group in
+                            panelInsertGap(destination: .bottom, beforeGroupID: group.id)
                             panelGroupCard(group, destination: .bottom)
                         }
+                        panelInsertGap(destination: .bottom, beforeGroupID: nil)
                     }
                     .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
-        .dockDropHighlight(isTargeted: bottomDockDropTargeted)
+        .dockDropHighlight(isTargeted: bottomDockDropTargeted || panelDockTarget == .bottom)
         .onDrop(of: [UTType.plainText], isTargeted: $bottomDockDropTargeted) { providers in
             handlePanelDrop(providers, destination: .bottom)
         }
@@ -924,6 +1039,41 @@ struct ContentView: View {
         tab = panel
     }
 
+    private func moveGroup(_ group: PanelGroup, to destination: PanelDropDestination) {
+        let sourceTabs = group.panels
+        sourceTabs.forEach(removePanelFromAllDocks)
+        var groups = groupsForDock(destination)
+        groups.append(PanelGroup(panels: sourceTabs))
+        setGroups(groups, for: destination)
+        if let activePanel = sourceTabs.first {
+            activateDock(destination, panel: activePanel)
+            tab = activePanel
+        }
+    }
+
+    private func moveGroup(_ group: PanelGroup, to target: PanelInsertTarget) {
+        let sourceTabs = group.panels
+        sourceTabs.forEach(removePanelFromAllDocks)
+        var groups = groupsForDock(target.destination)
+        let insertGroup = PanelGroup(panels: sourceTabs)
+        if let beforeGroupID = target.beforeGroupID,
+           let index = groups.firstIndex(where: { $0.id == beforeGroupID }) {
+            groups.insert(insertGroup, at: index)
+        } else {
+            groups.append(insertGroup)
+        }
+        setGroups(groups, for: target.destination)
+        if let activePanel = sourceTabs.first {
+            activateDock(target.destination, panel: activePanel)
+            tab = activePanel
+        }
+    }
+
+    private func floatGroup(_ group: PanelGroup, at position: CGPoint) {
+        moveGroup(group, to: .floating)
+        setFloatingPosition(position, for: group)
+    }
+
     private func movePanel(_ panel: ControlTab, to destination: PanelDropDestination, before target: ControlTab?) {
         let oldLocation = panelLocation(panel)
         let oldGroups = oldLocation == destination ? groupsForDock(destination) : []
@@ -963,6 +1113,23 @@ struct ContentView: View {
         tab = panel
     }
 
+    private func groupPanelGroup(_ draggedGroup: PanelGroup, with targetGroup: PanelGroup, in destination: PanelDropDestination) {
+        let panelsToAdd = draggedGroup.panels.filter { !targetGroup.panels.contains($0) }
+        guard !panelsToAdd.isEmpty else { return }
+        draggedGroup.panels.forEach(removePanelFromAllDocks)
+        var groups = groupsForDock(destination)
+        if let index = groups.firstIndex(where: { $0.id == targetGroup.id || !$0.panels.filter(targetGroup.panels.contains).isEmpty }) {
+            groups[index] = PanelGroup(panels: groups[index].panels + panelsToAdd)
+        } else {
+            groups.append(PanelGroup(panels: targetGroup.panels + panelsToAdd))
+        }
+        setGroups(groups, for: destination)
+        if let activePanel = panelsToAdd.first ?? targetGroup.activeDefault {
+            activateDock(destination, panel: activePanel)
+            tab = activePanel
+        }
+    }
+
     private func removePanelFromAllDocks(_ panel: ControlTab) {
         if panel == .timeline {
             timelineDockVisible = false
@@ -988,17 +1155,30 @@ struct ContentView: View {
     }
 
     private func setGroups(_ groups: [PanelGroup], for destination: PanelDropDestination) {
+        let groups = normalizedPanelGroups(groups)
         switch destination {
         case .left:
             leftTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .right:
             visibleTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .top:
-            topTabsRaw = ControlTab.dockStorageValue(for: groups)
+            topTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .bottom:
-            bottomTabsRaw = ControlTab.dockStorageValue(for: groups)
+            bottomTabsRaw = ControlTab.dockStorageValue(for: groups, emptyValue: ControlTab.emptyDockValue)
         case .floating:
             floatingTabsRaw = ControlTab.dockStorageValue(for: groups)
+        }
+    }
+
+    private func normalizedPanelGroups(_ groups: [PanelGroup]) -> [PanelGroup] {
+        var seen = Set<ControlTab>()
+        return groups.compactMap { group in
+            let panels = group.panels.filter { panel in
+                guard !seen.contains(panel) else { return false }
+                seen.insert(panel)
+                return true
+            }
+            return panels.isEmpty ? nil : PanelGroup(panels: panels)
         }
     }
 
@@ -1042,6 +1222,11 @@ struct ContentView: View {
         movePanel(panel, to: .floating)
     }
 
+    private func floatPanel(_ panel: ControlTab, at position: CGPoint) {
+        let group = PanelGroup(panels: moveGroup(for: panel))
+        floatGroup(group, at: position)
+    }
+
     private func hidePanel(_ panel: ControlTab) {
         removePanelFromAllDocks(panel)
         selectedPanelByGroup = selectedPanelByGroup.filter { $0.value != panel.id }
@@ -1056,6 +1241,8 @@ struct ContentView: View {
         topTabsRaw = ControlTab.dockStorageValue(for: ControlTab.defaultTopPanels.map { PanelGroup(panels: [$0]) })
         bottomTabsRaw = ""
         floatingTabsRaw = ""
+        floatingPanelPositionsRaw = ""
+        floatingPanelSizesRaw = ""
         timelineDockVisible = false
         rightDockCollapsed = false
         windowMode.panelVisible = true
@@ -1074,6 +1261,8 @@ struct ContentView: View {
         topTabsRaw = ""
         bottomTabsRaw = ControlTab.dockStorageValue(for: [PanelGroup(panels: [.timeline])])
         floatingTabsRaw = ""
+        floatingPanelPositionsRaw = ""
+        floatingPanelSizesRaw = ""
         timelineDockVisible = true
         leftDockCollapsed = false
         rightDockCollapsed = false
@@ -1112,6 +1301,8 @@ struct ContentView: View {
             topTabsRaw: topTabsRaw,
             bottomTabsRaw: bottomTabsRaw,
             floatingTabsRaw: floatingTabsRaw,
+            floatingPanelPositionsRaw: floatingPanelPositionsRaw,
+            floatingPanelSizesRaw: floatingPanelSizesRaw,
             timelineDockVisible: timelineDockVisible,
             leftDockCollapsed: leftDockCollapsed,
             rightDockCollapsed: rightDockCollapsed,
@@ -1145,6 +1336,8 @@ struct ContentView: View {
         topTabsRaw = snapshot.topTabsRaw
         bottomTabsRaw = snapshot.bottomTabsRaw
         floatingTabsRaw = snapshot.floatingTabsRaw
+        floatingPanelPositionsRaw = snapshot.floatingPanelPositionsRaw
+        floatingPanelSizesRaw = snapshot.floatingPanelSizesRaw
         timelineDockVisible = snapshot.timelineDockVisible
         leftDockCollapsed = snapshot.leftDockCollapsed
         rightDockCollapsed = snapshot.rightDockCollapsed
@@ -1335,6 +1528,337 @@ struct ContentView: View {
         }
     }
 
+    private func floatingPositions() -> [String: CGPoint] {
+        floatingPanelPositionsRaw
+            .split(separator: "|")
+            .reduce(into: [String: CGPoint]()) { result, rawEntry in
+                let parts = rawEntry.split(separator: ":")
+                guard parts.count == 3,
+                      let x = Double(parts[1]),
+                      let y = Double(parts[2]) else { return }
+                result[String(parts[0])] = CGPoint(x: x, y: y)
+            }
+    }
+
+    private func encodeFloatingPositions(_ positions: [String: CGPoint]) -> String {
+        positions
+            .sorted { $0.key < $1.key }
+            .map { key, point in
+                "\(key):\(Int(point.x.rounded())):\(Int(point.y.rounded()))"
+            }
+            .joined(separator: "|")
+    }
+
+    private func floatingPosition(for group: PanelGroup, in size: CGSize) -> CGPoint {
+        if let position = floatingPositions()[group.id] {
+            return clampedFloatingPosition(position, in: size)
+        }
+        let index = floatingGroups.firstIndex(where: { $0.id == group.id }) ?? 0
+        let fallback = CGPoint(x: min(size.width - 220, 80 + CGFloat(index * 26)),
+                               y: min(size.height - 120, 90 + CGFloat(index * 30)))
+        return clampedFloatingPosition(fallback, in: size)
+    }
+
+    private func setFloatingPosition(_ position: CGPoint, for group: PanelGroup) {
+        var positions = floatingPositions()
+        positions[group.id] = position
+        floatingPanelPositionsRaw = encodeFloatingPositions(positions)
+    }
+
+    private func floatingSizes() -> [String: CGSize] {
+        floatingPanelSizesRaw
+            .split(separator: "|")
+            .reduce(into: [String: CGSize]()) { result, rawEntry in
+                let parts = rawEntry.split(separator: ":")
+                guard parts.count == 3,
+                      let width = Double(parts[1]),
+                      let height = Double(parts[2]) else { return }
+                result[String(parts[0])] = CGSize(width: width, height: height)
+            }
+    }
+
+    private func encodeFloatingSizes(_ sizes: [String: CGSize]) -> String {
+        sizes
+            .sorted { $0.key < $1.key }
+            .map { key, size in
+                "\(key):\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
+            }
+            .joined(separator: "|")
+    }
+
+    private func floatingSize(for group: PanelGroup) -> CGSize {
+        if let size = floatingSizes()[group.id] {
+            return clampedFloatingSize(size, for: group)
+        }
+        return defaultFloatingSize(for: group)
+    }
+
+    private func savedFloatingSize(for group: PanelGroup) -> CGSize? {
+        floatingSizes()[group.id].map { clampedFloatingSize($0, for: group) }
+    }
+
+    private func setFloatingSize(_ size: CGSize, for group: PanelGroup) {
+        var sizes = floatingSizes()
+        sizes[group.id] = clampedFloatingSize(size, for: group)
+        floatingPanelSizesRaw = encodeFloatingSizes(sizes)
+    }
+
+    private func defaultFloatingSize(for group: PanelGroup) -> CGSize {
+        let activePanel = selectedPanel(in: group) ?? group.activeDefault ?? .layers
+        switch activePanel {
+        case .toolbar:
+            return CGSize(width: 760, height: 150)
+        case .timeline:
+            return CGSize(width: 520, height: 210)
+        case .layers:
+            return CGSize(width: 430, height: 260)
+        case .paper:
+            return CGSize(width: 430, height: 280)
+        case .ink:
+            return CGSize(width: 430, height: 560)
+        default:
+            return CGSize(width: 360, height: 320)
+        }
+    }
+
+    private func clampedFloatingSize(_ size: CGSize, for group: PanelGroup) -> CGSize {
+        let minimumWidth = max(panelMinimumWidth(for: .floating), defaultFloatingSize(for: group).width * 0.72)
+        return CGSize(
+            width: min(max(size.width, minimumWidth), 900),
+            height: min(max(size.height, 96), 760)
+        )
+    }
+
+    private func clampedFloatingPosition(_ position: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(max(position.x, 0), max(0, size.width - 80)),
+            y: min(max(position.y, 0), max(0, size.height - 60))
+        )
+    }
+
+    private func dockEdgeTarget(at point: CGPoint, in size: CGSize, excluding source: PanelDropDestination?) -> PanelDropDestination? {
+        let threshold: CGFloat = 44
+        if source != .left, point.x <= threshold { return .left }
+        if source != .right, point.x >= size.width - threshold { return .right }
+        if source != .top, point.y <= threshold { return .top }
+        if source != .bottom, point.y >= size.height - threshold { return .bottom }
+        return nil
+    }
+
+    private func dockTarget(at point: CGPoint, in size: CGSize, excluding source: PanelDropDestination?) -> PanelDropDestination? {
+        openDockDestination(at: point, in: size, excluding: source ?? .floating)
+            ?? dockEdgeTarget(at: point, in: size, excluding: source)
+    }
+
+    private func groupTarget(at point: CGPoint, draggedGroup: PanelGroup) -> (group: PanelGroup, destination: PanelDropDestination)? {
+        guard panelDragGhost != nil else { return nil }
+        for destination in [PanelDropDestination.left, .right, .top, .bottom, .floating] {
+            for group in groupsForDock(destination) where group.id != draggedGroup.id && group.panels.allSatisfy({ !draggedGroup.panels.contains($0) }) {
+                for panel in group.panels where !draggedGroup.panels.contains(panel) {
+                    if let frame = panelTabFrames[panel.id],
+                       panelIconHitFrame(from: frame).contains(point) {
+                        return (group, destination)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func panelIconHitFrame(from tabFrame: CGRect) -> CGRect {
+        CGRect(x: tabFrame.minX, y: tabFrame.minY, width: min(tabFrame.width, 34), height: tabFrame.height)
+            .insetBy(dx: -6, dy: -6)
+    }
+
+    private func isPanelTabDragStart(_ point: CGPoint, in group: PanelGroup) -> Bool {
+        group.panels.contains { panel in
+            panelTabFrames[panel.id]?.insetBy(dx: -2, dy: -2).contains(point) == true
+        }
+    }
+
+    private func insertionTarget(at point: CGPoint, draggedGroup: PanelGroup, rootSize: CGSize, source: PanelDropDestination) -> PanelInsertTarget? {
+        let destinations: [PanelDropDestination] = [.left, .right, .top, .bottom]
+        for destination in destinations {
+            let groups = groupsForDock(destination).filter { group in
+                group.id != draggedGroup.id && group.panels.allSatisfy { !draggedGroup.panels.contains($0) }
+            }
+            let frames = groups.compactMap { group -> (PanelGroup, CGRect)? in
+                guard let frame = panelGroupFrames[group.id] else { return nil }
+                return (group, frame)
+            }
+            guard !frames.isEmpty else { continue }
+            let union = frames.dropFirst().reduce(frames[0].1) { $0.union($1.1) }.insetBy(dx: -20, dy: -24)
+            guard union.contains(point) else { continue }
+            if let before = frames.sorted(by: { $0.1.midY < $1.1.midY }).first(where: { point.y < $0.1.midY }) {
+                return PanelInsertTarget(destination: destination, beforeGroupID: before.0.id)
+            }
+            return PanelInsertTarget(destination: destination, beforeGroupID: nil)
+        }
+        if let destination = dockTarget(at: point, in: rootSize, excluding: source) {
+            return PanelInsertTarget(destination: destination, beforeGroupID: nil)
+        }
+        return nil
+    }
+
+    private func updatePanelDragTargets(group: PanelGroup, source: PanelDropDestination, location: CGPoint, rootSize: CGSize) {
+        panelDragLocation = location
+        if let target = groupTarget(at: location, draggedGroup: group) {
+            panelGroupTargetID = target.group.id
+            panelDockTarget = nil
+            panelInsertTarget = nil
+        } else {
+            panelGroupTargetID = nil
+            panelInsertTarget = insertionTarget(at: location, draggedGroup: group, rootSize: rootSize, source: source)
+            panelDockTarget = panelInsertTarget?.destination ?? dockTarget(at: location, in: rootSize, excluding: source)
+        }
+    }
+
+    private func clearPanelDragTargets() {
+        panelDragLocation = nil
+        panelDragGhost = nil
+        panelDockTarget = nil
+        panelGroupTargetID = nil
+        panelInsertTarget = nil
+    }
+
+    private func floatingDropPosition(
+        for group: PanelGroup,
+        at location: CGPoint,
+        startLocation: CGPoint,
+        rootSize: CGSize,
+        iconAnchored: Bool
+    ) -> CGPoint {
+        if iconAnchored {
+            let iconInPanel = CGPoint(x: 20, y: 18)
+            return clampedFloatingPosition(
+                CGPoint(x: location.x - iconInPanel.x,
+                        y: location.y - iconInPanel.y),
+                in: rootSize
+            )
+        }
+        if let frame = panelGroupFrames[group.id] {
+            return clampedFloatingPosition(
+                CGPoint(x: location.x + frame.minX - startLocation.x,
+                        y: location.y + frame.minY - startLocation.y),
+                in: rootSize
+            )
+        }
+        return clampedFloatingPosition(location, in: rootSize)
+    }
+
+    private func openDockDestination(at point: CGPoint, in size: CGSize, excluding source: PanelDropDestination) -> PanelDropDestination? {
+        let edgeThreshold: CGFloat = 42
+        if source != .left,
+           floatingDockDestination != .left,
+           !leftDockCollapsed,
+           point.x <= (leftTabs.isEmpty ? edgeThreshold : CGFloat(dockSize(.left, stored: leftDockSize)) + edgeThreshold) {
+            return .left
+        }
+        if source != .right,
+           floatingDockDestination != .right,
+           !rightDockCollapsed,
+           point.x >= size.width - (visibleTabs.isEmpty ? edgeThreshold : CGFloat(dockSize(.right, stored: rightDockSize)) + edgeThreshold) {
+            return .right
+        }
+        if source != .top,
+           floatingDockDestination != .top,
+           !topDockCollapsed,
+           point.y <= (topTabs.isEmpty ? edgeThreshold : CGFloat(dockSize(.top, stored: topDockSize)) + edgeThreshold) {
+            return .top
+        }
+        if source != .bottom,
+           floatingDockDestination != .bottom,
+           !bottomDockCollapsed,
+           point.y >= size.height - (bottomTabs.isEmpty ? edgeThreshold : CGFloat(dockSize(.bottom, stored: bottomDockSize)) + edgeThreshold) {
+            return .bottom
+        }
+        return nil
+    }
+
+    private func isPoint(_ point: CGPoint, insideOpenDock destination: PanelDropDestination, in size: CGSize) -> Bool {
+        switch destination {
+        case .left:
+            return !leftTabs.isEmpty
+                && floatingDockDestination != .left
+                && !leftDockCollapsed
+                && point.x <= CGFloat(dockSize(.left, stored: leftDockSize))
+        case .right:
+            return !visibleTabs.isEmpty
+                && floatingDockDestination != .right
+                && windowMode.panelVisible
+                && windowMode.panelFit
+                && !rightDockCollapsed
+                && point.x >= size.width - CGFloat(dockSize(.right, stored: rightDockSize))
+        case .top:
+            return !topTabs.isEmpty
+                && floatingDockDestination != .top
+                && !topDockCollapsed
+                && point.y <= CGFloat(dockSize(.top, stored: topDockSize))
+        case .bottom:
+            return !bottomTabs.isEmpty
+                && floatingDockDestination != .bottom
+                && !bottomDockCollapsed
+                && point.y >= size.height - CGFloat(dockSize(.bottom, stored: bottomDockSize))
+        case .floating:
+            return false
+        }
+    }
+
+    private func finishPanelDrag(
+        group: PanelGroup,
+        panel: ControlTab,
+        source: PanelDropDestination,
+        location: CGPoint,
+        startLocation: CGPoint,
+        translation: CGSize,
+        rootSize: CGSize
+    ) {
+        let iconAnchored = panelDragGhost != nil
+        defer {
+            draggingPanel = nil
+            floatingDragOrigins[group.id] = nil
+            floatingDragOffsets[group.id] = nil
+            floatingResizeOrigins[group.id] = nil
+            floatingResizePositionOrigins[group.id] = nil
+            floatingResizeLiveSizes[group.id] = nil
+            floatingResizeLivePositions[group.id] = nil
+            clearPanelDragTargets()
+        }
+        if let target = groupTarget(at: location, draggedGroup: group) {
+            groupPanelGroup(group, with: target.group, in: target.destination)
+            return
+        }
+        if let target = insertionTarget(at: location, draggedGroup: group, rootSize: rootSize, source: source) {
+            moveGroup(group, to: target)
+            return
+        }
+        if let destination = dockTarget(at: location, in: rootSize, excluding: source) {
+            moveGroup(group, to: destination)
+            return
+        }
+        if source != .floating, isPoint(location, insideOpenDock: source, in: rootSize) {
+            tab = panel
+            return
+        }
+        if source == .floating {
+            if floatingGroups.contains(where: { $0.id == group.id }) {
+                let origin = floatingDragOrigins[group.id] ?? floatingPosition(for: group, in: rootSize)
+                setFloatingPosition(
+                    clampedFloatingPosition(
+                        CGPoint(x: origin.x + translation.width, y: origin.y + translation.height),
+                        in: rootSize
+                    ),
+                    for: group
+                )
+            } else {
+                floatGroup(group, at: floatingDropPosition(for: group, at: location, startLocation: startLocation, rootSize: rootSize, iconAnchored: iconAnchored))
+            }
+        } else {
+            floatGroup(group, at: floatingDropPosition(for: group, at: location, startLocation: startLocation, rootSize: rootSize, iconAnchored: iconAnchored))
+        }
+        tab = panel
+    }
+
     private func dockResizeHandle(destination: PanelDropDestination, isCollapsed: Binding<Bool>, size: Binding<Double>) -> some View {
         let isVertical = destination == .left || destination == .right
         return Rectangle()
@@ -1441,17 +1965,30 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(groups) { group in
+                            panelInsertGap(destination: destination, beforeGroupID: group.id)
                             panelGroupCard(group, destination: destination)
                         }
+                        panelInsertGap(destination: destination, beforeGroupID: nil)
                     }
                     .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
-        .dockDropHighlight(isTargeted: dropTargetBinding(for: destination).wrappedValue)
+        .dockDropHighlight(isTargeted: dropTargetBinding(for: destination).wrappedValue || panelDockTarget == destination)
         .onDrop(of: [UTType.plainText], isTargeted: dropTargetBinding(for: destination)) { providers in
             handlePanelDrop(providers, destination: destination)
+        }
+    }
+
+    @ViewBuilder private func panelInsertGap(destination: PanelDropDestination, beforeGroupID: String?) -> some View {
+        if panelInsertTarget?.destination == destination && panelInsertTarget?.beforeGroupID == beforeGroupID {
+            Rectangle()
+            .fill(Color.accentColor)
+            .frame(height: 2)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 5)
+            .transition(.opacity)
         }
     }
 
@@ -1474,6 +2011,7 @@ struct ContentView: View {
         let activePanel = selectedPanel(in: group) ?? group.activeDefault ?? .layers
         let isMinimized = minimizedPanels.contains(activePanel)
         let isActive = group.panels.contains(tab)
+        let isGroupTargeted = panelGroupTargetID == group.id
         let panelSurface = Color(nsColor: isActive ? .controlBackgroundColor : .windowBackgroundColor)
         let headerSurface = Color(nsColor: .windowBackgroundColor).opacity(0.38)
         return VStack(alignment: .leading, spacing: 0) {
@@ -1497,12 +2035,44 @@ struct ContentView: View {
         .clipShape(Rectangle())
         .overlay {
             Rectangle()
-                .stroke(isActive ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.08), lineWidth: 1)
+                .stroke(
+                    isGroupTargeted ? Color.accentColor.opacity(0.72) : (isActive ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.08)),
+                    lineWidth: isGroupTargeted ? 3 : 1
+                )
+        }
+        .background(isGroupTargeted ? Color.accentColor.opacity(0.10) : Color.clear)
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { panelGroupFrames[group.id] = geo.frame(in: .named("workspaceRoot")) }
+                    .onChange(of: geo.frame(in: .named("workspaceRoot"))) { _, newFrame in
+                        panelGroupFrames[group.id] = newFrame
+                    }
+            }
         }
         .onTapGesture { tab = activePanel }
+        .contextMenu {
+            panelContextMenu(for: activePanel, group: group)
+        }
         .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
             handlePanelDrop(providers, destination: destination, before: group.panels.first ?? activePanel)
         }
+    }
+
+    @ViewBuilder private func panelContextMenu(for panel: ControlTab, group: PanelGroup) -> some View {
+        Button("Dock Left") { moveGroup(group, to: .left) }
+        Button("Dock Right") { moveGroup(group, to: .right) }
+        Button("Dock Top") { moveGroup(group, to: .top) }
+        Button("Dock Bottom") { moveGroup(group, to: .bottom) }
+        Button("Float") {
+            floatGroup(group, at: CGPoint(x: workspaceRootSize.width * 0.5, y: workspaceRootSize.height * 0.28))
+        }
+        Button(minimizedPanels.contains(panel) ? "Expand" : "Minimize") {
+            togglePanelMinimized(panel)
+        }
+        Button("Hide") { group.panels.forEach(hidePanel) }
+        Divider()
+        Text(panelPlacementText(panel))
     }
 
     private func panelMinimumWidth(for destination: PanelDropDestination) -> CGFloat {
@@ -1523,6 +2093,17 @@ struct ContentView: View {
         HStack(spacing: 0) {
             panelTabStrip(group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
             Spacer(minLength: 0)
+            if let visibility = panelVisibilityBinding(for: activePanel) {
+                Button {
+                    visibility.wrappedValue.toggle()
+                } label: {
+                    Image(systemName: visibility.wrappedValue ? "eye" : "eye.slash")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .frame(width: 34, height: 34)
+                .help(visibility.wrappedValue ? "Disable \(activePanel.rawValue)" : "Enable \(activePanel.rawValue)")
+            }
             Button {
                 hidePanel(activePanel)
             } label: {
@@ -1533,6 +2114,33 @@ struct ContentView: View {
             .frame(width: 34, height: 34)
             .help("Hide \(activePanel.rawValue)")
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .named("workspaceRoot"))
+                .onChanged { value in
+                    guard !isPanelTabDragStart(value.startLocation, in: group) else { return }
+                    draggingPanel = activePanel
+                    panelDragGhost = nil
+                    updatePanelDragTargets(group: group, source: destination, location: value.location, rootSize: workspaceRootSize)
+                    if destination == .floating {
+                        let origin = floatingDragOrigins[group.id] ?? floatingPosition(for: group, in: workspaceRootSize)
+                        floatingDragOrigins[group.id] = origin
+                        floatingDragOffsets[group.id] = value.translation
+                    }
+                }
+                .onEnded { value in
+                    guard !isPanelTabDragStart(value.startLocation, in: group) else { return }
+                    finishPanelDrag(
+                        group: group,
+                        panel: activePanel,
+                        source: destination,
+                        location: value.location,
+                        startLocation: value.startLocation,
+                        translation: value.translation,
+                        rootSize: workspaceRootSize
+                    )
+                }
+        )
     }
 
     private func panelTabStrip(
@@ -1589,6 +2197,15 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .help("Double-click to minimize \(panel.rawValue)")
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { panelTabFrames[panel.id] = geo.frame(in: .named("workspaceRoot")) }
+                    .onChange(of: geo.frame(in: .named("workspaceRoot"))) { _, newFrame in
+                        panelTabFrames[panel.id] = newFrame
+                    }
+            }
+        }
         .simultaneousGesture(
             TapGesture(count: 2)
                 .onEnded {
@@ -1596,7 +2213,27 @@ struct ContentView: View {
                     togglePanelMinimized(panel)
                 }
         )
-        .onDrag { panelDragProvider(for: panel) }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .named("workspaceRoot"))
+                .onChanged { value in
+                    draggingPanel = panel
+                    panelDragGhost = panel
+                    let draggedTab = PanelGroup(panels: [panel])
+                    updatePanelDragTargets(group: draggedTab, source: destination, location: value.location, rootSize: workspaceRootSize)
+                }
+                .onEnded { value in
+                    let draggedTab = PanelGroup(panels: [panel])
+                    finishPanelDrag(
+                        group: draggedTab,
+                        panel: panel,
+                        source: destination,
+                        location: value.location,
+                        startLocation: value.startLocation,
+                        translation: value.translation,
+                        rootSize: workspaceRootSize
+                    )
+                }
+        )
         .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
             handlePanelGroupDrop(providers, destination: destination, target: panel)
         }
@@ -1623,18 +2260,77 @@ struct ContentView: View {
     }
 
     private var floatingPanelsOverlay: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(floatingGroups) { group in
-                panelGroupCard(group, destination: .floating)
-                    .frame(width: 340)
-                    .background(.ultraThinMaterial)
-                    .shadow(color: Color.black.opacity(0.22), radius: 16, y: 8)
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                ForEach(floatingGroups) { group in
+                    floatingPanelCard(group, rootSize: geo.size)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .dockDropHighlight(isTargeted: floatingDockDropTargeted)
-        .onDrop(of: [UTType.plainText], isTargeted: $floatingDockDropTargeted) { providers in
-            handlePanelDrop(providers, destination: .floating)
+    }
+
+    private func floatingPanelCard(_ group: PanelGroup, rootSize: CGSize) -> some View {
+        let position = floatingResizeLivePositions[group.id] ?? floatingPosition(for: group, in: rootSize)
+        let offset = floatingDragOffsets[group.id] ?? .zero
+        let size = floatingResizeLiveSizes[group.id] ?? floatingSize(for: group)
+        let activePanel = selectedPanel(in: group) ?? group.activeDefault ?? .layers
+        let isMinimized = minimizedPanels.contains(activePanel)
+        return panelGroupCard(group, destination: .floating)
+            .frame(width: size.width, alignment: .topLeading)
+            .background(.ultraThinMaterial)
+            .shadow(color: Color.black.opacity(0.22), radius: 16, y: 8)
+            .overlay(alignment: .bottomTrailing) {
+                if !isMinimized {
+                    floatingResizeHandle(for: group)
+                }
+            }
+            .offset(x: position.x + offset.width, y: position.y + offset.height)
+    }
+
+    private func floatingResizeHandle(for group: PanelGroup) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.001))
+                .frame(width: 24, height: 24)
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.secondary.opacity(hoveredFloatingResizeGroupID == group.id || floatingResizeOrigins[group.id] != nil ? 0.7 : 0))
+                .padding(5)
         }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            hoveredFloatingResizeGroupID = hovering ? group.id : (hoveredFloatingResizeGroupID == group.id ? nil : hoveredFloatingResizeGroupID)
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    let origin = floatingResizeOrigins[group.id] ?? floatingSize(for: group)
+                    floatingResizeOrigins[group.id] = origin
+                    let positionOrigin = floatingResizePositionOrigins[group.id] ?? floatingPosition(for: group, in: workspaceRootSize)
+                    floatingResizePositionOrigins[group.id] = positionOrigin
+                    let resized = clampedFloatingSize(
+                        CGSize(width: origin.width + value.translation.width,
+                               height: origin.height),
+                        for: group
+                    )
+                    floatingResizeLiveSizes[group.id] = resized
+                    floatingResizeLivePositions[group.id] = clampedFloatingPosition(positionOrigin, in: workspaceRootSize)
+                }
+                .onEnded { _ in
+                    if let liveSize = floatingResizeLiveSizes[group.id] {
+                        setFloatingSize(liveSize, for: group)
+                    }
+                    if let livePosition = floatingResizeLivePositions[group.id] {
+                        setFloatingPosition(livePosition, for: group)
+                    }
+                    floatingResizeOrigins[group.id] = nil
+                    floatingResizePositionOrigins[group.id] = nil
+                    floatingResizeLiveSizes[group.id] = nil
+                    floatingResizeLivePositions[group.id] = nil
+                }
+        )
+        .help("Resize floating panel")
     }
 
     @ViewBuilder private func tabContent(_ tab: ControlTab) -> some View {
@@ -1649,6 +2345,7 @@ struct ContentView: View {
         case .wrap: wrapTab
         case .lineWalk: lineWalkTab
         case .ink: inkTab
+        case .paper: paperTab
         case .history: historyTab
         case .timeline: timelineTab
         case .web: webTab
@@ -2273,61 +2970,64 @@ struct ContentView: View {
         .disabled(!model.settings.landmarks.lineWalkEnabled)
     }
 
+    @ViewBuilder private var paperTab: some View {
+        SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
+                  hint: "Opacity of the internal paper substrate. 0 = transparent ink-only output.")
+        DisclosureGroup("Paper settings", isExpanded: $inkPaperSettingsExpanded) {
+            PaperControls(config: inkPaperConfigBinding, showsMaterialMap: false)
+                .padding(.top, 4)
+        }
+        .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
+    }
+
     @ViewBuilder private var inkTab: some View {
-        Toggle("Enable Ink", isOn: $model.settings.landmarks.inkEnabled)
-            .font(.callout.weight(.semibold))
-            .help("Draw inkwash strokes as a full-canvas layer directly on the preview.")
         Group {
-            SectionHeader("Paper")
-            HStack(spacing: 6) {
-                Text("Input").font(.caption).foregroundStyle(.secondary)
-                Menu(inkPaperInputLabel) {
-                    Button("Internal paper") { inkTextureBinding.wrappedValue = .none }
-                    let sources = inkTextureSources()
-                    if !sources.isEmpty {
-                        Divider()
-                        ForEach(sources, id: \.id) { source in
-                            Button(source.name) { inkTextureBinding.wrappedValue = .node(source.id) }
-                        }
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Substrate routed into the Ink node's texture input. This is the same input shown in the Layers panel.")
-            }
-            Toggle("Paper", isOn: inkPaperEnabledBinding)
-                .help("Show or hide the Ink layer's paper/substrate. Off makes ink render over transparent.")
-            SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
-                      hint: "Opacity of the routed or internal paper substrate. 0 = transparent ink-only output.")
+            SectionHeader("Inputs")
+            inkInputMenu(
+                title: "Surface input",
+                label: inkSurfaceInputLabel,
+                help: "Layer or internal paper used as the ink surface/substrate. This affects the material response and visible texture input.",
+                includeInternalPaper: true,
+                includeSameAsSurface: false,
+                binding: inkSurfaceInputMenuBinding
+            )
+            inkInputMenu(
+                title: "Dynamic input",
+                label: inkDynamicInputLabel,
+                help: "Layer used for motion, wetness, and live-flow response. Leave as Same as surface for legacy behavior.",
+                includeInternalPaper: false,
+                includeSameAsSurface: true,
+                binding: inkDynamicInputMenuBinding
+            )
             if inkTextureBinding.wrappedValue != .none {
-                Picker("Paper blend", selection: inkPaperCompositeBinding) {
+                Picker("Surface blend", selection: inkPaperCompositeBinding) {
                     ForEach(InkPaperCompositeMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.menu)
             }
-            DisclosureGroup("Paper settings", isExpanded: $inkPaperSettingsExpanded) {
-                PaperControls(config: inkPaperConfigBinding)
+
+            DisclosureGroup("Material map", isExpanded: $inkMaterialMapExpanded) {
+                PaperMaterialMapControls(config: inkPaperConfigBinding)
                     .padding(.top, 4)
             }
-            .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
 
             DisclosureGroup("Ink response") {
-                SliderRow(title: "Paper influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Master coupling from the paper's hidden material map into the ink simulation. 0 = paper is visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
-                SliderRow(title: "Live surface", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Couples the routed moving image to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
+                SliderRow(title: "Surface influence", value: optionalLandmarkFloatBinding(\.inkPaperInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
+                SliderRow(title: "Dynamic influence", value: optionalLandmarkFloatBinding(\.inkLiveSurfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
                 SliderRow(title: "Motion force", value: optionalLandmarkFloatBinding(\.inkMotionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
-                          hint: "Strength of the routed optical-flow vector pushing wet ink. It can move only pixels that are wet.")
+                          hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
                 SliderRow(title: "Motion wetness", value: optionalLandmarkFloatBinding(\.inkMotionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Continuously wets pixels where optical flow is detected, allowing that motion to carry pigment.")
-                SliderRow(title: "Live absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "How strongly the routed live-surface mask accelerates wetting and drying locally.")
-                SliderRow(title: "Live drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
-                          hint: "How strongly the routed live-surface mask brakes fluid and pigment movement locally.")
-                SliderRow(title: "Live resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1,
-                          hint: "How strongly the routed live-surface mask rejects newly deposited pigment. It does not erase existing ink.")
+                          hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
+                SliderRow(title: "Dynamic absorbency", value: optionalLandmarkFloatBinding(\.inkLiveAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
+                          hint: "How strongly the dynamic input accelerates wetting and drying locally.")
+                SliderRow(title: "Dynamic drag", value: optionalLandmarkFloatBinding(\.inkLiveDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
+                          hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
+                SliderRow(title: "Dynamic resist", value: optionalLandmarkFloatBinding(\.inkLiveResist, defaultValue: 1), range: 0...1, defaultValue: 1,
+                          hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
                 HStack(spacing: 6) {
                     Button("Fix") { fixInk() }
                         .help("Make all current pigment permanent and immune to wash. Shortcut: Control-Option-F.")
@@ -2725,6 +3425,28 @@ struct ContentView: View {
             }
         )
     }
+    private func panelVisibilityBinding(for panel: ControlTab) -> Binding<Bool>? {
+        switch panel {
+        case .ink:
+            return $model.settings.landmarks.inkEnabled
+        case .paper:
+            return inkPaperEnabledBinding
+        default:
+            return nil
+        }
+    }
+    private var inkSurfaceInputMenuBinding: Binding<PortBinding?> {
+        Binding(
+            get: { inkTextureBinding.wrappedValue },
+            set: { inkTextureBinding.wrappedValue = $0 ?? .none }
+        )
+    }
+    private var inkDynamicInputMenuBinding: Binding<PortBinding?> {
+        Binding(
+            get: { model.settings.landmarks.inkDynamicInput },
+            set: { model.settings.landmarks.inkDynamicInput = $0 }
+        )
+    }
     private var inkTextureBinding: Binding<PortBinding> {
         Binding(
             get: {
@@ -2746,12 +3468,62 @@ struct ContentView: View {
             }
         )
     }
-    private var inkPaperInputLabel: String {
-        switch inkTextureBinding.wrappedValue {
+    private var inkSurfaceInputLabel: String {
+        portBindingLabel(inkTextureBinding.wrappedValue, noneLabel: "Internal paper", nilLabel: "Internal paper")
+    }
+    private var inkDynamicInputLabel: String {
+        portBindingLabel(model.settings.landmarks.inkDynamicInput, noneLabel: "None", nilLabel: "Same as surface")
+    }
+
+    @ViewBuilder private func inkInputMenu(
+        title: String,
+        label: String,
+        help: String,
+        includeInternalPaper: Bool,
+        includeSameAsSurface: Bool,
+        binding: Binding<PortBinding?>
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Menu(label) {
+                if includeSameAsSurface {
+                    Button("Same as surface") { binding.wrappedValue = nil }
+                    Divider()
+                }
+                if includeInternalPaper {
+                    Button("Internal paper") { binding.wrappedValue = .none }
+                } else {
+                    Button("None") { binding.wrappedValue = .none }
+                }
+                Divider()
+                Button("Camera source") { binding.wrappedValue = .source(.camera) }
+                Button("Person Key") { binding.wrappedValue = .source(.personMatte) }
+                let sources = inkTextureSources()
+                if !sources.isEmpty {
+                    Divider()
+                    ForEach(sources, id: \.id) { source in
+                        Button(source.name) { binding.wrappedValue = .node(source.id) }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(help)
+        }
+    }
+
+    private func portBindingLabel(_ binding: PortBinding?, noneLabel: String, nilLabel: String) -> String {
+        guard let binding else { return nilLabel }
+        switch binding {
         case .none:
-            return "Internal paper"
+            return noneLabel
         case .source(let source):
-            return source == .personMatte ? "Person Key" : "Source"
+            switch source {
+            case .camera: return "Camera source"
+            case .personMatte: return "Person Key"
+            case .landmarks: return "Landmarks"
+            case .mouse: return "Mouse"
+            }
         case .node(let id):
             return inkTextureSources().first { $0.id == id }?.name ?? "Layer"
         }
@@ -3327,7 +4099,7 @@ private struct SectionHeader: View {
             .font(.caption2.weight(.bold))
             .tracking(0.5)
             .foregroundStyle(.secondary)
-            .padding(.top, 8)
+            .padding(.top, 5)
     }
 }
 
@@ -3893,6 +4665,7 @@ private struct FloatSliderRow: View {
 
 private struct PaperControls: View {
     @Binding var config: PaperConfig
+    var showsMaterialMap = true
     @State private var physicalExpanded = false
 
     var body: some View {
@@ -3944,17 +4717,10 @@ private struct PaperControls: View {
                     .font(.caption2)
             }
 
-            DisclosureGroup("Material map", isExpanded: $physicalExpanded) {
-                paperSlider("Absorb", value: optional(\.absorbency, 1), range: 0...1, defaultValue: 1,
-                            hint: "Strength of absorbent low-noise regions. These alter wetness and drying locally; they do not directly pull pigment into dark visible grooves.")
-                paperSlider("Flow drag", value: optional(\.drag, 1), range: 0...1, defaultValue: 1,
-                            hint: "Strength of high-noise regions that brake velocity and pigment advection. Drag is a scalar brake; it does not steer flow along fibers.")
-                paperSlider("Ink resist", value: optional(\.resist, 1), range: 0...1, defaultValue: 1,
-                            hint: "How strongly selected regions reject freshly deposited pigment, like wax. It does not erase or repel pigment already on the canvas.")
-                paperSlider("Resist cutoff", value: optional(\.resistThreshold, 0.5), range: 0...1, defaultValue: 0.5,
-                            hint: "Selects which high-noise regions resist fresh marks. Higher values leave fewer resistant regions.")
-                paperSlider("Edge softness", value: optional(\.resistSoftness, 0.1), range: 0...1, defaultValue: 0.1,
-                            hint: "Width of the resistance transition. Low gives a hard wax-mask edge; high gives a gradual transition.")
+            if showsMaterialMap {
+                DisclosureGroup("Material map", isExpanded: $physicalExpanded) {
+                    PaperMaterialMapControls(config: $config)
+                }
             }
         }
     }
@@ -3979,6 +4745,37 @@ private struct PaperControls: View {
 
     private var seedBinding: Binding<Int> {
         Binding(get: { config.seed ?? 0 }, set: { config.seed = $0 })
+    }
+}
+
+private struct PaperMaterialMapControls: View {
+    @Binding var config: PaperConfig
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            paperSlider("Absorb", value: optional(\.absorbency, 1), range: 0...1, defaultValue: 1,
+                        hint: "Strength of absorbent low-noise regions. These alter wetness and drying locally; they do not directly pull pigment into dark visible grooves.")
+            paperSlider("Flow drag", value: optional(\.drag, 1), range: 0...1, defaultValue: 1,
+                        hint: "Strength of high-noise regions that brake velocity and pigment advection. Drag is a scalar brake; it does not steer flow along fibers.")
+            paperSlider("Ink resist", value: optional(\.resist, 1), range: 0...1, defaultValue: 1,
+                        hint: "How strongly selected regions reject freshly deposited pigment, like wax. It does not erase or repel pigment already on the canvas.")
+            paperSlider("Resist cutoff", value: optional(\.resistThreshold, 0.5), range: 0...1, defaultValue: 0.5,
+                        hint: "Selects which high-noise regions resist fresh marks. Higher values leave fewer resistant regions.")
+            paperSlider("Edge softness", value: optional(\.resistSoftness, 0.1), range: 0...1, defaultValue: 0.1,
+                        hint: "Width of the resistance transition. Low gives a hard wax-mask edge; high gives a gradual transition.")
+        }
+    }
+
+    private func paperSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float, precision: Int = 2, hint: String) -> some View {
+        FloatSliderRow(title: title, value: value, range: range, precision: precision,
+                       defaultValue: defaultValue, hint: hint)
+    }
+
+    private func optional(_ keyPath: WritableKeyPath<PaperConfig, Float?>, _ fallback: Float) -> Binding<Float> {
+        Binding(
+            get: { config[keyPath: keyPath] ?? fallback },
+            set: { config[keyPath: keyPath] = $0 }
+        )
     }
 }
 
@@ -4918,11 +5715,11 @@ private struct SliderRow: View {
     @FocusState private var editing: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text(title)
-                .font(.callout.weight(.medium))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.primary)
-                .frame(width: 64, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
                 .contentShape(Rectangle())
                 // Double-click the label to reset this parameter to its default.
                 .onTapGesture(count: 2) { value = defaultValue }
@@ -4944,6 +5741,7 @@ private struct SliderRow: View {
                 .onSubmit { editing = false }
                 .onExitCommand { editing = false }
         }
+        .frame(minHeight: 22)
         .contentShape(Rectangle())
         .help("\(hint ?? title) Double-click the label to restore the default; type an exact value in the number field and press Return.")
     }

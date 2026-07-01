@@ -804,9 +804,21 @@ final class SketchCamViewModel: ObservableObject {
                     overlay: overlay,
                     webLayer: webLayer
                 )
+                let inkDynamicTexture = self.routedInkDynamicTexture(
+                    graph: graph,
+                    settings: settings,
+                    outputFormat: outputFormat,
+                    pixelBuffer: pixelBuffer,
+                    clockSource: clockSource,
+                    frameIndex: frameIndex,
+                    matte: matte,
+                    overlay: overlay,
+                    webLayer: webLayer,
+                    fallback: inkTexture
+                )
                 let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
                 let inkTextureBuffer = Self.controlGraphNeedsInkTexture(settings.resolvedControlFields)
-                    ? self.pixelBuffer(from: inkTexture, outputFormat: outputFormat)
+                    ? self.pixelBuffer(from: inkDynamicTexture, outputFormat: outputFormat)
                     : nil
                 let controlFields = self.timings.measure(.controlFields) {
                     self.controlFieldCoordinator?.update(
@@ -906,11 +918,11 @@ final class SketchCamViewModel: ObservableObject {
 
     private func routedInkTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
                                   pixelBuffer: CVPixelBuffer, clockSource: FrameSource, frameIndex: Int, matte: CIImage?,
-                                  overlay: CIImage?, webLayer: CIImage?) -> CIImage? {
+                                  overlay: CIImage?, webLayer: CIImage?, bindingOverride: PortBinding? = nil) -> CIImage? {
         guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
               let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
               inkNode.inputs.indices.contains(textureIndex) else { return nil }
-        let binding = inkNode.inputs[textureIndex]
+        let binding = bindingOverride ?? inkNode.inputs[textureIndex]
         guard binding != .none else { return nil }
 
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
@@ -977,6 +989,24 @@ final class SketchCamViewModel: ObservableObject {
                 frameIndex: frameIndex
             ) ?? nodeImage(node)
         }
+    }
+
+    private func routedInkDynamicTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
+                                         pixelBuffer: CVPixelBuffer, clockSource: FrameSource, frameIndex: Int, matte: CIImage?,
+                                         overlay: CIImage?, webLayer: CIImage?, fallback: CIImage?) -> CIImage? {
+        guard let binding = settings.landmarks.inkDynamicInput else { return fallback }
+        return routedInkTexture(
+            graph: graph,
+            settings: settings,
+            outputFormat: outputFormat,
+            pixelBuffer: pixelBuffer,
+            clockSource: clockSource,
+            frameIndex: frameIndex,
+            matte: matte,
+            overlay: overlay,
+            webLayer: webLayer,
+            bindingOverride: binding
+        )
     }
 
     /// Build the per-stream images and composite the graph on the GPU. Returns

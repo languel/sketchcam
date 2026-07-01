@@ -549,6 +549,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkPaperConfig: PaperConfig?
     /// How cached procedural paper combines with a routed Ink substrate.
     public var inkPaperCompositeMode: InkPaperCompositeMode?
+    /// Optional dynamic pixel input for motion/wetness control fields. Nil
+    /// preserves legacy behavior by following the Ink node's surface input.
+    public var inkDynamicInput: PortBinding?
     public var inkPaperInfluence: Float?
     public var inkLiveSurfaceInfluence: Float?
     public var inkMotionForce: Float?
@@ -714,6 +717,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperGrain: Float = 0.45,
         inkPaperConfig: PaperConfig? = .metalDefault,
         inkPaperCompositeMode: InkPaperCompositeMode? = .multiply,
+        inkDynamicInput: PortBinding? = nil,
         inkPaperInfluence: Float? = 0,
         inkLiveSurfaceInfluence: Float? = 0,
         inkMotionForce: Float? = 0,
@@ -846,6 +850,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperGrain = inkPaperGrain
         self.inkPaperConfig = inkPaperConfig
         self.inkPaperCompositeMode = inkPaperCompositeMode
+        self.inkDynamicInput = inkDynamicInput
         self.inkPaperInfluence = inkPaperInfluence
         self.inkLiveSurfaceInfluence = inkLiveSurfaceInfluence
         self.inkMotionForce = inkMotionForce
