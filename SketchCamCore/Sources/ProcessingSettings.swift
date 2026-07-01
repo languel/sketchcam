@@ -292,9 +292,6 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// Nil means default to dragging the visible artboard with the two-finger
     /// gesture. False preserves the older viewport-opposite scroll direction.
     public var artboardDragCanvasWithScroll: Bool?
-    /// Nil means draw lightweight frame proxies on the workspace outside the
-    /// live output texture. False is a performance/debug culling view.
-    public var artboardShowFrameProxies: Bool?
     public var processingQuality: ProcessingQuality
     public var landmarks: LandmarkSettings
     public var web: WebLayerSettings
@@ -325,7 +322,6 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewFPS: Double = 0,
         useMetalPreview: Bool = true,
         artboardDragCanvasWithScroll: Bool? = nil,
-        artboardShowFrameProxies: Bool? = nil,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings(),
         web: WebLayerSettings = WebLayerSettings()
@@ -355,7 +351,6 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.artboardDragCanvasWithScroll = artboardDragCanvasWithScroll
-        self.artboardShowFrameProxies = artboardShowFrameProxies
         self.processingQuality = processingQuality
         self.landmarks = landmarks
         self.web = web
@@ -363,10 +358,6 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
 
     public var resolvedArtboardDragCanvasWithScroll: Bool {
         artboardDragCanvasWithScroll ?? true
-    }
-
-    public var resolvedArtboardShowFrameProxies: Bool {
-        artboardShowFrameProxies ?? true
     }
 
     public var resolvedControlFields: ControlFieldGraph {

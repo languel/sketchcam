@@ -709,14 +709,6 @@ struct ContentView: View {
                 if !windowMode.transparent {
                     CheckerboardBackground()
                 }
-                WorkspaceMaterialProxyLayer(
-                    workspace: model.settings.workspace,
-                    graph: model.settings.layerGraph,
-                    inkRecords: inkStrokeRecords,
-                    outputSize: model.outputFormat.size,
-                    outputRect: outputRect,
-                    showProxies: model.settings.resolvedArtboardShowFrameProxies
-                )
                 if !model.settings.previewEnabled {
                     Text("Preview off — still publishing")
                         .foregroundStyle(.secondary)
@@ -1950,8 +1942,6 @@ struct ContentView: View {
         ), range: 0...60, precision: 0, defaultValue: 0, hint: "0 = full-tilt (every published frame)")
         Toggle("Two-finger drag moves artboard", isOn: artboardDragCanvasWithScrollBinding)
             .help("On: two-finger drag moves the visible artboard with your fingers. Off: the viewport moves opposite the gesture.")
-        Toggle("Show artboard frame proxies", isOn: artboardShowFrameProxiesBinding)
-            .help("Draw lightweight frame placeholders outside the live output viewport. Turn off for a strict/cropped performance view.")
 
         SectionHeader("Window")
         HStack {
@@ -3287,13 +3277,6 @@ struct ContentView: View {
         Binding(
             get: { model.settings.resolvedArtboardDragCanvasWithScroll },
             set: { model.settings.artboardDragCanvasWithScroll = $0 }
-        )
-    }
-
-    private var artboardShowFrameProxiesBinding: Binding<Bool> {
-        Binding(
-            get: { model.settings.resolvedArtboardShowFrameProxies },
-            set: { model.settings.artboardShowFrameProxies = $0 }
         )
     }
 
@@ -6006,171 +5989,6 @@ private func workspaceOutputRect(container: CGSize, outputSize: CGSize, workspac
         width: viewport.width * scale,
         height: viewport.height * scale
     )
-}
-
-private struct WorkspaceMaterialProxyLayer: View {
-    let workspace: CollageWorkspace?
-    let graph: LayerGraph?
-    let inkRecords: [InkStrokeRecord]
-    let outputSize: CGSize
-    let outputRect: CGRect
-    let showProxies: Bool
-
-    var body: some View {
-        Canvas { context, _ in
-            drawProxy(context: &context)
-        }
-        .allowsHitTesting(false)
-    }
-
-    private func drawProxy(context: inout GraphicsContext) {
-        guard showProxies, let workspace else { return }
-        for frame in workspace.frames where frame.visible {
-            guard shouldDrawProxy(frame) else { continue }
-            let corners = frameCorners(frame, workspace: workspace)
-            guard corners.count == 4 else { continue }
-            var path = Path()
-            path.move(to: corners[0])
-            for point in corners.dropFirst() {
-                path.addLine(to: point)
-            }
-            path.closeSubpath()
-            let opacity = Double(max(0, min(1, frame.opacity)))
-            context.fill(path, with: .color(proxyFill(for: frame).opacity(opacity)))
-            context.stroke(path, with: .color(Color.white.opacity(0.05 * opacity)), lineWidth: 1)
-            drawInkRecords(for: frame, workspace: workspace, context: &context)
-        }
-    }
-
-    private func shouldDrawProxy(_ frame: WorkspaceFrame) -> Bool {
-        if case .outputViewport = frame.material { return false }
-        return true
-    }
-
-    private func proxyFill(for frame: WorkspaceFrame) -> Color {
-        if frame.role == .reference {
-            return Color.cyan.opacity(0.12)
-        }
-        if frame.role == .preview {
-            return Color.purple.opacity(0.12)
-        }
-        guard case .layer(let layerID) = frame.material,
-              let layer = graph?.layers.first(where: { $0.id == layerID }),
-              let node = graph?.node(layer.node) else {
-            return Color.white.opacity(0.08)
-        }
-        switch node.kind {
-        case .video, .movie:
-            return Color.black.opacity(0.22)
-        case .paper(let config):
-            return Color(
-                red: Double(config.tint.red),
-                green: Double(config.tint.green),
-                blue: Double(config.tint.blue)
-            ).opacity(0.84)
-        case .solid(let config):
-            return Color(
-                red: Double(config.color.red),
-                green: Double(config.color.green),
-                blue: Double(config.color.blue)
-            ).opacity(Double(config.color.alpha))
-        case .ink:
-            return Color.pink.opacity(0.10)
-        case .acrylic:
-            return Color(red: 0.72, green: 0.44, blue: 0.86).opacity(0.10)
-        case .web:
-            return Color.blue.opacity(0.10)
-        case .image:
-            return Color.white.opacity(0.16)
-        default:
-            return Color.white.opacity(0.08)
-        }
-    }
-
-    private func drawInkRecords(for frame: WorkspaceFrame, workspace: CollageWorkspace, context: inout GraphicsContext) {
-        guard isInkFrame(frame) else { return }
-        let matchingRecords = inkRecords.filter { record in
-            record.isVisible && (record.frameID == frame.id || record.frameID == nil)
-        }
-        guard !matchingRecords.isEmpty else { return }
-        let target = frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed)
-        guard target.width > 0, target.height > 0 else { return }
-        let opacity = Double(max(0, min(1, frame.opacity)))
-        for record in matchingRecords {
-            let samples = record.capture.canonicalSamples
-            guard samples.count > 1 else { continue }
-            var path = Path()
-            let first = viewPoint(
-                normalized: samples[0].point,
-                target: target,
-                frame: frame,
-                workspace: workspace
-            )
-            path.move(to: first)
-            for sample in samples.dropFirst() {
-                path.addLine(to: viewPoint(normalized: sample.point, target: target, frame: frame, workspace: workspace))
-            }
-            let color = record.activeRender.inkKind == .white
-                ? Color.white.opacity(0.7 * opacity)
-                : Color(
-                    red: Double(record.activeRender.color.red),
-                    green: Double(record.activeRender.color.green),
-                    blue: Double(record.activeRender.color.blue),
-                    opacity: Double(record.activeRender.color.alpha) * opacity
-                )
-            let scale = max(0.0001, outputRect.width / max(1, workspace.outputViewport.frame.width))
-            let lineWidth = max(1, CGFloat(record.activeRender.width) * target.width * scale * 0.018)
-            context.stroke(
-                path,
-                with: .color(color.opacity(record.activeRender.intent == .wash ? 0.42 : 0.82)),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
-            )
-        }
-    }
-
-    private func isInkFrame(_ frame: WorkspaceFrame) -> Bool {
-        guard case .layer(let layerID) = frame.material,
-              let layer = graph?.layers.first(where: { $0.id == layerID }),
-              let node = graph?.node(layer.node) else { return false }
-        if case .ink = node.kind { return true }
-        return false
-    }
-
-    private func frameCorners(_ frame: WorkspaceFrame, workspace: CollageWorkspace) -> [CGPoint] {
-        rectCorners(frame.localBounds.insetBy(dx: -frame.bleed, dy: -frame.bleed))
-            .map { $0.applying(frame.transform.cgAffineTransform) }
-            .map { viewPoint(world: $0, viewport: workspace.outputViewport.frame) }
-    }
-
-    private func rectCorners(_ rect: CGRect) -> [CGPoint] {
-        [
-            CGPoint(x: rect.minX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.maxY),
-            CGPoint(x: rect.minX, y: rect.maxY)
-        ]
-    }
-
-    private func viewPoint(world: CGPoint, viewport: CGRect) -> CGPoint {
-        CGPoint(
-            x: outputRect.minX + ((world.x - viewport.minX) / max(1, viewport.width)) * outputRect.width,
-            y: outputRect.minY + ((world.y - viewport.minY) / max(1, viewport.height)) * outputRect.height
-        )
-    }
-
-    private func viewPoint(
-        normalized: CGPoint,
-        target: CGRect,
-        frame: WorkspaceFrame,
-        workspace: CollageWorkspace
-    ) -> CGPoint {
-        let local = CGPoint(
-            x: target.minX + normalized.x * target.width,
-            y: target.minY + normalized.y * target.height
-        )
-        let world = local.applying(frame.transform.cgAffineTransform)
-        return viewPoint(world: world, viewport: workspace.outputViewport.frame)
-    }
 }
 
 private struct WorkspaceArtboardOverlay: View {
