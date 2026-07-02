@@ -270,7 +270,7 @@ private enum InkTool: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .draw: "pencil.tip"
+        case .draw: "scribble.variable"
         case .select: "cursorarrow"
         case .points: "point.3.connected.trianglepath.dotted"
         }
@@ -2605,7 +2605,7 @@ struct ContentView: View {
             controls: inkToolbarControls,
             mode: inkModeBinding,
             inkKind: inkKindBinding,
-            inkColor: inkColorPickerBinding,
+            inkColor: inkColorRGBA,
             smooth: inkConfigFloatBinding(\.smoothing),
             size: inkSizeBinding,
             washSize: inkWashSizeBinding,
@@ -2737,7 +2737,7 @@ struct ContentView: View {
         case .transform: return "arrow.up.left.and.arrow.down.right"
         case .crop: return "crop"
         case .mask: return "camera.filters"
-        case .draw: return "pencil.tip"
+        case .draw: return "scribble.variable"
         case .pen: return "pencil.tip"
         case .wash: return "paintbrush.pointed"
         }
@@ -3210,13 +3210,16 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var paperTab: some View {
-        SliderRow(title: "Opacity", value: inkPaperOpacityBinding, defaultValue: 1,
-                  hint: "Opacity of the internal paper substrate. 0 = transparent ink-only output.")
+        RGBAColorPicker("Tint", rgba: activePaperTintBinding, supportsOpacity: true)
+            .help("Visual only: color and opacity of the selected paper frame.")
+            .disabled(activePaperNodeID == nil)
+        SliderRow(title: "Opacity", value: activePaperOpacityBinding, defaultValue: 1,
+                  hint: "Opacity of the selected paper frame.")
         DisclosureGroup("Paper settings", isExpanded: $inkPaperSettingsExpanded) {
-            PaperControls(config: inkPaperConfigBinding, showsMaterialMap: false)
+            PaperControls(config: activePaperConfigBinding, showsMaterialMap: false)
                 .padding(.top, 4)
         }
-        .disabled(inkPaperOpacityBinding.wrappedValue <= 0.001)
+        .disabled(activePaperNodeID == nil || activePaperOpacityBinding.wrappedValue <= 0.001)
     }
 
     @ViewBuilder private var inkTab: some View {
@@ -3234,19 +3237,11 @@ struct ContentView: View {
                 help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
                 binding: inkDynamicInputMenuBinding
             )
-            if inkTextureBinding.wrappedValue != .none {
-                Picker("Surface blend", selection: inkPaperCompositeBinding) {
-                    ForEach(InkPaperCompositeMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
             DisclosureGroup("Material map", isExpanded: $inkMaterialMapExpanded) {
-                PaperMaterialMapControls(config: inkPaperConfigBinding)
+                PaperMaterialMapControls(config: inkSurfacePaperConfigBinding)
                     .padding(.top, 4)
             }
+            .disabled(inkSurfacePaperNodeID == nil)
 
             DisclosureGroup("Ink response") {
                 SliderRow(title: "Surface influence", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
@@ -3612,12 +3607,63 @@ struct ContentView: View {
         )
     }
 
-    private var inkPaperCompositeBinding: Binding<InkPaperCompositeMode> {
+    private var activePaperConfigBinding: Binding<PaperConfig> {
         Binding(
-            get: { activeInkConfig.surfaceCompositeMode ?? .none },
-            set: { value in mutateActiveInkConfig { $0.surfaceCompositeMode = value } }
+            get: {
+                guard let nodeID = activePaperNodeID,
+                      case .paper(let config)? = model.settings.layerGraph?.node(nodeID)?.kind else {
+                    return PaperConfig.metalDefault
+                }
+                return config
+            },
+            set: { config in
+                mutatePaperNode(activePaperNodeID, config: config)
+            }
         )
     }
+
+    private var inkSurfacePaperConfigBinding: Binding<PaperConfig> {
+        Binding(
+            get: {
+                guard let nodeID = inkSurfacePaperNodeID,
+                      case .paper(let config)? = model.settings.layerGraph?.node(nodeID)?.kind else {
+                    return PaperConfig.metalDefault
+                }
+                return config
+            },
+            set: { config in
+                mutatePaperNode(inkSurfacePaperNodeID, config: config)
+            }
+        )
+    }
+
+    private var activePaperOpacityBinding: Binding<Double> {
+        Binding(
+            get: {
+                guard let frameID = activePaperFrameID else { return 1 }
+                return Double(model.settings.workspace?.frame(id: frameID)?.opacity ?? 1)
+            },
+            set: { value in
+                guard let frameID = activePaperFrameID else { return }
+                model.mutateWorkspace { workspace in
+                    guard let index = workspace.frames.firstIndex(where: { $0.id == frameID }) else { return }
+                    workspace.frames[index].opacity = Float(max(0, min(1, value)))
+                }
+            }
+        )
+    }
+
+    private var activePaperTintBinding: Binding<RGBAColor> {
+        Binding(
+            get: { activePaperConfigBinding.wrappedValue.tint },
+            set: { value in
+                var config = activePaperConfigBinding.wrappedValue
+                config.tint = value
+                activePaperConfigBinding.wrappedValue = config
+            }
+        )
+    }
+
     private var inkPaperOpacityBinding: Binding<Double> {
         Binding(
             get: {
@@ -3734,6 +3780,55 @@ struct ContentView: View {
             return inkTextureSources().first { $0.id == id }?.name ?? "Layer"
         }
     }
+
+    private var activePaperFrameID: UUID? {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return nil }
+        if let activeID = workspace.activeFrameID,
+           isPaperFrame(activeID, workspace: workspace, graph: graph) {
+            return activeID
+        }
+        return workspace.frames.first { isPaperFrame($0.id, workspace: workspace, graph: graph) }?.id
+    }
+
+    private var activePaperNodeID: UUID? {
+        guard let frameID = activePaperFrameID,
+              let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph,
+              let frame = workspace.frame(id: frameID),
+              case .layer(let layerID) = frame.material,
+              let layer = graph.layers.first(where: { $0.id == layerID }),
+              let node = graph.node(layer.node),
+              case .paper = node.kind else { return nil }
+        return node.id
+    }
+
+    private var inkSurfacePaperNodeID: UUID? {
+        guard case .node(let nodeID) = inkTextureBinding.wrappedValue,
+              let graph = model.settings.layerGraph,
+              let node = graph.node(nodeID),
+              case .paper = node.kind else { return nil }
+        return nodeID
+    }
+
+    private func isPaperFrame(_ frameID: UUID, workspace: CollageWorkspace, graph: LayerGraph) -> Bool {
+        guard let frame = workspace.frame(id: frameID),
+              case .layer(let layerID) = frame.material,
+              let layer = graph.layers.first(where: { $0.id == layerID }),
+              let node = graph.node(layer.node) else { return false }
+        if case .paper = node.kind { return true }
+        return false
+    }
+
+    private func mutatePaperNode(_ nodeID: UUID?, config: PaperConfig) {
+        guard let nodeID,
+              var graph = model.settings.layerGraph,
+              let nodeIndex = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        graph.nodes[nodeIndex].kind = .paper(config)
+        model.settings.layerGraph = graph
+        model.settings.useLayerGraph = true
+    }
+
     private func activeInkNodeID(in graph: LayerGraph) -> UUID? {
         if let activeFrameID = activeInkFrameID,
            let workspace = model.settings.workspace,
@@ -4934,9 +5029,12 @@ private struct FloatSliderRow: View {
     let precision: Int
     let defaultValue: Float
     let hint: String
-    @FocusState private var editing: Bool
 
     var body: some View {
+        let doubleValue = Binding<Double>(
+            get: { Double(value) },
+            set: { value = Float($0) }
+        )
         HStack(spacing: 6) {
             Text(title)
                 .font(.caption2)
@@ -4945,19 +5043,83 @@ private struct FloatSliderRow: View {
                 .onTapGesture(count: 2) { value = defaultValue }
             Slider(value: $value, in: range)
                 .controlSize(.small)
-            TextField("", value: $value,
-                      format: .number.precision(.fractionLength(precision)))
-                .textFieldStyle(.plain)
-                .font(.caption2)
-                .monospacedDigit()
-                .multilineTextAlignment(.trailing)
-                .frame(width: 42)
-                .focused($editing)
-                .onSubmit { editing = false }
-                .onExitCommand { editing = false }
+            BufferedNumberField(value: doubleValue, precision: precision, font: .caption2)
         }
         .contentShape(Rectangle())
         .help("\(hint) Double-click the label to restore the default; type an exact value in the number field and press Return.")
+    }
+}
+
+private struct BufferedNumberField: View {
+    @Binding var value: Double
+    let precision: Int
+    var font: Font = .caption
+    var width: CGFloat = 42
+    var roundedBorder = false
+
+    @State private var text = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        if roundedBorder {
+            field.textFieldStyle(.roundedBorder)
+        } else {
+            field.textFieldStyle(.plain)
+        }
+    }
+
+    private var field: some View {
+        TextField("", text: $text)
+            .font(font)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+            .frame(width: width, alignment: .trailing)
+            .focused($editing)
+            .onAppear { text = formatted(value) }
+            .onChange(of: value) { _, newValue in
+                if !editing {
+                    text = formatted(newValue)
+                }
+            }
+            .onChange(of: editing) { _, isEditing in
+                if isEditing {
+                    text = editingText(value)
+                } else {
+                    commit()
+                }
+            }
+            .onSubmit {
+                commit()
+                editing = false
+            }
+            .onExitCommand {
+                text = formatted(value)
+                editing = false
+            }
+    }
+
+    private func commit() {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        if let parsed = Double(normalized), parsed.isFinite {
+            value = parsed
+            text = formatted(parsed)
+        } else {
+            text = formatted(value)
+        }
+    }
+
+    private func formatted(_ value: Double) -> String {
+        String(format: "%.\(precision)f", value)
+    }
+
+    private func editingText(_ value: Double) -> String {
+        let formatted = formatted(value)
+        guard formatted.contains(".") else { return formatted }
+        return formatted
+            .replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\.$"#, with: "", options: .regularExpression)
     }
 }
 
@@ -4972,8 +5134,6 @@ private struct PaperControls: View {
                         hint: "Master strength of the hidden absorbency, drag, and resistance maps. It affects ink only when Paper influence is above 0.")
             paperSlider("Variation", value: optional(\.variation, 1), range: 0...2, defaultValue: 1,
                         hint: "Contrast of hidden material differences around neutral. 0 is uniform; 1 is natural; values above 1 exaggerate waxy and absorbent regions.")
-            RGBAColorPicker("Tint", rgba: $config.tint, supportsOpacity: true)
-                .help("Visual only: color and opacity of the rendered paper. It does not tint or strengthen the physical material map.")
             paperSlider("Contrast", value: optional(\.contrast, 1), range: 0...4, defaultValue: 1,
                         hint: "Visual only: contrast of the rendered substrate. It does not strengthen the physical response.")
             paperSlider("Saturation", value: optional(\.saturation, 1), range: 0...2, defaultValue: 1,
@@ -5093,28 +5253,27 @@ private struct WorkspaceFrameStackEditor: View {
     private var displayFrames: [WorkspaceFrame] { (workspace?.frames ?? []).reversed() }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                SectionHeader("Frame stack")
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
                 addFrameMenu
-                    .padding(.top, 6)
                 Spacer()
             }
+            .padding(.leading, 2)
             ForEach(displayFrames) { frame in
                 let isSelected = workspace?.activeFrameID == frame.id
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Button { toggleExpanded(frame.id) } label: {
                             Image(systemName: expanded.contains(frame.id) ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 12, weight: .semibold))
-                                .frame(width: 16)
+                                .frame(width: 18, height: 18)
                         }
                         .buttonStyle(.borderless)
                         .help(expanded.contains(frame.id) ? "Hide frame details" : "Show frame details")
 
                         Button { toggleVisible(frame.id) } label: {
                             Image(systemName: frame.visible ? "eye" : "eye.slash")
-                                .frame(width: 20)
+                                .frame(width: 18, height: 18)
                         }
                         .buttonStyle(.borderless)
                         .help(frame.visible ? "Hide frame on artboard" : "Show frame on artboard")
@@ -5124,7 +5283,7 @@ private struct WorkspaceFrameStackEditor: View {
                             includeBinding(frame.id).wrappedValue = !current
                         } label: {
                             Image(systemName: includeBinding(frame.id).wrappedValue ? "rectangle.inset.filled" : "rectangle.dashed")
-                                .frame(width: 20)
+                                .frame(width: 18, height: 18)
                         }
                         .buttonStyle(.borderless)
                         .help(includeBinding(frame.id).wrappedValue ? "Exclude from output viewport render" : "Include in output viewport render")
@@ -5134,7 +5293,7 @@ private struct WorkspaceFrameStackEditor: View {
                                 .textFieldStyle(.plain)
                                 .focused($nameFocused)
                                 .lineLimit(1)
-                                .frame(width: 82, alignment: .leading)
+                                .frame(width: 76, alignment: .leading)
                                 .onSubmit { commitNameEdit(frame.id) }
                                 .onExitCommand { cancelNameEdit() }
                                 .help("Rename frame")
@@ -5142,7 +5301,7 @@ private struct WorkspaceFrameStackEditor: View {
                             Text(frame.name)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                                .frame(width: 82, alignment: .leading)
+                                .frame(width: 76, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     if NSEvent.modifierFlags.contains(.shift) {
@@ -5164,11 +5323,11 @@ private struct WorkspaceFrameStackEditor: View {
                             }
                         } label: {
                             Image(systemName: icon(for: frame.role))
-                                .frame(width: 20)
+                                .frame(width: 18, height: 18)
                         }
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
-                        .frame(width: 22)
+                        .frame(width: 20, height: 18)
                         .help("Frame role: \(frame.role.rawValue.capitalized)")
 
                         Menu {
@@ -5181,11 +5340,11 @@ private struct WorkspaceFrameStackEditor: View {
                             }
                         } label: {
                             Image(systemName: frame.blend.icon)
-                                .frame(width: 20)
+                                .frame(width: 18, height: 18)
                         }
                         .menuStyle(.borderlessButton)
                         .menuIndicator(.hidden)
-                        .frame(width: 22)
+                        .frame(width: 20, height: 18)
                         .help("Blend mode: \(frame.blend.title)")
 
                         Spacer(minLength: 0)
@@ -5195,15 +5354,24 @@ private struct WorkspaceFrameStackEditor: View {
                             .frame(width: 50)
                             .help("Frame opacity")
 
+                        Button { toggleLocked(frame.id) } label: {
+                            Image(systemName: frame.locked ? "lock.fill" : "lock")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(frame.locked ? "Unlock frame transform" : "Lock frame transform")
+
                         Button(role: .destructive) { delete(frame.id) } label: {
-                            Image(systemName: "trash")
-                                .frame(width: 20)
+                            Image(systemName: "delete.backward")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 18, height: 18)
                         }
                         .buttonStyle(.borderless)
                         .help("Delete frame")
                     }
                     .contentShape(Rectangle())
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 3)
                     .padding(.vertical, 2)
                     .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -5254,10 +5422,12 @@ private struct WorkspaceFrameStackEditor: View {
                 Button("Web") { enableStream(.web) }
             }
         } label: {
-            Label("Add frame", systemImage: "plus")
+            Image(systemName: "plus")
+                .frame(width: 18, height: 18)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        .help("Add frame")
     }
 
     @ViewBuilder private func frameDetails(_ frame: WorkspaceFrame) -> some View {
@@ -5317,9 +5487,7 @@ private struct WorkspaceFrameStackEditor: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            TextField(label, value: value, format: .number.precision(.fractionLength(1)))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 54)
+            BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true)
         }
     }
 
@@ -5416,6 +5584,10 @@ private struct WorkspaceFrameStackEditor: View {
 
     private func toggleVisible(_ id: UUID) {
         mutateFrame(id) { $0.visible.toggle() }
+    }
+
+    private func toggleLocked(_ id: UUID) {
+        mutateFrame(id) { $0.locked.toggle() }
     }
 
     private func includeBinding(_ id: UUID) -> Binding<Bool> {
@@ -6132,7 +6304,6 @@ private struct SliderRow: View {
     let defaultValue: Double
     var hint: String?
     var toolbarDragProvider: (() -> NSItemProvider)?
-    @FocusState private var editing: Bool
 
     var body: some View {
         HStack(spacing: 6) {
@@ -6144,16 +6315,7 @@ private struct SliderRow: View {
             // experiment; the slider thumb just pins to its end. Enter or Escape
             // commits and releases focus so keyboard shortcuts ([, ], etc.) work
             // again (clicking the canvas also releases it).
-            TextField("", value: $value, format: .number.precision(.fractionLength(precision)))
-                .textFieldStyle(.plain)
-                .monospacedDigit()
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 42, alignment: .trailing)
-                .focused($editing)
-                .onSubmit { editing = false }
-                .onExitCommand { editing = false }
+            BufferedNumberField(value: $value, precision: precision)
         }
         .frame(minHeight: 22)
         .contentShape(Rectangle())
@@ -6422,7 +6584,7 @@ private struct InkToolbarStrip: View {
     let controls: [ToolbarControlID]
     @Binding var mode: InkBrushMode
     @Binding var inkKind: InkKind
-    @Binding var inkColor: Color
+    @Binding var inkColor: RGBAColor
     @Binding var smooth: Double
     @Binding var size: Double
     @Binding var washSize: Double
@@ -6470,7 +6632,7 @@ private struct InkToolbarStrip: View {
             VStack(spacing: 5) {
                 Text(control.compactTitle)
                     .hudLabel()
-                ColorPicker("", selection: $inkColor, supportsOpacity: false)
+                RGBAColorPicker("", rgba: $inkColor, supportsOpacity: true)
                     .labelsHidden()
                     .frame(width: 26, height: 20)
             }
@@ -7419,7 +7581,13 @@ private struct WorkspaceArtboardOverlay: View {
                     transform: handleHit.frame.transform
                 )
             }
-            guard let hit = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else {
+            let commandCycling = NSEvent.modifierFlags.contains(.command)
+            guard let hit = hitFrame(
+                at: world,
+                workspace: workspace,
+                outputRect: outputRect,
+                cycleFromActive: commandCycling
+            ) else {
                 if dragOperation != nil { return }
                 model.updateWorkspaceLiveEdit {
                     $0.activeFrameID = nil
@@ -7597,9 +7765,34 @@ private struct WorkspaceArtboardOverlay: View {
         frame.transform.ty = Double(centerWorld.y) - (Double(centerLocal.x) * frame.transform.b + Double(centerLocal.y) * frame.transform.d)
     }
 
-    private func hitFrame(at world: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> WorkspaceFrame? {
+    private func hitFrame(
+        at world: CGPoint,
+        workspace: CollageWorkspace,
+        outputRect: CGRect,
+        cycleFromActive: Bool = false
+    ) -> WorkspaceFrame? {
+        let hits = hitFrames(at: world, workspace: workspace, outputRect: outputRect)
+        guard !hits.isEmpty else { return nil }
+
+        if cycleFromActive {
+            guard let activeID = workspace.activeFrameID,
+                  let activeIndex = hits.firstIndex(where: { $0.id == activeID }) else {
+                return hits.first
+            }
+            return hits[(activeIndex + 1) % hits.count]
+        }
+
+        let selectedIDs = Set(workspace.selectedFrameIDs)
+        if let selectedHit = hits.first(where: { selectedIDs.contains($0.id) }) {
+            return selectedHit
+        }
+
+        return hits.first
+    }
+
+    private func hitFrames(at world: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> [WorkspaceFrame] {
         let tolerance = max(2, workspace.outputViewport.frame.width / max(1, outputRect.width) * 8)
-        return workspace.frames.reversed().first { frame in
+        return workspace.frames.reversed().filter { frame in
             guard frame.visible else { return false }
             return frame.worldBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(world)
         }
