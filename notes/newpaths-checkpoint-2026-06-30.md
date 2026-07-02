@@ -26,6 +26,18 @@ Branch: `newpaths`
 - Dock resize may still need a more structural fix if the visible divider continues to chase the dock edge.
 - Presentation mode restore was previously imperfect after repeated Command-P toggles.
 
+## UI Cleanup Checkpoint - 2026-07-02
+
+- Promoted the old hover ink HUD into a dockable `Ink Toolbar` panel backed by persisted toolbar-control IDs.
+- Kept top-docked toolbar panels single-row internally; toolbar tabs show icon-only labels with hover help.
+- Main workspace toolbar is icon-first and omits Pen/Wash; ink-specific live controls live in the Ink Toolbar.
+- Ink terminology now presents `Mark` / `Erase` instead of `Color` / `Dissolve` or raw black/white labels.
+- Simplified the Ink panel by removing the embedded editor/action block; history/timeline remain separate panels.
+- Tightened the frame stack row: visibility, output inclusion, editable name, role menu, blend menu, opacity, and delete are compact icon controls.
+- Frame role and blend mode menus now open from icon-only controls; Preview no longer reuses the visibility-eye icon.
+- Frame names can be renamed inline with Shift-click on the name label.
+- The output-inclusion control is intentionally separate from visibility: visibility affects the artboard/workspace, while output inclusion affects published/exported viewport rendering.
+
 ## Local Run Helpers
 
 - Build, install to `/Applications`, and run:

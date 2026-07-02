@@ -93,8 +93,8 @@ public enum InkKind: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var title: String {
         switch self {
-        case .black: return "Color"     // chromatic ink (uses the Ink colour)
-        case .white: return "Dissolve"  // opaque white pigment — covers / erases / clears
+        case .black: return "Mark"      // chromatic ink (uses the Ink colour)
+        case .white: return "Erase"     // opaque white pigment — covers / erases / clears
         }
     }
 

@@ -611,7 +611,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if !topTabs.isEmpty, floatingDockDestination != .top {
                 dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", groups: topGroups, destination: .top, isCollapsed: $topDockCollapsed)
-                    .frame(height: topDockCollapsed ? 34 : dockSize(.top, stored: topDockSize))
+                    .frame(height: topDockCollapsed ? 34 : topDockHeight)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .overlay(alignment: .bottom) {
                         dockResizeHandle(destination: .top, isCollapsed: $topDockCollapsed, size: $topDockSize)
@@ -668,7 +668,7 @@ struct ContentView: View {
                 if !topTabs.isEmpty {
                     VStack(spacing: 0) {
                         dockSection(title: "Top", systemImage: "rectangle.topthird.inset.filled", groups: topGroups, destination: .top, isCollapsed: $topDockCollapsed)
-                            .frame(height: topDockCollapsed ? 34 : dockSize(.top, stored: topDockSize))
+                            .frame(height: topDockCollapsed ? 34 : topDockHeight)
                             .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
                         Spacer(minLength: 0)
                     }
@@ -2012,12 +2012,26 @@ struct ContentView: View {
         max(liveDockSizes[destination] ?? stored, dockMinimumSize(destination))
     }
 
+    private var topDockHeight: Double {
+        guard topDockIsToolbarStrip else {
+            return dockSize(.top, stored: topDockSize)
+        }
+        return Double(max(1, topGroups.count)) * 44
+    }
+
+    private var topDockIsToolbarStrip: Bool {
+        !topGroups.isEmpty && topGroups.allSatisfy { group in
+            let activePanel = selectedPanel(in: group) ?? group.activeDefault
+            return activePanel.map(isToolbarPanel) == true
+        }
+    }
+
     private func dockMinimumSize(_ destination: PanelDropDestination) -> Double {
         switch destination {
         case .left, .right:
             return 320
         case .top:
-            return 150
+            return topDockIsToolbarStrip ? 44 : 150
         case .bottom:
             return 170
         case .floating:
@@ -2067,11 +2081,11 @@ struct ContentView: View {
     @ViewBuilder private func panelInsertGap(destination: PanelDropDestination, beforeGroupID: String?) -> some View {
         if panelInsertTarget?.destination == destination && panelInsertTarget?.beforeGroupID == beforeGroupID {
             Rectangle()
-            .fill(Color.accentColor)
-            .frame(height: 2)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
-            .transition(.opacity)
+                .fill(Color.accentColor)
+                .frame(height: 2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .transition(.opacity)
         }
     }
 
@@ -2097,11 +2111,29 @@ struct ContentView: View {
         let isGroupTargeted = panelGroupTargetID == group.id
         let panelSurface = Color(nsColor: isActive ? .controlBackgroundColor : .windowBackgroundColor)
         let headerSurface = Color(nsColor: .windowBackgroundColor).opacity(0.38)
+        let isInlineToolbar = destination == .top && isToolbarPanel(activePanel) && !isMinimized
         return VStack(alignment: .leading, spacing: 0) {
-            panelHeader(for: activePanel, group: group, destination: destination, activeTabSurface: panelSurface)
-                .frame(height: 36)
+            if isInlineToolbar {
+                HStack(spacing: 8) {
+                    panelTabStrip(group: group, activePanel: activePanel, destination: destination, activeTabSurface: panelSurface)
+                    tabContent(activePanel)
+                        .id(activePanel.id)
+                        .transaction { transaction in
+                            transaction.animation = nil
+                            transaction.disablesAnimations = true
+                        }
+                    Spacer(minLength: 0)
+                    panelHeaderActions(for: activePanel)
+                }
+                .frame(height: 42)
+                .padding(.trailing, 4)
                 .background(headerSurface)
-            if !isMinimized {
+            } else {
+                panelHeader(for: activePanel, group: group, destination: destination, activeTabSurface: panelSurface)
+                    .frame(height: 36)
+                    .background(headerSurface)
+            }
+            if !isMinimized && !isInlineToolbar {
                 tabContent(activePanel)
                     .id(activePanel.id)
                     .padding(.top, 10)
@@ -2142,6 +2174,10 @@ struct ContentView: View {
         }
     }
 
+    private func isToolbarPanel(_ panel: ControlTab) -> Bool {
+        panel == .toolbar || panel == .inkToolbar
+    }
+
     @ViewBuilder private func panelContextMenu(for panel: ControlTab, group: PanelGroup) -> some View {
         Button("Dock Left") { moveGroup(group, to: .left) }
         Button("Dock Right") { moveGroup(group, to: .right) }
@@ -2161,7 +2197,7 @@ struct ContentView: View {
     private func panelMinimumWidth(for destination: PanelDropDestination) -> CGFloat {
         switch destination {
         case .left, .right, .floating:
-            return 292
+            return 280
         case .top, .bottom:
             return 260
         }
@@ -2176,26 +2212,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             panelTabStrip(group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
             Spacer(minLength: 0)
-            if let visibility = panelVisibilityBinding(for: activePanel) {
-                Button {
-                    visibility.wrappedValue.toggle()
-                } label: {
-                    Image(systemName: visibility.wrappedValue ? "eye" : "eye.slash")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .frame(width: 34, height: 34)
-                .help(visibility.wrappedValue ? "Disable \(activePanel.rawValue)" : "Enable \(activePanel.rawValue)")
-            }
-            Button {
-                hidePanel(activePanel)
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .frame(width: 34, height: 34)
-            .help("Hide \(activePanel.rawValue)")
+            panelHeaderActions(for: activePanel)
         }
         .contentShape(Rectangle())
         .simultaneousGesture(
@@ -2226,6 +2243,31 @@ struct ContentView: View {
         )
     }
 
+    private func panelHeaderActions(for activePanel: ControlTab) -> some View {
+        HStack(spacing: 0) {
+            if let visibility = panelVisibilityBinding(for: activePanel) {
+                Button {
+                    visibility.wrappedValue.toggle()
+                } label: {
+                    Image(systemName: visibility.wrappedValue ? "eye" : "eye.slash")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .frame(width: 34, height: 34)
+                .help(visibility.wrappedValue ? "Disable \(activePanel.rawValue)" : "Enable \(activePanel.rawValue)")
+            }
+            Button {
+                hidePanel(activePanel)
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .frame(width: 34, height: 34)
+            .help("Hide \(activePanel.rawValue)")
+        }
+    }
+
     private func panelTabStrip(
         group: PanelGroup,
         activePanel: ControlTab,
@@ -2246,7 +2288,10 @@ struct ContentView: View {
         destination: PanelDropDestination,
         activeTabSurface: Color
     ) -> some View {
-        if group.panels.count == 1 || panel == activePanel {
+        if isToolbarPanel(panel) {
+            panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
+                .labelStyle(.iconOnly)
+        } else if group.panels.count == 1 || panel == activePanel {
             panelTabLabel(panel, group: group, activePanel: activePanel, destination: destination, activeTabSurface: activeTabSurface)
                 .labelStyle(.titleAndIcon)
         } else {
@@ -2279,7 +2324,7 @@ struct ContentView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Double-click to minimize \(panel.rawValue)")
+        .help(isToolbarPanel(panel) ? panel.rawValue : "Double-click to minimize \(panel.rawValue)")
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -2456,13 +2501,26 @@ struct ContentView: View {
         let workspace = model.settings.workspace
         let selected = workspace?.frame(id: workspace?.activeFrameID)
         HStack(spacing: 10) {
-            Picker("Tool", selection: workspaceToolBinding) {
-                ForEach(WorkspaceTool.allCases) { tool in
-                    Label(workspaceToolTitle(tool), systemImage: workspaceToolIcon(tool)).tag(tool)
+            HStack(spacing: 2) {
+                ForEach(workspaceToolbarTools) { tool in
+                    Button {
+                        workspaceToolBinding.wrappedValue = tool
+                    } label: {
+                        Image(systemName: workspaceToolIcon(tool))
+                            .frame(width: 28, height: 24)
+                            .background {
+                                if workspaceToolBinding.wrappedValue == tool {
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .fill(Color.secondary.opacity(0.24))
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .help(workspaceToolTitle(tool))
                 }
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 620)
+            .padding(2)
+            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
             Divider()
                 .frame(height: 24)
@@ -2529,6 +2587,10 @@ struct ContentView: View {
         }
         .controlSize(.small)
         .onAppear { model.ensureWorkspace() }
+    }
+
+    private var workspaceToolbarTools: [WorkspaceTool] {
+        [.select, .artboard, .pan, .transform, .crop, .mask]
     }
 
     // MARK: - Ink toolbar tab
@@ -2675,7 +2737,7 @@ struct ContentView: View {
         case .output: return "record.circle"
         case .layer: return "square.3.layers.3d"
         case .reference: return "photo"
-        case .preview: return "eye"
+        case .preview: return "rectangle.inset.filled"
         }
     }
 
@@ -2912,7 +2974,6 @@ struct ContentView: View {
 
     @ViewBuilder private var layersTab: some View {
         WorkspaceFrameStackEditor(model: model)
-            .help("Reorder, show/hide, transform, crop, and route artboard frames. Output-visible frames are rendered through the active output viewport.")
     }
 
     // (The legacy Background and Effect tabs are gone. v2: background is just a
@@ -3197,46 +3258,6 @@ struct ContentView: View {
                 .controlSize(.small)
             }
 
-            SectionHeader("Editor")
-            Picker("Tool", selection: $inkTool) {
-                ForEach(InkTool.allCases) { tool in
-                    Label(tool.rawValue, systemImage: tool.icon).tag(tool)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            HStack {
-                Button {
-                    clearInk()
-                } label: {
-                    Label("Clear", systemImage: "trash")
-                }
-                .help("Fade the canvas out (over Fade) then wipe it — committed paths, immediate marks, and fixed ink.")
-                Button {
-                    model.exportCurrentFrame()
-                } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                }
-                .help("Save the current frame as a PNG (also S).")
-                Button {
-                    deleteSelectedInk()
-                } label: {
-                    Label("Delete", systemImage: "delete.left")
-                }
-                .disabled(selectedInkPathID == nil)
-                Button {
-                    rerenderInk()
-                } label: {
-                    Label("Rerender", systemImage: "arrow.clockwise")
-                }
-                .disabled(inkStrokeRecords.isEmpty)
-                .help("Clear and re-simulate every committed stroke through its active render recipe.")
-                Text("\(inkStrokeRecords.count) strokes")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .controlSize(.small)
             Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
                 .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
             SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5,
@@ -3244,11 +3265,19 @@ struct ContentView: View {
                       toolbarDragProvider: { toolbarControlDragProvider(.smooth) })
 
             SectionHeader("Pen / Wash")
-            Picker("Mode", selection: inkModeBinding) {
-                ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
+            HStack(spacing: 12) {
+                Picker("Mode", selection: inkModeBinding) {
+                    ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .pickerStyle(.segmented)
+                .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
+
+                Picker("Ink", selection: inkKindBinding) {
+                    ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
+                }
+                .pickerStyle(.segmented)
+                .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
             }
-            .pickerStyle(.segmented)
-            .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
             // Ink + Wash colours on one row; the checkbox next to each toggles
             // "save stroke" for that tool (off = immediate: paints straight onto
             // the canvas without recording an editable path).
@@ -3271,11 +3300,6 @@ struct ContentView: View {
                         .help("Save wash stroke as an editable path. Off = immediate.")
                 }
             }
-            Picker("Ink", selection: inkKindBinding) {
-                ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
-            }
-            .pickerStyle(.segmented)
-            .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
             SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5,
                       hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.",
                       toolbarDragProvider: { toolbarControlDragProvider(.penSize) })
@@ -4580,6 +4604,25 @@ private extension SketchCamCore.BlendMode {
         case .luminosity: return "Luminosity"
         }
     }
+
+    var icon: String {
+        switch self {
+        case .normal: return "circle.lefthalf.filled"
+        case .multiply: return "multiply"
+        case .screen: return "circle.dashed"
+        case .add: return "plus"
+        case .overlay: return "square.on.circle"
+        case .darken: return "moon"
+        case .lighten: return "sun.max"
+        case .difference: return "circle.grid.cross"
+        case .subtract: return "minus"
+        case .softLight: return "sparkles"
+        case .hue: return "paintpalette"
+        case .saturation: return "drop.degreesign"
+        case .color: return "eyedropper"
+        case .luminosity: return "lightbulb"
+        }
+    }
 }
 
 private extension InkPaperCompositeMode {
@@ -5020,6 +5063,8 @@ private struct WorkspaceFrameStackEditor: View {
     @ObservedObject var model: SketchCamViewModel
     @State private var expanded: Set<UUID> = []
     @State private var draggedFrameID: UUID?
+    @State private var editingNameID: UUID?
+    @State private var editingNameText = ""
     @FocusState private var nameFocused: Bool
 
     private static let availableBlendModes: [SketchCamCore.BlendMode] = [
@@ -5047,50 +5092,97 @@ private struct WorkspaceFrameStackEditor: View {
                                 .frame(width: 16)
                         }
                         .buttonStyle(.borderless)
+                        .help(expanded.contains(frame.id) ? "Hide frame details" : "Show frame details")
 
                         Button { toggleVisible(frame.id) } label: {
                             Image(systemName: frame.visible ? "eye" : "eye.slash")
                                 .frame(width: 20)
                         }
                         .buttonStyle(.borderless)
+                        .help(frame.visible ? "Hide frame on artboard" : "Show frame on artboard")
 
-                        Label(frame.name, systemImage: icon(for: frame.role))
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(width: 98, alignment: .leading)
+                        Button {
+                            let current = includeBinding(frame.id).wrappedValue
+                            includeBinding(frame.id).wrappedValue = !current
+                        } label: {
+                            Image(systemName: includeBinding(frame.id).wrappedValue ? "rectangle.inset.filled" : "rectangle.dashed")
+                                .frame(width: 20)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(includeBinding(frame.id).wrappedValue ? "Exclude from output viewport render" : "Include in output viewport render")
 
-                        Menu(frame.role.rawValue.capitalized) {
+                        if editingNameID == frame.id {
+                            TextField("", text: $editingNameText)
+                                .textFieldStyle(.plain)
+                                .focused($nameFocused)
+                                .lineLimit(1)
+                                .frame(width: 82, alignment: .leading)
+                                .onSubmit { commitNameEdit(frame.id) }
+                                .onExitCommand { cancelNameEdit() }
+                                .help("Rename frame")
+                        } else {
+                            Text(frame.name)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(width: 82, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if NSEvent.modifierFlags.contains(.shift) {
+                                        beginNameEdit(frame)
+                                    } else {
+                                        select(frame.id)
+                                    }
+                                }
+                                .help("Frame name. Shift-click to rename.")
+                        }
+
+                        Menu {
                             ForEach(WorkspaceFrameRole.allCases) { role in
-                                Button(role.rawValue.capitalized) { setRole(frame.id, role) }
+                                Button {
+                                    setRole(frame.id, role)
+                                } label: {
+                                    Label(role.rawValue.capitalized, systemImage: icon(for: role))
+                                }
                             }
+                        } label: {
+                            Image(systemName: icon(for: frame.role))
+                                .frame(width: 20)
                         }
                         .menuStyle(.borderlessButton)
-                        .frame(width: 76, alignment: .leading)
+                        .menuIndicator(.hidden)
+                        .frame(width: 22)
+                        .help("Frame role: \(frame.role.rawValue.capitalized)")
 
-                        Toggle("", isOn: includeBinding(frame.id))
-                            .labelsHidden()
-                            .help("Include in output viewport render")
-
-                        Slider(value: opacity(frame.id), in: 0...1)
-                            .controlSize(.small)
-                            .frame(width: 58)
-
-                        Menu(frame.blend.title) {
+                        Menu {
                             ForEach(Self.availableBlendModes, id: \.self) { blend in
-                                Button(blend.title) { setBlend(frame.id, blend) }
+                                Button {
+                                    setBlend(frame.id, blend)
+                                } label: {
+                                    Label(blend.title, systemImage: blend.icon)
+                                }
                             }
+                        } label: {
+                            Image(systemName: frame.blend.icon)
+                                .frame(width: 20)
                         }
                         .menuStyle(.borderlessButton)
-                        .frame(width: 68, alignment: .leading)
+                        .menuIndicator(.hidden)
+                        .frame(width: 22)
+                        .help("Blend mode: \(frame.blend.title)")
 
                         Spacer(minLength: 0)
 
+                        Slider(value: opacity(frame.id), in: 0...1)
+                            .controlSize(.small)
+                            .frame(width: 50)
+                            .help("Frame opacity")
+
                         Button(role: .destructive) { delete(frame.id) } label: {
                             Image(systemName: "trash")
-                                .frame(width: 22)
+                                .frame(width: 20)
                         }
                         .buttonStyle(.borderless)
+                        .help("Delete frame")
                     }
                     .contentShape(Rectangle())
                     .padding(.horizontal, 4)
@@ -5225,7 +5317,7 @@ private struct WorkspaceFrameStackEditor: View {
         case .output: return "record.circle"
         case .layer: return "square.3.layers.3d"
         case .reference: return "photo"
-        case .preview: return "eye"
+        case .preview: return "rectangle.inset.filled"
         }
     }
 
@@ -5237,6 +5329,29 @@ private struct WorkspaceFrameStackEditor: View {
         model.ensureWorkspace()
         model.settings.workspace?.activeFrameID = id
         model.settings.workspace?.selectedFrameIDs = [id]
+    }
+
+    private func beginNameEdit(_ frame: WorkspaceFrame) {
+        select(frame.id)
+        editingNameID = frame.id
+        editingNameText = frame.name
+        DispatchQueue.main.async { nameFocused = true }
+    }
+
+    private func commitNameEdit(_ id: UUID) {
+        let trimmed = editingNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            mutateFrame(id) { $0.name = trimmed }
+        }
+        editingNameID = nil
+        editingNameText = ""
+        nameFocused = false
+    }
+
+    private func cancelNameEdit() {
+        editingNameID = nil
+        editingNameText = ""
+        nameFocused = false
     }
 
     private func mutateFrame(_ id: UUID, _ body: @escaping (inout WorkspaceFrame) -> Void) {
@@ -5608,14 +5723,21 @@ private struct LayerStackEditor: View {
                         Slider(value: opacity(layer.id), in: 0...1).controlSize(.small)
                             .frame(width: Self.opacitySliderWidth)
                             .help("Layer opacity")
-                        Menu(layer.blend.title) {
+                        Menu {
                             ForEach(Self.availableBlendModes, id: \.self) { blend in
-                                Button(blend.title) { setBlend(layer.id, blend) }
+                                Button {
+                                    setBlend(layer.id, blend)
+                                } label: {
+                                    Label(blend.title, systemImage: blend.icon)
+                                }
                             }
+                        } label: {
+                            Image(systemName: layer.blend.icon)
+                                .frame(width: 22)
                         }
                         .menuStyle(.borderlessButton)
-                        .frame(width: 68, alignment: .leading)
-                        .help("Layer blend mode")
+                        .frame(width: 24)
+                        .help("Layer blend mode: \(layer.blend.title)")
                         Spacer(minLength: 0)
                         Button(role: .destructive) { delete(layer.id) } label: {
                             Image(systemName: "trash")
@@ -6325,7 +6447,7 @@ private struct InkToolbarStrip: View {
         case .mode:
             buttonControl(control.compactTitle, value: mode.title) { mode = mode.toggled }
         case .inkKind:
-            buttonControl(control.compactTitle, value: inkKind.rawValue) { inkKind = inkKind.toggled }
+            buttonControl(control.compactTitle, value: inkKind.title) { inkKind = inkKind.toggled }
         case .hue:
             VStack(spacing: 5) {
                 Text(control.compactTitle)
