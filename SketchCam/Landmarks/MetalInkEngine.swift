@@ -6,6 +6,20 @@ import SketchCamCore
 import SketchCamShared
 import simd
 
+enum InkUndoPreferences {
+    static let gpuStateCountKey = "inkUndoGPUStateCount"
+    static let defaultGPUStateCount = 6
+    static let absoluteMaximumGPUStateCount = 4096
+
+    static var gpuStateCount: Int {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: gpuStateCountKey) != nil else {
+            return defaultGPUStateCount
+        }
+        return min(absoluteMaximumGPUStateCount, max(0, defaults.integer(forKey: gpuStateCountKey)))
+    }
+}
+
 final class MetalInkEngine {
     private static let dyeBase = 2048
     private static let simBase = 256
@@ -33,6 +47,25 @@ final class MetalInkEngine {
         var speed: Float
         var simPressure: Float
         var stirPhase: Float
+        var eventTime: Float
+        var penRadius: Float
+    }
+
+    /// Short interactive undo cache. These are canonical simulation fields,
+    /// not rendered images, so restoring one preserves fluid momentum and locks
+    /// without reenacting earlier washes. The bounded ring is intentionally a
+    /// bridge to sparse changed-tile deltas.
+    private struct StateSnapshot {
+        var paths: [InkEditorPath]
+        var velocity: MTLTexture
+        var pressure: MTLTexture
+        var ink: MTLTexture
+        var fixed: MTLTexture
+        var wet: MTLTexture
+        var locked: MTLTexture
+        var activeFramesRemaining: Int
+        var fixTimer: Float
+        var brushLift: Float
     }
 
     private struct SplatParams {
@@ -185,6 +218,8 @@ final class MetalInkEngine {
     private var lastClearFadeRevision = 0
     private var replayedPaths: [InkEditorPath] = []
     private var livePointerStates: [UUID: LivePointerState] = [:]
+    private var stateSnapshots: [StateSnapshot] = []
+    private var restoredStateThisFrame = false
     /// Strokes whose ink was injected live (already on the canvas); the
     /// committed path with the same id must NOT be replayed (avoids the double
     /// mark). Cleared on full rebuild/replay.
@@ -325,12 +360,14 @@ final class MetalInkEngine {
         lastClearFadeRevision = 0
         replayedPaths = []
         livePointerStates = [:]
+        stateSnapshots = []
+        restoredStateThisFrame = false
         bakedLiveIDs = []
         lastRenderSig = nil
         cachedImage = nil
     }
 
-    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [CGPoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
+    func layer(settings: ProcessingSettings, live: InkLiveStrokeSample?, livePoints: [InkLiveStrokePoint], endedLiveID: UUID?, outputSize requested: CGSize, frameIndex: Int, controlFields: ResolvedControlFields = .empty) -> CIImage? {
         self.controlFields = controlFields
         self.currentSettings = settings
         let l = settings.landmarks
@@ -391,11 +428,11 @@ final class MetalInkEngine {
         }
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return cachedImage }
+        restoredStateThisFrame = false
 
-        // A finished stroke's wet ink is already on the canvas (drawn live). On
-        // a reconcile (not a full rebuild) mark it baked BEFORE reconciling so
-        // the committed path with the same id is skipped — avoids the double
-        // mark. On a full rebuild the path is redrawn by replay instead.
+        // The live renderer and replay now consume the same canonical timed
+        // centerline. Keep the live pixels on mouse-up and merely adopt the
+        // matching action; rebuilding here caused the visible release jump.
         if let endedLiveID, !needRebuild {
             bakedLiveIDs.insert(endedLiveID)
         }
@@ -409,7 +446,7 @@ final class MetalInkEngine {
             livePointerStates = [:]
             rebuildKey = key
             lastFrameIndex = nil
-            activeFramesRemaining = replayablePaths.isEmpty ? 0 : 180
+            activeFramesRemaining = pathsNeedSimulation(replayablePaths, settings: settings) ? 180 : 0
         } else if pathsChanged && !clearFadeRequested && !clearFadeActive {
             reconcileCommittedPaths(replayablePaths, settings: settings, commandBuffer: commandBuffer)
         }
@@ -430,7 +467,10 @@ final class MetalInkEngine {
         // window length is the Fade duration (longer = the wash keeps drifting
         // and settling longer before it locks in).
         let fadeFrames = Int(fadeDuration * 60) + 30
-        if endedLiveID != nil {
+        let endedStrokeNeedsSimulation = endedLiveID.flatMap { id in
+            replayablePaths.first(where: { $0.id == id })?.brushMode
+        } == .brush
+        if endedStrokeNeedsSimulation {
             fixTimer = max(fixTimer, fadeDuration)
             activeFramesRemaining = max(activeFramesRemaining, fadeFrames)
         }
@@ -493,6 +533,7 @@ final class MetalInkEngine {
                 clearFade = max(0, clearFade - dt / fadeDuration)
                 if clearFade <= 0.001 {
                     clearAll(commandBuffer)
+                    stateSnapshots = []
                     bakedLiveIDs = []
                     livePointerStates = [:]
                     clearFadeActive = false
@@ -502,17 +543,24 @@ final class MetalInkEngine {
                 }
             }
             let liveActive = updateLiveStroke(live, points: livePoints, settings: settings, dt: dt, commandBuffer: commandBuffer)
-            if liveActive {
+            let liveNeedsSimulation = liveActive && live?.brushMode == .brush
+            if liveNeedsSimulation {
                 activeFramesRemaining = max(activeFramesRemaining, 120)
             }
             if motionWetDriven {
                 injectMotionWetness(amount: l.resolvedInkMotionWetness, commandBuffer: commandBuffer)
             }
-            if motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveActive {
+            if !restoredStateThisFrame && (motionDriven || motionWetDriven || activeFramesRemaining > 0 || liveNeedsSimulation) {
                 step(settings: settings, dt: dt, commandBuffer: commandBuffer)
                 activeFramesRemaining = max(0, activeFramesRemaining - 1)
             }
             lastFrameIndex = frameIndex
+        }
+        // Mouse-up adopts the live pixels as the canonical result. Snapshot
+        // that exact simulation state so redo restores it without compressing
+        // the gesture into a more forceful replay.
+        if endedLiveID != nil {
+            captureState(for: replayablePaths, commandBuffer: commandBuffer)
         }
         render(settings: settings, paperConfig: paperConfig, commandBuffer: commandBuffer)
         commandBuffer.commit()
@@ -528,6 +576,8 @@ final class MetalInkEngine {
     private func configure(width: Int, height: Int) -> Bool {
         let out = SIMD2(Int32(width), Int32(height))
         if outputSize == out, outputBuffer != nil, outputTexture != nil { return true }
+        stateSnapshots = []
+        restoredStateThisFrame = false
         outputSize = out
         let shortSide = max(1, min(width, height))
         let dyeScale = Float(min(Self.dyeBase, shortSide)) / Float(shortSide)
@@ -585,19 +635,117 @@ final class MetalInkEngine {
             .forEach { encodeClear($0, commandBuffer: commandBuffer) }
     }
 
+    private func captureState(for paths: [InkEditorPath], commandBuffer: MTLCommandBuffer) {
+        let requestedStateCount = InkUndoPreferences.gpuStateCount
+        guard requestedStateCount > 0 else {
+            stateSnapshots = []
+            return
+        }
+        guard let velocity = velocity?.read,
+              let pressure = pressure?.read,
+              let ink = ink?.read,
+              let fixed = fixed?.read,
+              let wet = wet?.read,
+              let locked,
+              let velocityCopy = makeTexture(width: velocity.width, height: velocity.height, format: velocity.pixelFormat),
+              let pressureCopy = makeTexture(width: pressure.width, height: pressure.height, format: pressure.pixelFormat),
+              let inkCopy = makeTexture(width: ink.width, height: ink.height, format: ink.pixelFormat),
+              let fixedCopy = makeTexture(width: fixed.width, height: fixed.height, format: fixed.pixelFormat),
+              let wetCopy = makeTexture(width: wet.width, height: wet.height, format: wet.pixelFormat),
+              let lockedCopy = makeTexture(width: locked.width, height: locked.height, format: locked.pixelFormat),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return }
+
+        // Metal uses unified memory on Apple silicon. Never retain snapshots
+        // beyond half of physical RAM even if a stale preference was written
+        // for a smaller output format.
+        let bytesPerState = ink.width * ink.height * 26 + velocity.width * velocity.height * 6
+        let memoryLimitedCount = max(1, Int((ProcessInfo.processInfo.physicalMemory / 2) / UInt64(bytesPerState)))
+        let maximumStateSnapshots = min(requestedStateCount, memoryLimitedCount)
+
+        copy(velocity, to: velocityCopy, using: blit)
+        copy(pressure, to: pressureCopy, using: blit)
+        copy(ink, to: inkCopy, using: blit)
+        copy(fixed, to: fixedCopy, using: blit)
+        copy(wet, to: wetCopy, using: blit)
+        copy(locked, to: lockedCopy, using: blit)
+        blit.endEncoding()
+
+        stateSnapshots.removeAll { $0.paths == paths }
+        stateSnapshots.append(StateSnapshot(
+            paths: paths,
+            velocity: velocityCopy,
+            pressure: pressureCopy,
+            ink: inkCopy,
+            fixed: fixedCopy,
+            wet: wetCopy,
+            locked: lockedCopy,
+            activeFramesRemaining: activeFramesRemaining,
+            fixTimer: fixTimer,
+            brushLift: brushLift
+        ))
+        if stateSnapshots.count > maximumStateSnapshots {
+            stateSnapshots.removeFirst(stateSnapshots.count - maximumStateSnapshots)
+        }
+    }
+
+    @discardableResult
+    private func restoreState(for paths: [InkEditorPath], commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let snapshot = stateSnapshots.last(where: { $0.paths == paths }),
+              let velocity, let pressure, let ink, let fixed, let wet, let locked,
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return false }
+
+        copy(snapshot.velocity, to: velocity.read, using: blit)
+        copy(snapshot.velocity, to: velocity.write, using: blit)
+        copy(snapshot.pressure, to: pressure.read, using: blit)
+        copy(snapshot.pressure, to: pressure.write, using: blit)
+        copy(snapshot.ink, to: ink.read, using: blit)
+        copy(snapshot.ink, to: ink.write, using: blit)
+        copy(snapshot.fixed, to: fixed.read, using: blit)
+        copy(snapshot.fixed, to: fixed.write, using: blit)
+        copy(snapshot.wet, to: wet.read, using: blit)
+        copy(snapshot.wet, to: wet.write, using: blit)
+        copy(snapshot.locked, to: locked, using: blit)
+        blit.endEncoding()
+
+        if let divergence { encodeClear(divergence, commandBuffer: commandBuffer) }
+        if let curl { encodeClear(curl, commandBuffer: commandBuffer) }
+        activeFramesRemaining = snapshot.activeFramesRemaining
+        fixTimer = snapshot.fixTimer
+        brushLift = snapshot.brushLift
+        brushNow = SIMD3(0, 0, 0)
+        livePointerStates = [:]
+        bakedLiveIDs = []
+        restoredStateThisFrame = true
+        return true
+    }
+
+    private func copy(_ source: MTLTexture, to destination: MTLTexture, using blit: MTLBlitCommandEncoder) {
+        blit.copy(from: source, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
+                  to: destination, destinationSlice: 0, destinationLevel: 0,
+                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+    }
+
     private func replay(paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard !paths.isEmpty else { return }
         brushLift = 0   // replayed/committed wash is additive, not destructive
         for (index, path) in paths.enumerated() {
             replay(path: path, index: index, settings: settings, commandBuffer: commandBuffer)
         }
-        for _ in 0..<6 {
-            step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+        if pathsNeedSimulation(paths, settings: settings) {
+            for _ in 0..<6 {
+                step(settings: settings, dt: 1.0 / 60.0, commandBuffer: commandBuffer)
+            }
         }
     }
 
     private func reconcileCommittedPaths(_ paths: [InkEditorPath], settings: ProcessingSettings, commandBuffer: MTLCommandBuffer) {
         guard paths != replayedPaths else { return }
+        if restoreState(for: paths, commandBuffer: commandBuffer) {
+            replayedPaths = paths
+            return
+        }
         if replayedPaths.isEmpty || isAppendOnly(previous: replayedPaths, next: paths) {
             let appended = paths.dropFirst(replayedPaths.count)
             for path in appended where path.points.count > 1 {
@@ -605,7 +753,9 @@ final class MetalInkEngine {
                 // double the mark. Replay only programmatic / loaded paths.
                 if bakedLiveIDs.contains(path.id) { continue }
                 replay(path: path, index: replayedPaths.count, settings: settings, commandBuffer: commandBuffer)
-                activeFramesRemaining = max(activeFramesRemaining, 90)
+                if pathNeedsSimulation(path, settings: settings) {
+                    activeFramesRemaining = max(activeFramesRemaining, 90)
+                }
             }
             replayedPaths = paths
             return
@@ -615,7 +765,15 @@ final class MetalInkEngine {
         replay(paths: paths, settings: settings, commandBuffer: commandBuffer)
         replayedPaths = paths
         livePointerStates = [:]
-        activeFramesRemaining = paths.isEmpty ? 0 : 180
+        activeFramesRemaining = pathsNeedSimulation(paths, settings: settings) ? 180 : 0
+    }
+
+    private func pathsNeedSimulation(_ paths: [InkEditorPath], settings: ProcessingSettings) -> Bool {
+        paths.contains { pathNeedsSimulation($0, settings: settings) }
+    }
+
+    private func pathNeedsSimulation(_ path: InkEditorPath, settings: ProcessingSettings) -> Bool {
+        (path.brushMode ?? settings.landmarks.inkBrushMode ?? .pen) == .brush
     }
 
     private func isAppendOnly(previous: [InkEditorPath], next: [InkEditorPath]) -> Bool {
@@ -634,33 +792,58 @@ final class MetalInkEngine {
         let flow = clamp01(path.flow ?? settings.landmarks.inkFlow)
         let brushInk = clamp01(path.brushInk ?? settings.landmarks.inkBrushInk ?? 0)
         let color = path.color ?? settings.landmarks.inkColor
-        let points = smoothed(points: path.points, fit: settings.landmarks.inkCurveFit)
-            .map { SIMD2<Float>(Float($0.x), Float($0.y)) }
-        guard points.count > 1 else { return }
+        let samples = deterministicReplaySamples(for: path, fit: settings.landmarks.inkCurveFit)
+        guard samples.count > 1 else { return }
 
-        var previous = points[0]
+        var previous = samples[0].point
+        var previousTime = samples[0].time
+        var replaySpeed: Float = 0
+        var replayPressure: Float = 0.35
+        var previousPenRadius: Float?
         var brushStepCounter = 0
-        for point in points.dropFirst() {
+        for sample in samples.dropFirst() {
+            let point = sample.point
             let delta = point - previous
             let dist = simd_length(delta)
             if dist <= 0.0001 {
                 previous = point
+                previousTime = sample.time
                 continue
             }
-            let pressure: Float = 0.45
-            let speed = min(dist * 60.0, 3.0)
+            let sampleDT = max(sample.time - previousTime, 1.0 / 240.0)
+            let instantaneousSpeed = dist / sampleDT
+            replaySpeed += (instantaneousSpeed - replaySpeed) * (1 - exp(-sampleDT * 10))
+            let speed = min(replaySpeed, 3.0)
+            let targetPressure = min(max(1.18 - replaySpeed * 0.95, 0.12), 1.0)
+            replayPressure += (targetPressure - replayPressure) * (1 - exp(-sampleDT * 6))
+            let pressure = replayPressure
             if mode == .pen {
                 let radius = penRadius(pressure: pressure, speed: speed, size: size)
                 let density = (0.55 + 1.05 * pressure) * min(max(1.25 - speed * 0.45, 0.6), 1.25)
                 let steps = min(max(1, Int(ceil(dist / max(radius * 0.6, 0.0008)))), 80)
+                var segmentStart = previous
+                var segmentRadius = previousPenRadius ?? radius
                 for i in 1...steps {
                     let t = Float(i) / Float(steps)
                     let p = previous + delta * t
-                    splat(texture: ink.read, point: p, radius: radius, color: inkColor(kind: kind, base: color, density: density), blend: .add, commandBuffer: commandBuffer)
+                    // Use the same max-blended capsule primitive as live pen
+                    // drawing.  The old replay path stamped additive Gaussian
+                    // discs, making every undo/redo visibly chunkier, darker,
+                    // and wider even though the centerline was unchanged.
+                    splatCapsule(texture: ink.read, a: segmentStart, b: p,
+                                 ra: segmentRadius, rb: radius,
+                                 color: inkColor(kind: kind, base: color, density: density),
+                                 blend: .max, commandBuffer: commandBuffer)
                     if i % 2 == 0 || steps == 1 {
-                        splat(texture: wet.read, point: p, radius: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
+                        splatCapsule(texture: wet.read, a: segmentStart, b: p,
+                                     ra: segmentRadius * 2.8, rb: radius * 2.8,
+                                     color: SIMD4<Float>(0.16, 0, 0, 0),
+                                     blend: .max, commandBuffer: commandBuffer)
                     }
+                    segmentStart = p
+                    segmentRadius = radius
                 }
+                previousPenRadius = radius
             } else {
                 let radius = brushRadius(pressure: pressure, speed: speed, size: size)
                 brushNow = SIMD3<Float>(point.x, point.y, radius)
@@ -686,12 +869,13 @@ final class MetalInkEngine {
                 }
             }
             previous = point
+            previousTime = sample.time
         }
         brushNow = SIMD3(0, 0, 0)
     }
 
     @discardableResult
-    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, points: [CGPoint], settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
+    private func updateLiveStroke(_ sample: InkLiveStrokeSample?, points: [InkLiveStrokePoint], settings: ProcessingSettings, dt: Float, commandBuffer: MTLCommandBuffer) -> Bool {
         guard let sample else {
             livePointerStates = [:]
             brushNow = SIMD3(0, 0, 0)
@@ -699,6 +883,9 @@ final class MetalInkEngine {
             return false
         }
         guard let ink, let wet, let velocity else { return false }
+        if livePointerStates[sample.id] == nil {
+            captureState(for: replayedPaths, commandBuffer: commandBuffer)
+        }
         // Mark this stroke baked-live as soon as it starts drawing (many frames
         // before it commits to inkPaths), so the committed path is never
         // replayed on top — race-free, unlike relying on the end signal.
@@ -738,7 +925,7 @@ final class MetalInkEngine {
         let smearThreshold: Float = 0.0008 + (1 - smear) * 0.010
         let velCap: Float = 240
 
-        let rawPoints = points.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
+        let rawPoints = points.map { SIMD2<Float>(Float($0.point.x), Float($0.point.y)) }
         let fallback = SIMD2<Float>(Float(sample.point.x), Float(sample.point.y))
 
         var state = livePointerStates[sample.id] ?? LivePointerState(
@@ -746,7 +933,9 @@ final class MetalInkEngine {
             by: rawPoints.first?.y ?? fallback.y,
             speed: 0,
             simPressure: 0.35,
-            stirPhase: Float(sample.id.hashValue & 0x3ff) * 0.0061359
+            stirPhase: Float(sample.seed & 0x3ff) * 0.0061359,
+            eventTime: Float(points.first?.time ?? sample.time),
+            penRadius: -1
         )
 
         let smoothing = clamp01(max(settings.landmarks.inkSmoothing, sample.smoothBoost ? 0.85 : 0))
@@ -829,53 +1018,33 @@ final class MetalInkEngine {
         }
 
         // --- PEN ---
-        // Build the trajectory to follow this frame: start at the brush's current
-        // (smoothed) position, then pass through every cursor sample. Seeding from
-        // the previous position is what keeps strokes smooth when frames are slow
-        // or irregular (over a session, or right after tab-in): a large gap
-        // between where the brush is and the new samples gets densely subdivided
-        // and smoothly followed, instead of collapsing to one long straight chord
-        // → polygonal, "choppy" strokes.
-        var anchors: [SIMD2<Float>] = [SIMD2<Float>(state.bx, state.by)]
-        anchors.append(contentsOf: rawPoints.isEmpty ? [fallback] : rawPoints)
-
-        let maxGap: Float = 0.01
-        var targets: [SIMD2<Float>] = []
-        targets.reserveCapacity(anchors.count * 2)
-        for i in 1..<anchors.count {
-            let a = anchors[i - 1], b = anchors[i]
-            let seg = simd_length(b - a)
-            let n = max(1, min(64, Int(ceil(seg / maxGap))))
-            for j in 1...n { targets.append(a + (b - a) * (Float(j) / Float(n))) }
+        // The UI supplies the one canonical, timestamped centerline. Draw those
+        // samples directly: frame batching must not add a second positional
+        // filter, otherwise the live brush lags/cuts corners and mouse-up jumps
+        // to a differently fitted path. Capsules cover long event gaps without
+        // needing frame-dependent subdivision.
+        guard !points.isEmpty else {
+            livePointerStates = [sample.id: state]
+            return true
         }
-        if targets.isEmpty { targets = [anchors[0]] }
-
-        let subDt = dt / Float(targets.count)
-        let k = 1 - exp(-subDt * followRate)
-
-        // Width / pressure are updated PER SUBSTEP along the (densely subdivided,
-        // seeded-from-the-brush) smoothed trajectory. Because the substeps span the
-        // whole frame's motion, per-substep speed equals the true cursor speed
-        // regardless of substep count or frame rate — and updating per substep
-        // keeps the stroke width CONTINUOUS. (Computing it once per frame makes the
-        // width step in visible lumps where the value jumps between frames.)
-        let speedAlpha = 1 - exp(-subDt * 10)
-        let pressureAlpha = 1 - exp(-subDt * 6)
         brushNow = SIMD3(0, 0, 0)
-        var prevInkRadius: Float = -1
-
-        for target in targets {
+        for event in points {
+            let target = SIMD2<Float>(Float(event.point.x), Float(event.point.y))
             let previous = SIMD2<Float>(state.bx, state.by)
-            state.bx += (target.x - state.bx) * k
-            state.by += (target.y - state.by) * k
+            state.bx = target.x
+            state.by = target.y
             let current = SIMD2<Float>(state.bx, state.by)
             let delta = current - previous
             let dist = simd_length(delta)
+            let eventTime = Float(event.time)
+            let eventDT = max(eventTime - state.eventTime, 1.0 / 240.0)
+            state.eventTime = eventTime
+            guard dist > 0.000_001 else { continue }
 
-            let inst = dist / max(subDt, 0.0001)
-            state.speed += (inst - state.speed) * speedAlpha
+            let inst = dist / eventDT
+            state.speed += (inst - state.speed) * (1 - exp(-eventDT * 10))
             let targetPressure = min(max(1.18 - state.speed * 0.95, 0.12), 1.0)
-            state.simPressure += (targetPressure - state.simPressure) * pressureAlpha
+            state.simPressure += (targetPressure - state.simPressure) * (1 - exp(-eventDT * 6))
             let pressure = state.simPressure
             let speed = state.speed
             let radius = penRadius(pressure: pressure, speed: speed, size: size)
@@ -884,10 +1053,10 @@ final class MetalInkEngine {
             // Lay the stroke as a ribbon: one variable-width capsule per centerline
             // step, max-blended so the union is smooth (no bead/"salami" from
             // overlapping additive discs). The first step has no prior radius.
-            let rPrev = prevInkRadius < 0 ? radius : prevInkRadius
+            let rPrev = state.penRadius < 0 ? radius : state.penRadius
             splatCapsule(texture: ink.read, a: previous, b: current, ra: rPrev, rb: radius, color: inkColor(kind: kind, base: color, density: penDensity), blend: .max, commandBuffer: commandBuffer)
             splatCapsule(texture: wet.read, a: previous, b: current, ra: rPrev * 2.8, rb: radius * 2.8, color: SIMD4<Float>(0.16, 0, 0, 0), blend: .max, commandBuffer: commandBuffer)
-            prevInkRadius = radius
+            state.penRadius = radius
         }
 
         livePointerStates = [sample.id: state]
@@ -1108,6 +1277,54 @@ final class MetalInkEngine {
     private func smoothed(points: [CGPoint], fit: CurveFit) -> [CGPoint] {
         guard points.count > 2 else { return points }
         return DrawingSupport.curvePoints(points, fit: fit, samplesPerSegment: 6)
+    }
+
+    /// Produces a deterministic fitted centerline while carrying the recorded
+    /// time-to-arc-length profile onto the fitted samples.  Curve fitting may
+    /// add points, so indexing the original times directly would change speed
+    /// (and therefore width) after every rebuild.
+    private func deterministicReplaySamples(for path: InkEditorPath, fit: CurveFit) -> [(point: SIMD2<Float>, time: Float)] {
+        let raw = path.points
+        guard raw.count > 1 else { return raw.map { (SIMD2(Float($0.x), Float($0.y)), 0) } }
+        let recorded = path.sampleTimes
+        // New gestures already contain the exact deterministic centerline drawn
+        // live. Legacy geometry-only paths retain their historical curve fit.
+        let fitted = recorded?.count == raw.count ? raw : smoothed(points: raw, fit: fit)
+        let times: [Double]
+        if let recorded, recorded.count == raw.count,
+           zip(recorded, recorded.dropFirst()).allSatisfy({ $0.0 <= $0.1 }) {
+            times = recorded
+        } else {
+            // Legacy paths had geometry only.  Their cadence is explicitly an
+            // estimate, but remains stable across all subsequent replays.
+            times = raw.indices.map { Double($0) / 60.0 }
+        }
+
+        func cumulativeLengths(_ points: [CGPoint]) -> [Double] {
+            guard !points.isEmpty else { return [] }
+            var result = [Double](repeating: 0, count: points.count)
+            for index in 1..<points.count {
+                result[index] = result[index - 1] + hypot(points[index].x - points[index - 1].x,
+                                                          points[index].y - points[index - 1].y)
+            }
+            return result
+        }
+
+        let rawArc = cumulativeLengths(raw)
+        let fittedArc = cumulativeLengths(fitted)
+        let rawTotal = max(rawArc.last ?? 0, 0.000_001)
+        let fittedTotal = max(fittedArc.last ?? 0, 0.000_001)
+        var rawIndex = 1
+        return fitted.indices.map { index in
+            let targetArc = fittedArc[index] / fittedTotal * rawTotal
+            while rawIndex < rawArc.count - 1, rawArc[rawIndex] < targetArc { rawIndex += 1 }
+            let lower = max(0, rawIndex - 1)
+            let span = max(rawArc[rawIndex] - rawArc[lower], 0.000_001)
+            let fraction = min(1, max(0, (targetArc - rawArc[lower]) / span))
+            let time = times[lower] + (times[rawIndex] - times[lower]) * fraction
+            let point = fitted[index]
+            return (SIMD2<Float>(Float(point.x), Float(point.y)), Float(time))
+        }
     }
 
     private var aspect: Float {

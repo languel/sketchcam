@@ -61,7 +61,7 @@ final class LayerGraphTests: XCTestCase {
         let kinds: [NodeKind] = [.video, .movie, .solid(SolidConfig()), .paper(PaperConfig()), .personMatte,
                                  .effect, .marks,
                                  .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk),
-                                 .ink, .web]
+                                 .ink, .web, .image(WorkspaceImageConfig(urlString: "/tmp/reference.png"))]
         for kind in kinds {
             XCTAssertEqual(kind.ports.count, kind.defaultBindings.count,
                            "ports and defaultBindings must align for \(kind)")
@@ -303,6 +303,26 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertNoThrow(try r.validate())
         XCTAssertTrue(r.layers.contains { $0.id == g.layers.last!.id }, "user solid preserved")
         XCTAssertTrue(r.layers.contains { r.node($0.node)?.kind.family == "web" }, "new web added")
+    }
+
+    func testReconcileDoesNotAddManagedInkWhenUserInkExists() throws {
+        var s = ProcessingSettings()
+        s.landmarks.inkEnabled = true
+        let camera = Node(name: "Camera", kind: .video)
+        let ink1 = Node(name: "Ink 1", kind: .ink, managed: false)
+        let ink2 = Node(name: "Ink 2", kind: .ink, managed: false)
+        let g = LayerGraph(
+            nodes: [camera, ink1, ink2],
+            layers: [Layer(node: camera.id), Layer(node: ink1.id), Layer(node: ink2.id)]
+        )
+
+        let r = g.reconciled(with: s)
+
+        XCTAssertNoThrow(try r.validate())
+        let inkNodes = r.nodes.filter { $0.kind.family == "ink" }
+        XCTAssertEqual(inkNodes.count, 2)
+        XCTAssertTrue(inkNodes.allSatisfy { !$0.managed })
+        XCTAssertEqual(Set(inkNodes.map(\.name)), ["Ink 1", "Ink 2"])
     }
 
     func testReconcileAppendsNewlyEnabledFeature() throws {

@@ -157,6 +157,33 @@ lifting. A wash can always make its footprint wet and lift settled pigment. A
 future independent wet-grip/rewet-resistance control could reuse the cached
 paper maps without adding another renderer.
 
+## Gesture history and exact physical undo
+
+Completed pen and wash gestures are stored as canonical timestamped actions.
+Their captured timing preserves the speed-derived width and force profile used
+while drawing. The action log remains the semantic source for future path and
+gesture editing.
+
+Replaying a fluid gesture is not, by itself, an exact undo mechanism: wash
+forces are injected over real display frames while drawing, whereas a replay
+necessarily compresses that interaction into a different solver schedule.
+SketchCam therefore retains a bounded ring of complete Metal simulation states
+at action boundaries. Each state contains mobile pigment, fixed pigment,
+wetness, velocity, pressure, and locked pigment. Undo and redo restore these
+fields directly when a matching state is available; older actions fall back to
+deterministic replay.
+
+**Settings → Ink Undo → GPU states** controls the ring depth. The UI estimates
+memory from the active output format. Apple silicon uses unified memory, so the
+ring is capped at 50% of physical RAM and warns above 25%. Zero disables exact
+state retention. Changing the value affects newly captured gestures.
+
+The longer-term action-checkpoint service should also support temporary sparse
+states on disk. Those recoverable simulation checkpoints are distinct from
+flattened timelapse frames, but both should share the same action index and
+auto-frame-on-action event. Temporary checkpoint storage must be removed when
+the application exits.
+
 **Live surface** is separate from procedural paper. It uses optical-flow
 magnitude from a changing routed Ink texture input. With **Internal paper** and
 no routed texture, it has no live signal and should be left at zero.
@@ -186,3 +213,6 @@ Canvas-state shortcuts are:
 - `Shift-Option-F`: Unfix
 - `Control-Option-W`: Wet Canvas
 - `Shift-Option-W`: Dry Canvas
+- `Command-Z`: undo the last canvas action
+- `Command-Shift-Z`: redo the last canvas action
+- `Command-Shift-R`: redo the last canvas action (future repeat-action/macro key)

@@ -93,8 +93,8 @@ public enum InkKind: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var title: String {
         switch self {
-        case .black: return "Color"     // chromatic ink (uses the Ink colour)
-        case .white: return "Dissolve"  // opaque white pigment — covers / erases / clears
+        case .black: return "Mark"      // chromatic ink (uses the Ink colour)
+        case .white: return "Erase"     // opaque white pigment — covers / erases / clears
         }
     }
 
@@ -111,6 +111,13 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     /// Points are normalized to the output canvas (0...1), so editor strokes
     /// survive output-size changes.
     public var points: [CGPoint]
+    /// Seconds relative to the first sample.  Older paths decode as nil and use
+    /// an estimated uniform cadence.  Keeping the time profile is what lets a
+    /// replay preserve the speed/pressure character of the original gesture.
+    public var sampleTimes: [TimeInterval]?
+    /// Seed captured when the gesture begins. Any intentional rendering
+    /// variation must derive from this value, never process-global randomness.
+    public var strokeSeed: UInt64?
     /// Optional metadata keeps old saved paths valid; nil means the current
     /// inkwash defaults: black pen with the live controls.
     public var brushMode: InkBrushMode?
@@ -126,6 +133,8 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     public init(
         id: UUID = UUID(),
         points: [CGPoint],
+        sampleTimes: [TimeInterval]? = nil,
+        strokeSeed: UInt64? = nil,
         brushMode: InkBrushMode? = nil,
         inkKind: InkKind? = nil,
         width: Float? = nil,
@@ -138,6 +147,8 @@ public struct InkEditorPath: Equatable, Sendable, Codable, Identifiable {
     ) {
         self.id = id
         self.points = points
+        self.sampleTimes = sampleTimes
+        self.strokeSeed = strokeSeed
         self.brushMode = brushMode
         self.inkKind = inkKind
         self.width = width
@@ -261,6 +272,9 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// the default graph from the feature flags. The compositor reconciles it
     /// against the current flags each frame.
     public var layerGraph: LayerGraph?
+    /// Collage workspace/artboard state. Nil means this preset predates the
+    /// workspace model and resolves to an identity workspace at runtime.
+    public var workspace: CollageWorkspace?
     /// Typed scalar/vector providers and routes used by material simulations.
     /// Nil preserves projects saved before control fields existed.
     public var controlFields: ControlFieldGraph?
@@ -275,6 +289,9 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// Display the preview via a zero-readback Metal layer (AVSampleBufferDisplayLayer)
     /// instead of a per-frame CGImage readback. The "full-tilt" display path.
     public var useMetalPreview: Bool
+    /// Nil means default to dragging the visible artboard with the two-finger
+    /// gesture. False preserves the older viewport-opposite scroll direction.
+    public var artboardDragCanvasWithScroll: Bool?
     public var processingQuality: ProcessingQuality
     public var landmarks: LandmarkSettings
     public var web: WebLayerSettings
@@ -299,10 +316,12 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewEnabled: Bool = true,
         useLayerGraph: Bool = true,
         layerGraph: LayerGraph? = nil,
+        workspace: CollageWorkspace? = nil,
         controlFields: ControlFieldGraph? = nil,
         useGPUCompositor: Bool = true,
         previewFPS: Double = 0,
         useMetalPreview: Bool = true,
+        artboardDragCanvasWithScroll: Bool? = nil,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings(),
         web: WebLayerSettings = WebLayerSettings()
@@ -326,21 +345,26 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewEnabled = previewEnabled
         self.useLayerGraph = useLayerGraph
         self.layerGraph = layerGraph
+        self.workspace = workspace
         self.controlFields = controlFields
         self.useGPUCompositor = useGPUCompositor
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
+        self.artboardDragCanvasWithScroll = artboardDragCanvasWithScroll
         self.processingQuality = processingQuality
         self.landmarks = landmarks
         self.web = web
     }
 
+    public var resolvedArtboardDragCanvasWithScroll: Bool {
+        artboardDragCanvasWithScroll ?? true
+    }
+
     public var resolvedControlFields: ControlFieldGraph {
         var graph = controlFields ?? .empty
-        if landmarks.resolvedInkPaperInfluence > 0 {
-            graph = graph.addingDefaultInkPaperRoutes()
-        }
-        if landmarks.resolvedInkLiveSurfaceInfluence > 0 || landmarks.resolvedInkMotionForce > 0 || landmarks.resolvedInkMotionWetness > 0 {
+        if landmarks.inkDynamicInput != nil,
+           landmarks.inkDynamicInput != .none,
+           landmarks.resolvedInkLiveSurfaceInfluence > 0 || landmarks.resolvedInkMotionForce > 0 || landmarks.resolvedInkMotionWetness > 0 {
             graph = graph.addingDefaultInkMotionRoutes()
         }
         return graph
@@ -494,6 +518,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
     public var inkPaths: [InkEditorPath]
+    /// New stroke model: captured gesture data + active render recipe. Nil
+    /// means this preset predates the split and should be migrated from
+    /// `inkPaths` at runtime.
+    public var inkStrokeRecords: [InkStrokeRecord]?
     public var inkColor: RGBAColor
     /// Tint the wet wash leaves on the paper (the wet field's transmission
     /// colour). Default ≈ light blue-grey reproduces the built-in look; pick a
@@ -520,6 +548,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var inkPaperConfig: PaperConfig?
     /// How cached procedural paper combines with a routed Ink substrate.
     public var inkPaperCompositeMode: InkPaperCompositeMode?
+    /// Optional dynamic pixel input for motion/wetness control fields. Nil
+    /// preserves legacy behavior by following the Ink node's surface input.
+    public var inkDynamicInput: PortBinding?
     public var inkPaperInfluence: Float?
     public var inkLiveSurfaceInfluence: Float?
     public var inkMotionForce: Float?
@@ -670,6 +701,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
         inkPaths: [InkEditorPath] = [],
+        inkStrokeRecords: [InkStrokeRecord]? = nil,
         inkColor: RGBAColor = .ink,
         inkWashColor: RGBAColor? = RGBAColor(red: 0.84, green: 0.85, blue: 0.89),
         inkWidth: Float = 0.5,
@@ -684,6 +716,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         inkPaperGrain: Float = 0.45,
         inkPaperConfig: PaperConfig? = .metalDefault,
         inkPaperCompositeMode: InkPaperCompositeMode? = .multiply,
+        inkDynamicInput: PortBinding? = nil,
         inkPaperInfluence: Float? = 0,
         inkLiveSurfaceInfluence: Float? = 0,
         inkMotionForce: Float? = 0,
@@ -801,6 +834,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
         self.inkPaths = inkPaths
+        self.inkStrokeRecords = inkStrokeRecords
         self.inkColor = inkColor
         self.inkWashColor = inkWashColor
         self.inkWidth = inkWidth
@@ -815,6 +849,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.inkPaperGrain = inkPaperGrain
         self.inkPaperConfig = inkPaperConfig
         self.inkPaperCompositeMode = inkPaperCompositeMode
+        self.inkDynamicInput = inkDynamicInput
         self.inkPaperInfluence = inkPaperInfluence
         self.inkLiveSurfaceInfluence = inkLiveSurfaceInfluence
         self.inkMotionForce = inkMotionForce

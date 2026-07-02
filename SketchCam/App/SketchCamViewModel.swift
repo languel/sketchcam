@@ -67,7 +67,12 @@ final class SketchCamViewModel: ObservableObject {
         didSet { store.settings = settings }
     }
     @Published var outputFormat = SketchCamFormats.defaultFormat {
-        didSet { store.outputFormat = outputFormat }
+        didSet {
+            store.outputFormat = outputFormat
+            if settings.workspace != nil {
+                settings.workspace?.outputViewport.frame.size = outputFormat.size
+            }
+        }
     }
     /// High-frequency live readouts (preview image + per-stage stats) live on a
     /// SEPARATE observable so their ~4 Hz updates don't fire the view model's
@@ -75,6 +80,7 @@ final class SketchCamViewModel: ObservableObject {
     /// SwiftUI Picker tag projections / Observation registrars on every pass).
     /// Only the small views that show them observe this store.
     let live = LiveReadouts()
+    let exporter = OutputStreamExporter()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -94,6 +100,9 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     /// Zero-readback display path (the preview pane / presentation output).
     let previewDisplay = SampleBufferDisplayController()
+    /// Secondary monitor/projection window display. It receives the same
+    /// published pixel buffer as the main preview, never a second render.
+    let secondaryOutputDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
@@ -103,10 +112,16 @@ final class SketchCamViewModel: ObservableObject {
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
+    private let canvasActions = CanvasActionHistory()
+    @Published private(set) var canvasHistoryRevision = 0
+    private var workspaceUndoStack: [CollageWorkspace] = []
+    private var workspaceRedoStack: [CollageWorkspace] = []
+    private var workspaceLiveEditBaseline: CollageWorkspace?
     private let webController = WebLayerController()
     private var lastWebSettings: WebLayerSettings?
     private var lastWebOutputSize: CGSize = .zero
     private var webPickedURLs: [URL] = []   // retained to keep sandbox grants alive
+    private var imageCache: [String: CIImage] = [:]
     private let segmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
@@ -152,6 +167,18 @@ final class SketchCamViewModel: ObservableObject {
         }
         movieSource.onPixelBuffer = { [weak self] pixelBuffer in
             self?.handleMovieFrame(pixelBuffer)
+        }
+        exporter.onAcceptedFrame = { [weak self] _ in
+            guard let self, self.frameSource == .movie else { return }
+            let config = self.exporter.configuration
+            let seconds = config.sourceAdvanceSeconds + Double(config.sourceAdvanceFrames) / 30.0
+            if seconds > 0, !self.movieSource.step(seconds: seconds, loop: config.loopSource) {
+                self.exporter.stop()
+            }
+        }
+        exporter.sourceTimeProvider = { [weak self] in
+            guard let self, self.frameSource == .movie else { return nil }
+            return self.movieSource.currentTimeSeconds
         }
     }
 
@@ -219,8 +246,7 @@ final class SketchCamViewModel: ObservableObject {
         }
     }
 
-    /// Export the most recently published frame (full output resolution,
-    /// PNG with alpha) via a save panel.
+    /// Export the most recently published frame using the Export panel's still settings.
     func exportCurrentFrame() {
         let frame = exportLock.withLock { lastPublishedFrame }
         guard let frame else {
@@ -228,31 +254,53 @@ final class SketchCamViewModel: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        let format = exporter.configuration.imageFormat
+        panel.allowedContentTypes = [Self.contentType(for: format)]
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        panel.nameFieldStringValue = "sketchcam-\(stamp).png"
+        panel.nameFieldStringValue = "sketchcam-\(stamp).\(format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        exporter.exportCurrent(frame, to: url)
+    }
 
-        let image = CIImage(cvPixelBuffer: frame)
-        guard let cgImage = Self.sharedCIContext.createCGImage(
-            image,
-            from: image.extent,
-            format: .BGRA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        ) else {
-            errorText = "Could not render export image."
+    func chooseExportDestination() {
+        let config = exporter.configuration
+        if config.outputKind == .imageSequence {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.canCreateDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Choose"
+            if panel.runModal() == .OK { exporter.destinationURL = panel.url }
             return
         }
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = rep.representation(using: .png, properties: [:]) else {
-            errorText = "Could not encode PNG."
-            return
+
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        switch config.outputKind {
+        case .still:
+            panel.allowedContentTypes = [Self.contentType(for: config.imageFormat)]
+        case .gif:
+            panel.allowedContentTypes = [.gif]
+        case .movie:
+            panel.allowedContentTypes = [config.container == .mp4 ? .mpeg4Movie : .quickTimeMovie]
+        case .imageSequence:
+            break
         }
-        do {
-            try data.write(to: url)
-        } catch {
-            errorText = "Export failed: \(error.localizedDescription)"
+        let suffix = exporter.expectedFileExtension(config)
+        panel.nameFieldStringValue = suffix.isEmpty ? config.takeName : "\(config.takeName).\(suffix)"
+        if panel.runModal() == .OK {
+            exporter.destinationURL = panel.url
+        }
+    }
+
+    private static func contentType(for format: ExportImageFormat) -> UTType {
+        switch format {
+        case .png: .png
+        case .tiff: .tiff
+        case .jpeg: .jpeg
+        case .heif: .heic
         }
     }
 
@@ -277,6 +325,206 @@ final class SketchCamViewModel: ObservableObject {
     func updateInkLiveStroke(_ sample: InkLiveStrokeSample) { inkLiveStroke.update(sample) }
     func endInkLiveStroke() { inkLiveStroke.end() }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
+
+    func prepareInkStrokeRecordsForCurrentSettings() {
+        let records = resolvedInkStrokeRecords()
+        settings.landmarks.inkStrokeRecords = records
+        settings.landmarks.inkPaths = records.filter(\.isEditable).map(\.renderPath)
+        canvasActions.replaceAll(records)
+        canvasHistoryRevision &+= 1
+    }
+
+    func commitImmediateCanvasStroke(_ path: InkEditorPath) {
+        commitImmediateCanvasStroke(InkStrokeRecord.legacy(path: path, isEditable: false, fallbackSmoothing: settings.landmarks.inkSmoothing))
+    }
+
+    func commitImmediateCanvasStroke(_ record: InkStrokeRecord) {
+        var immediate = record
+        immediate.isEditable = false
+        canvasActions.commitImmediate(immediate)
+        exporter.signal(.anyCanvasAction, actionID: immediate.id)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func commitEditableCanvasStroke(_ record: InkStrokeRecord) {
+        var editable = record
+        editable.isEditable = true
+        canvasActions.commit(editable)
+        exporter.signal(.anyCanvasAction, actionID: editable.id)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func replaceEditableCanvasRecords(_ records: [InkStrokeRecord]) {
+        canvasActions.replaceEditableRecords(records)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func replaceEditableCanvasPaths(_ paths: [InkEditorPath]) {
+        let existing = Dictionary(uniqueKeysWithValues: resolvedInkStrokeRecords().map { ($0.id, $0) })
+        let records = paths.map { path in
+            if let record = existing[path.id] {
+                var updated = record.updatingRenderPath(path)
+                updated.isEditable = true
+                return updated
+            }
+            return InkStrokeRecord.legacy(path: path, isEditable: true, fallbackSmoothing: settings.landmarks.inkSmoothing)
+        }
+        replaceEditableCanvasRecords(records)
+    }
+
+    var canUndoCanvasAction: Bool { canvasActions.canUndo() }
+    var canRedoCanvasAction: Bool { canvasActions.canRedo() }
+
+    @discardableResult
+    func undoCanvasAction() -> CanvasStrokeAction? {
+        cancelInkLiveStroke()
+        let action = canvasActions.undo()
+        if action != nil {
+            exporter.signal(.anyCanvasAction, actionID: action?.id)
+            syncSettingsFromCanvasActions()
+            canvasHistoryRevision &+= 1
+        }
+        return action
+    }
+
+    @discardableResult
+    func redoCanvasAction() -> CanvasStrokeAction? {
+        cancelInkLiveStroke()
+        let action = canvasActions.redo()
+        if action != nil {
+            exporter.signal(.anyCanvasAction, actionID: action?.id)
+            syncSettingsFromCanvasActions()
+            canvasHistoryRevision &+= 1
+        }
+        return action
+    }
+
+    func clearCanvasActions() {
+        cancelInkLiveStroke()
+        canvasActions.clear()
+        exporter.signal(.anyCanvasAction)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func clearCanvasActions(frameID: UUID?, includeUntagged: Bool = false) {
+        cancelInkLiveStroke()
+        canvasActions.clear(frameID: frameID, includeUntagged: includeUntagged)
+        exporter.signal(.anyCanvasAction)
+        syncSettingsFromCanvasActions()
+        canvasHistoryRevision &+= 1
+    }
+
+    func ensureWorkspace() {
+        guard settings.workspace == nil else { return }
+        settings.workspace = settings.resolvedWorkspace(outputSize: outputFormat.size, formatID: outputFormat.id)
+    }
+
+    func reconcileWorkspaceWithGraph() {
+        let graph = (settings.layerGraph ?? LayerGraph.defaultGraph(from: settings)).reconciled(with: settings)
+        settings.layerGraph = graph
+        var workspace = settings.workspace ?? CollageWorkspace.defaultWorkspace(
+            graph: graph,
+            outputSize: outputFormat.size,
+            formatID: outputFormat.id
+        )
+        workspace.outputViewport.frame.size = outputFormat.size
+        let defaults = CollageWorkspace.defaultWorkspace(graph: graph, outputSize: outputFormat.size, formatID: outputFormat.id)
+        let defaultByLayerID = Dictionary(uniqueKeysWithValues: defaults.frames.compactMap { frame -> (UUID, WorkspaceFrame)? in
+            guard case .layer(let id) = frame.material else { return nil }
+            return (id, frame)
+        })
+        let existingByLayerID = Dictionary(uniqueKeysWithValues: workspace.frames.compactMap { frame -> (UUID, WorkspaceFrame)? in
+            guard case .layer(let id) = frame.material else { return nil }
+            return (id, frame)
+        })
+        let graphLayerIDs = Set(graph.layers.map(\.id))
+        let nonGraphFrames = workspace.frames.filter { frame in
+            guard case .layer(let id) = frame.material else { return true }
+            return !graphLayerIDs.contains(id)
+        }
+        let graphFrames = graph.layers.compactMap { layer -> WorkspaceFrame? in
+            guard var frame = existingByLayerID[layer.id] ?? defaultByLayerID[layer.id],
+                  let node = graph.node(layer.node) else { return nil }
+            frame.name = node.name
+            frame.material = .layer(layer.id)
+            if node.kind.family == "ink" {
+                frame.bleed = 0
+            }
+            return frame
+        }
+        workspace.frames = graphFrames + nonGraphFrames
+        if workspace.activeFrameID == nil || workspace.frame(id: workspace.activeFrameID) == nil {
+            workspace.activeFrameID = workspace.frames.first?.id
+            workspace.selectedFrameIDs = workspace.activeFrameID.map { [$0] } ?? []
+        }
+        settings.workspace = workspace
+    }
+
+    func mutateWorkspace(_ body: (inout CollageWorkspace) -> Void) {
+        ensureWorkspace()
+        guard var workspace = settings.workspace else { return }
+        workspaceUndoStack.append(workspace)
+        workspaceRedoStack.removeAll()
+        body(&workspace)
+        if workspace.containsRenderRouteCycle() {
+            _ = workspaceUndoStack.popLast()
+            return
+        }
+        settings.workspace = workspace
+    }
+
+    func beginWorkspaceLiveEdit() {
+        ensureWorkspace()
+        guard workspaceLiveEditBaseline == nil else { return }
+        workspaceLiveEditBaseline = settings.workspace
+    }
+
+    func updateWorkspaceLiveEdit(_ body: (inout CollageWorkspace) -> Void) {
+        ensureWorkspace()
+        guard var workspace = settings.workspace else { return }
+        body(&workspace)
+        guard !workspace.containsRenderRouteCycle() else { return }
+        settings.workspace = workspace
+    }
+
+    func endWorkspaceLiveEdit(commit: Bool = true) {
+        guard let baseline = workspaceLiveEditBaseline else { return }
+        defer { workspaceLiveEditBaseline = nil }
+        guard commit, let current = settings.workspace, current != baseline else { return }
+        workspaceUndoStack.append(baseline)
+        workspaceRedoStack.removeAll()
+    }
+
+    var canUndoWorkspaceAction: Bool { !workspaceUndoStack.isEmpty }
+    var canRedoWorkspaceAction: Bool { !workspaceRedoStack.isEmpty }
+
+    func undoWorkspaceAction() {
+        guard let current = settings.workspace,
+              let previous = workspaceUndoStack.popLast() else { return }
+        workspaceRedoStack.append(current)
+        settings.workspace = previous
+    }
+
+    func redoWorkspaceAction() {
+        guard let current = settings.workspace,
+              let next = workspaceRedoStack.popLast() else { return }
+        workspaceUndoStack.append(current)
+        settings.workspace = next
+    }
+
+    private func resolvedInkStrokeRecords() -> [InkStrokeRecord] {
+        settings.landmarks.resolvedInkStrokeRecords()
+    }
+
+    private func syncSettingsFromCanvasActions() {
+        let records = canvasActions.records()
+        settings.landmarks.inkStrokeRecords = records
+        settings.landmarks.inkPaths = records.filter(\.isEditable).map(\.renderPath)
+    }
 
     // MARK: - Web layer controls (main thread)
 
@@ -552,57 +800,88 @@ final class SketchCamViewModel: ObservableObject {
                         outputSize: outputFormat.size
                     )
                 }()
-                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
-                let inkTexture = self.routedInkTexture(
-                    graph: graph,
-                    settings: settings,
-                    outputFormat: outputFormat,
-                    pixelBuffer: pixelBuffer,
-                    clockSource: clockSource,
-                    frameIndex: frameIndex,
-                    matte: matte,
-                    overlay: overlay,
-                    webLayer: webLayer
-                )
-                let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
-                let inkTextureBuffer = Self.controlGraphNeedsInkTexture(settings.resolvedControlFields)
-                    ? self.pixelBuffer(from: inkTexture, outputFormat: outputFormat)
-                    : nil
-                let controlFields = self.timings.measure(.controlFields) {
-                    self.controlFieldCoordinator?.update(
-                        graph: settings.resolvedControlFields,
-                        context: ControlFieldFrameContext(
-                            frameIndex: frameIndex,
-                            timestamp: timestamp,
-                            outputSize: outputFormat.size,
-                            cameraPixelBuffer: controlSources.camera,
-                            moviePixelBuffer: controlSources.movie,
-                            inkTexturePixelBuffer: inkTextureBuffer,
-                            detection: drawingDetection,
-                            settings: settings
-                        )
-                    ) ?? .empty
-                }
-                if let coordinator = self.controlFieldCoordinator {
-                    self.timings.record(.motion, seconds: coordinator.lastMotionSeconds)
-                    self.timings.record(.paperFields, seconds: coordinator.lastPaperSeconds)
-                }
                 // The inkwash engine runs synchronously (Metal commit +
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
                 // up buried in "Frame total".
+                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 let liveInk = self.inkLiveStroke.consume()
+                let inkEntries = self.inkLayerEntries(graph: graph)
+                let activeInkFrameID = self.activeInkFrameID(graph: graph, settings: settings)
+                let defaultInkFrameID = inkEntries.first?.layer.id
+                let controlSources = self.sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
+                var inkLayers: [UUID: CIImage] = [:]
                 let inkLayer = self.timings.measure(.ink) {
-                    self.inkCompositor.layer(
-                        settings: settings,
-                        live: liveInk.sample,
-                        livePoints: liveInk.points,
-                        endedLiveID: liveInk.ended,
-                        outputSize: outputFormat.size,
-                        frameIndex: frameIndex,
-                        textureInput: inkTexture,
-                        controlFields: controlFields
-                    )
+                    let outputRect = CGRect(origin: .zero, size: outputFormat.size)
+                    var combined: CIImage?
+                    for entry in inkEntries {
+                        let nodeSettings = (entry.node.inkConfig ?? InkFrameConfig(landmarks: settings.landmarks)).applying(to: settings)
+                        let inkTexture = self.routedInkTexture(
+                            inkNodeID: entry.node.id,
+                            graph: graph,
+                            settings: nodeSettings,
+                            outputFormat: outputFormat,
+                            pixelBuffer: pixelBuffer,
+                            clockSource: clockSource,
+                            frameIndex: frameIndex,
+                            matte: matte,
+                            overlay: overlay,
+                            webLayer: webLayer
+                        )
+                        let inkDynamicTexture = self.routedInkDynamicTexture(
+                            inkNodeID: entry.node.id,
+                            graph: graph,
+                            settings: nodeSettings,
+                            outputFormat: outputFormat,
+                            pixelBuffer: pixelBuffer,
+                            clockSource: clockSource,
+                            frameIndex: frameIndex,
+                            matte: matte,
+                            overlay: overlay,
+                            webLayer: webLayer,
+                            fallback: inkTexture
+                        )
+                        let inkTextureBuffer = Self.controlGraphNeedsInkTexture(nodeSettings.resolvedControlFields)
+                            ? self.pixelBuffer(from: inkDynamicTexture, outputFormat: outputFormat)
+                            : nil
+                        let controlFields = self.controlFieldCoordinator?.update(
+                            graph: nodeSettings.resolvedControlFields,
+                            context: ControlFieldFrameContext(
+                                frameIndex: frameIndex,
+                                timestamp: timestamp,
+                                outputSize: outputFormat.size,
+                                cameraPixelBuffer: controlSources.camera,
+                                moviePixelBuffer: controlSources.movie,
+                                inkTexturePixelBuffer: inkTextureBuffer,
+                                detection: drawingDetection,
+                                settings: nodeSettings
+                            )
+                        ) ?? .empty
+                        let receivesLiveStroke = entry.layer.id == activeInkFrameID
+                        let framePaths = self.canvasActions.replayPaths(
+                            frameID: entry.layer.id,
+                            includeUntagged: entry.layer.id == defaultInkFrameID
+                        )
+                        guard let image = self.inkCompositor.layer(
+                            nodeID: entry.node.id,
+                            settings: nodeSettings,
+                            live: receivesLiveStroke ? liveInk.sample : nil,
+                            livePoints: receivesLiveStroke ? liveInk.points : [],
+                            endedLiveID: receivesLiveStroke ? liveInk.ended : nil,
+                            outputSize: outputFormat.size,
+                            frameIndex: frameIndex,
+                            textureInput: inkTexture,
+                            actionPaths: framePaths,
+                            controlFields: controlFields
+                        ) else { continue }
+                        inkLayers[entry.node.id] = image
+                        combined = combined.map { image.composited(over: $0).cropped(to: outputRect) } ?? image
+                    }
+                    if let coordinator = self.controlFieldCoordinator {
+                        self.timings.record(.motion, seconds: coordinator.lastMotionSeconds)
+                        self.timings.record(.paperFields, seconds: coordinator.lastPaperSeconds)
+                    }
+                    return combined
                 }
                 // Overlay renders async; report the latest render duration
                 // (like detect/segment), not the ~0ms cache fetch.
@@ -613,7 +892,7 @@ final class SketchCamViewModel: ObservableObject {
                        let frame = self.compositeOnGPU(
                             gpu, pixelBuffer: pixelBuffer, settings: settings,
                             outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
-                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer,
+                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
                             clockSource: clockSource) {
                         return frame
                     }
@@ -663,13 +942,32 @@ final class SketchCamViewModel: ObservableObject {
         return buffer
     }
 
-    private func routedInkTexture(graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
+    private func inkLayerEntries(graph: LayerGraph) -> [(layer: Layer, node: Node)] {
+        graph.layers.compactMap { layer in
+            guard let node = graph.node(layer.node), node.kind.family == "ink" else { return nil }
+            return (layer, node)
+        }
+    }
+
+    private func activeInkFrameID(graph: LayerGraph, settings: ProcessingSettings) -> UUID? {
+        if let activeFrameID = settings.workspace?.activeFrameID,
+           let frame = settings.workspace?.frame(id: activeFrameID),
+           case .layer(let layerID) = frame.material,
+           let layer = graph.layers.first(where: { $0.id == layerID }),
+           let node = graph.node(layer.node),
+           node.kind.family == "ink" {
+            return layer.id
+        }
+        return inkLayerEntries(graph: graph).first?.layer.id
+    }
+
+    private func routedInkTexture(inkNodeID: UUID, graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
                                   pixelBuffer: CVPixelBuffer, clockSource: FrameSource, frameIndex: Int, matte: CIImage?,
-                                  overlay: CIImage?, webLayer: CIImage?) -> CIImage? {
-        guard let inkNode = graph.nodes.first(where: { $0.kind.family == "ink" }),
+                                  overlay: CIImage?, webLayer: CIImage?, bindingOverride: PortBinding? = nil) -> CIImage? {
+        guard let inkNode = graph.node(inkNodeID),
               let textureIndex = inkNode.kind.ports.firstIndex(where: { $0.name == "texture" }),
               inkNode.inputs.indices.contains(textureIndex) else { return nil }
-        let binding = inkNode.inputs[textureIndex]
+        let binding = bindingOverride ?? inkNode.inputs[textureIndex]
         guard binding != .none else { return nil }
 
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
@@ -706,6 +1004,8 @@ final class SketchCamViewModel: ObservableObject {
                 return webLayer
             case .acrylic(let config):
                 return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
+            case .image(let config):
+                return self.imageMaterial(config)
             case .ink, .effect:
                 return nil
             }
@@ -736,12 +1036,32 @@ final class SketchCamViewModel: ObservableObject {
         }
     }
 
+    private func routedInkDynamicTexture(inkNodeID: UUID, graph: LayerGraph, settings: ProcessingSettings, outputFormat: FrameFormat,
+                                         pixelBuffer: CVPixelBuffer, clockSource: FrameSource, frameIndex: Int, matte: CIImage?,
+                                         overlay: CIImage?, webLayer: CIImage?, fallback: CIImage?) -> CIImage? {
+        guard let binding = settings.landmarks.inkDynamicInput else { return nil }
+        return routedInkTexture(
+            inkNodeID: inkNodeID,
+            graph: graph,
+            settings: settings,
+            outputFormat: outputFormat,
+            pixelBuffer: pixelBuffer,
+            clockSource: clockSource,
+            frameIndex: frameIndex,
+            matte: matte,
+            overlay: overlay,
+            webLayer: webLayer,
+            bindingOverride: binding
+        )
+    }
+
     /// Build the per-stream images and composite the graph on the GPU. Returns
     /// nil on any failure so the caller falls back to the CoreImage path.
     private func compositeOnGPU(_ gpu: MetalLayerCompositor, pixelBuffer: CVPixelBuffer,
                                 settings: ProcessingSettings, outputFormat: FrameFormat,
                                 frameIndex: Int, timestamp: CMTime,
                                 overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?,
+                                inkLayers: [UUID: CIImage],
                                 clockSource: FrameSource) -> ProcessedFrame? {
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
         let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
@@ -778,19 +1098,40 @@ final class SketchCamViewModel: ObservableObject {
                 case .overlay, .marks, .drawing:
                     return overlay
                 case .ink:
-                    return inkLayer
+                    return inkLayers[node.id] ?? inkLayer
                 case .acrylic(let config):
                     return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
                 case .web:
                     return webLayer
+                case .image(let config):
+                    return self.imageMaterial(config)
                 case .effect:
                     return nil
                 }
             },
             personMatte: personMatteImage
         )
+        let workspace = settings.workspace.map { workspace in
+            var resolved = workspace
+            resolved.outputViewport.frame = CGRect(origin: workspace.outputViewport.frame.origin, size: outputFormat.size)
+            return resolved
+        }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
-                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+                             workspace: workspace, frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+    }
+
+    private func imageMaterial(_ config: WorkspaceImageConfig) -> CIImage? {
+        guard !config.urlString.isEmpty else { return nil }
+        if let cached = imageCache[config.urlString] { return cached }
+        let url: URL?
+        if config.urlString.hasPrefix("file:") {
+            url = URL(string: config.urlString)
+        } else {
+            url = URL(fileURLWithPath: config.urlString)
+        }
+        guard let url, let image = CIImage(contentsOf: url) else { return nil }
+        imageCache[config.urlString] = image
+        return image
     }
 
     private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
@@ -801,6 +1142,11 @@ final class SketchCamViewModel: ObservableObject {
             publisher.publish(sampleBuffer)
         }
         exportLock.withLock { lastPublishedFrame = pixelBuffer }
+        exporter.updateInkActivity(
+            solverActive: settings.landmarks.inkEnabled && (settings.landmarks.inkImmediatePen || settings.landmarks.inkImmediateWash),
+            change: 0
+        )
+        exporter.offerFrame(pixelBuffer, frameIndex: frameIndex)
         let fps = updateFPS()
 
         // Preview/display is decoupled from publishing: the virtual camera gets
@@ -836,6 +1182,9 @@ final class SketchCamViewModel: ObservableObject {
         let shouldUpdateStats = now - lastStatsTime >= statsInterval
         if shouldUpdateStats {
             lastStatsTime = now
+        }
+        DispatchQueue.main.async {
+            self.secondaryOutputDisplay.enqueue(pixelBuffer)
         }
         guard image != nil || displayBuffer != nil || shouldUpdateStats else { return }
 

@@ -67,6 +67,18 @@ The inkwash layer deliberately keeps feedback state inside Metal textures. The C
 
 The editor uses normalized top-left canvas coordinates. Metal replay uses the same coordinate system so the vector guide path and the simulated shader stroke stay aligned on the preview.
 
+Immediate ink is also represented by a private timestamped action log even
+when it is not exposed as an editable path. A bounded GPU checkpoint ring stores
+the complete physical simulation at action boundaries, allowing exact undo and
+redo without cumulatively reapplying fluid forces. The ring depth is a user
+preference, reports its estimated unified-memory use, and is hard-capped at half
+of physical RAM. Semantic actions remain authoritative when a checkpoint has
+aged out.
+
+Future process-timelapse capture and disk-backed undo should share these action
+boundaries. A timelapse image is presentation output only; restoring a canvas
+requires the corresponding pigment, wetness, velocity, and lock fields.
+
 ## Future Boundaries
 
 The stable long-term shape is:

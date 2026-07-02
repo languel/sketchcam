@@ -50,6 +50,7 @@ struct SampleBufferDisplayView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = LayerHostingView()
         view.wantsLayer = true
+        view.layer?.masksToBounds = true
         view.hostedLayer = controller.displayLayer
         return view
     }
@@ -63,13 +64,21 @@ private final class LayerHostingView: NSView {
         didSet {
             guard let hostedLayer else { return }
             layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+            layer?.masksToBounds = true
+            hostedLayer.masksToBounds = true
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             hostedLayer.frame = bounds
+            CATransaction.commit()
             layer?.addSublayer(hostedLayer)
         }
     }
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         hostedLayer?.frame = bounds
+        CATransaction.commit()
     }
 }

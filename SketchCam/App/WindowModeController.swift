@@ -105,7 +105,8 @@ final class WindowModeController: ObservableObject {
         guard let window else { return }
         if decorated {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.titlebarAppearsTransparent = false
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = false
         } else {
             // keep .resizable so the borderless window can stay key

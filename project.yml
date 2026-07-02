@@ -118,6 +118,18 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.tests
         GENERATE_INFOPLIST_FILE: YES
 
+  SketchCamAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/SketchCamAppTests
+    dependencies:
+      - target: SketchCam
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.languel.sketchcam.app-tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   SketchCam:
     build:
@@ -125,8 +137,10 @@ schemes:
         SketchCam: all
         SketchCamCameraExtension: all
         SketchCamCoreTests: [test]
+        SketchCamAppTests: [test]
     test:
       targets:
         - SketchCamCoreTests
+        - SketchCamAppTests
     run:
       config: Debug

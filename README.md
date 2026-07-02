@@ -59,11 +59,15 @@ xcodebuild \
 
 ## Run Locally
 
-To run the newest existing Debug build without rebuilding:
+To run the newest existing Debug build without rebuilding or installing:
 
 ```sh
-./script/run.sh
+./script/rundebug.sh
 ```
+
+`./script/rundebug.sh --debug` opens that same local build under `lldb`;
+`--logs`, `--telemetry`, `--verify`, and `--print` mirror the quick-run helpers.
+`./script/run.sh` remains as the older quick-run helper.
 
 Use the build-and-install script when you want a fresh build copied to `/Applications`:
 

@@ -124,22 +124,19 @@ final class ControlFieldGraphTests: XCTestCase {
         XCTAssertEqual(ink.resolvedInkLiveResist, 1)
     }
 
-    func testPaperInfluenceSynthesizesStableInternalPaperRoutes() throws {
+    func testPaperInfluenceDoesNotSynthesizeInternalPaperRoutes() throws {
         var settings = ProcessingSettings()
         settings.landmarks.inkPaperInfluence = 1
 
         let first = settings.resolvedControlFields
         let second = settings.resolvedControlFields
         XCTAssertEqual(first, second)
-        XCTAssertEqual(first.providers.count, 1)
-        XCTAssertEqual(first.providers.first?.kind, .paper)
-        XCTAssertNil(first.providers.first?.paperNodeID)
-        XCTAssertEqual(Set(first.routes.map(\.input)), [.absorbency, .drag, .resist])
-        XCTAssertTrue(first.routes.allSatisfy { $0.consumer == .ink })
+        XCTAssertTrue(first.providers.isEmpty)
+        XCTAssertTrue(first.routes.isEmpty)
         XCTAssertNoThrow(try first.validate())
     }
 
-    func testExplicitPaperRouteIsNotReplacedByInternalDefault() {
+    func testExplicitPaperRouteIsPreservedWithoutInternalDefaults() {
         let custom = ControlFieldProvider(id: paperID, name: "Custom", kind: .paper)
         let customRoute = ControlFieldRoute(
             consumer: .ink,
@@ -153,15 +150,19 @@ final class ControlFieldGraphTests: XCTestCase {
         let graph = settings.resolvedControlFields
         XCTAssertEqual(graph.routes.first(where: { $0.input == .drag }), customRoute)
         XCTAssertEqual(graph.routes.filter { $0.input == .drag }.count, 1)
-        XCTAssertEqual(Set(graph.routes.map(\.input)), [.absorbency, .drag, .resist])
+        XCTAssertEqual(Set(graph.routes.map(\.input)), [.drag])
     }
 
-    func testLiveAndMotionInfluenceSynthesizesOpticalFlowRoutes() throws {
+    func testLiveAndMotionInfluenceRequiresExplicitDynamicInput() throws {
         var settings = ProcessingSettings()
         settings.landmarks.inkLiveSurfaceInfluence = 0.5
         settings.landmarks.inkMotionForce = 1
         settings.landmarks.inkMotionWetness = 0.75
 
+        XCTAssertTrue(settings.resolvedControlFields.providers.isEmpty)
+        XCTAssertTrue(settings.resolvedControlFields.routes.isEmpty)
+
+        settings.landmarks.inkDynamicInput = .source(.camera)
         let graph = settings.resolvedControlFields
         let provider = try XCTUnwrap(graph.providers.first { $0.kind == .opticalFlow })
         XCTAssertTrue(provider.resolvedMotionConfig.enabled)
