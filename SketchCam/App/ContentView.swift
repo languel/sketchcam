@@ -984,7 +984,7 @@ struct ContentView: View {
         switch model.settings.workspace?.activeTool {
         case .artboard, .pan, .transform, .crop, .mask:
             return true
-        case .select, .pen, .wash, nil:
+        case .select, .draw, .pen, .wash, nil:
             return false
         }
     }
@@ -2590,7 +2590,12 @@ struct ContentView: View {
     }
 
     private var workspaceToolbarTools: [WorkspaceTool] {
-        [.select, .artboard, .pan, .transform, .crop, .mask]
+        var tools: [WorkspaceTool] = [.select]
+        if selectedFrameSupportsDrawing {
+            tools.append(.draw)
+        }
+        tools += [.artboard, .pan, .transform, .crop, .mask]
+        return tools
     }
 
     // MARK: - Ink toolbar tab
@@ -2684,12 +2689,16 @@ struct ContentView: View {
 
     private var workspaceToolBinding: Binding<WorkspaceTool> {
         Binding {
-            model.settings.workspace?.activeTool ?? .select
+            let tool = model.settings.workspace?.activeTool ?? .select
+            return (tool == .pen || tool == .wash) ? .draw : tool
         } set: { tool in
             model.mutateWorkspace { workspace in
                 workspace.activeTool = tool
             }
             switch tool {
+            case .draw:
+                model.settings.landmarks.inkEnabled = true
+                inkTool = .draw
             case .pen:
                 model.settings.landmarks.inkEnabled = true
                 mutateActiveInkConfig { $0.brushMode = .pen }
@@ -2714,6 +2723,7 @@ struct ContentView: View {
         case .transform: return "Transform"
         case .crop: return "Crop"
         case .mask: return "Mask"
+        case .draw: return "Draw"
         case .pen: return "Pen"
         case .wash: return "Wash"
         }
@@ -2727,9 +2737,17 @@ struct ContentView: View {
         case .transform: return "arrow.up.left.and.arrow.down.right"
         case .crop: return "crop"
         case .mask: return "camera.filters"
+        case .draw: return "pencil.tip"
         case .pen: return "pencil.tip"
         case .wash: return "paintbrush.pointed"
         }
+    }
+
+    private var selectedFrameSupportsDrawing: Bool {
+        guard let workspace = model.settings.workspace,
+              let selectedID = workspace.activeFrameID,
+              let graph = model.settings.layerGraph else { return false }
+        return isInkFrame(selectedID, workspace: workspace, graph: graph)
     }
 
     private func workspaceRoleIcon(_ role: WorkspaceFrameRole) -> String {

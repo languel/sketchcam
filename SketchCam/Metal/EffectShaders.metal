@@ -46,10 +46,10 @@ kernel void effect_threshold(texture2d<float, access::sample> inTex [[texture(0)
     float paper = luma > p.threshold ? 1.0 : 0.0;     // 1 = bright/paper, 0 = ink
     if (p.invert == 1u) paper = 1.0 - paper;
     if (p.inkOnly == 1u) {
-        float a = (paper < 0.5) ? 1.0 : 0.0;           // keep only ink, paper clear
+        float a = ((paper < 0.5) ? 1.0 : 0.0) * c.a;   // keep only ink, paper clear
         outTex.write(float4(0.0, 0.0, 0.0, a), gid);   // premultiplied black
     } else {
-        outTex.write(float4(float3(paper), 1.0), gid); // opaque B/W
+        outTex.write(float4(float3(paper) * c.a, c.a), gid);
     }
 }
 

@@ -8,6 +8,7 @@ public enum WorkspaceTool: String, CaseIterable, Identifiable, Sendable, Codable
     case transform
     case crop
     case mask
+    case draw
     case pen
     case wash
 
