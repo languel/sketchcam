@@ -292,6 +292,8 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// Nil means default to dragging the visible artboard with the two-finger
     /// gesture. False preserves the older viewport-opposite scroll direction.
     public var artboardDragCanvasWithScroll: Bool?
+    /// Show frame names directly on the artboard overlay.
+    public var showArtboardFrameLabels: Bool
     public var processingQuality: ProcessingQuality
     public var landmarks: LandmarkSettings
     public var web: WebLayerSettings
@@ -322,6 +324,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         previewFPS: Double = 0,
         useMetalPreview: Bool = true,
         artboardDragCanvasWithScroll: Bool? = nil,
+        showArtboardFrameLabels: Bool = false,
         processingQuality: ProcessingQuality = .full,
         landmarks: LandmarkSettings = LandmarkSettings(),
         web: WebLayerSettings = WebLayerSettings()
@@ -351,6 +354,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.artboardDragCanvasWithScroll = artboardDragCanvasWithScroll
+        self.showArtboardFrameLabels = showArtboardFrameLabels
         self.processingQuality = processingQuality
         self.landmarks = landmarks
         self.web = web

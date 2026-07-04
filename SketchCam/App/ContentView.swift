@@ -174,6 +174,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case lineWalk = "Line walk"
     case ink = "Ink"
     case paper = "Paper"
+    case output = "Output"
     case history = "History"
     case timeline = "Timeline"
     case web = "Web"
@@ -252,6 +253,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .lineWalk: "lasso"
         case .ink: "paintbrush.pointed"
         case .paper: "doc.text.image"
+        case .output: "rectangle.inset.filled"
         case .history: "clock.arrow.circlepath"
         case .timeline: "timeline.selection"
         case .web: "globe"
@@ -372,6 +374,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @ObservedObject var model: SketchCamViewModel
+    @ObservedObject var outputWindow: OutputWindowController
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
     @EnvironmentObject private var appUI: AppUIState
@@ -408,6 +411,8 @@ struct ContentView: View {
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
+    @State private var spacePanToolBeforeHold: WorkspaceTool?
+    @State private var spacePanMonitor: Any?
     @State private var inkPaperSettingsExpanded = false
     @State private var inkMaterialMapExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
@@ -440,8 +445,9 @@ struct ContentView: View {
     @State private var hoveredFloatingResizeGroupID: String?
     @State private var workspaceRootSize = CGSize(width: 1200, height: 800)
 
-    init(model: SketchCamViewModel) {
+    init(model: SketchCamViewModel, outputWindow: OutputWindowController) {
         self.model = model
+        self.outputWindow = outputWindow
     }
 
     var body: some View {
@@ -468,6 +474,7 @@ struct ContentView: View {
             ensureInkToolbarPanelVisible()
             registerShortcuts()
             ShortcutRegistry.shared.start()
+            installSpacePanMonitor()
         }
         .onReceive(appUI.$layoutCommand.compactMap { $0 }) { command in
             applyLayoutCommand(command)
@@ -476,7 +483,10 @@ struct ContentView: View {
         .onChange(of: windowMode.presentationMode) { _, isPresentation in
             syncLayoutWithPresentationMode(isPresentation)
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            removeSpacePanMonitor()
+            model.stop()
+        }
     }
 
     private var dockedWorkspace: some View {
@@ -982,9 +992,9 @@ struct ContentView: View {
 
     private var workspaceOverlayHandlesInput: Bool {
         switch model.settings.workspace?.activeTool {
-        case .artboard, .pan, .transform, .crop, .mask:
+        case .select, .artboard, .pan, .transform, .crop, .mask:
             return true
-        case .select, .draw, .pen, .wash, nil:
+        case .draw, .pen, .wash, nil:
             return false
         }
     }
@@ -1094,6 +1104,40 @@ struct ContentView: View {
         if bottomTabs.contains(panel) { return .bottom }
         if floatingTabs.contains(panel) { return .floating }
         return nil
+    }
+
+    private func hasWorkspaceFrame(family: String) -> Bool {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return false }
+        return workspace.frames.contains { frame in
+            guard case .layer(let layerID) = frame.material,
+                  let layer = graph.layers.first(where: { $0.id == layerID }),
+                  let node = graph.node(layer.node) else { return false }
+            return node.kind.family == family
+        }
+    }
+
+    private func canAddPanelToDock(_ panel: ControlTab) -> Bool {
+        switch panel {
+        case .ink, .inkToolbar:
+            return hasWorkspaceFrame(family: "ink")
+        case .paper:
+            return hasWorkspaceFrame(family: "paper")
+        case .camera:
+            return hasWorkspaceFrame(family: "video")
+        case .movie:
+            return hasWorkspaceFrame(family: "movie")
+        case .web:
+            return hasWorkspaceFrame(family: "web")
+        default:
+            return true
+        }
+    }
+
+    private func dockMenuPanels(for destination: PanelDropDestination) -> [ControlTab] {
+        ControlTab.allCases.filter { panel in
+            panelLocation(panel) != destination && canAddPanelToDock(panel)
+        }
     }
 
     private func ensureInkToolbarPanelVisible() {
@@ -2070,11 +2114,31 @@ struct ContentView: View {
                     .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .background(Color.clear)
+                .contentShape(Rectangle())
+                .contextMenu {
+                    emptyDockContextMenu(destination: destination)
+                }
             }
         }
         .dockDropHighlight(isTargeted: dropTargetBinding(for: destination).wrappedValue || panelDockTarget == destination)
         .onDrop(of: [UTType.plainText], isTargeted: dropTargetBinding(for: destination)) { providers in
             handlePanelDrop(providers, destination: destination)
+        }
+    }
+
+    @ViewBuilder private func emptyDockContextMenu(destination: PanelDropDestination) -> some View {
+        let panels = dockMenuPanels(for: destination)
+        if panels.isEmpty {
+            Text("No panels available")
+        } else {
+            ForEach(panels) { panel in
+                Button {
+                    movePanel(panel, to: destination)
+                } label: {
+                    Label(panel.rawValue, systemImage: panel.icon)
+                }
+            }
         }
     }
 
@@ -2475,6 +2539,7 @@ struct ContentView: View {
         case .lineWalk: lineWalkTab
         case .ink: inkTab
         case .paper: paperTab
+        case .output: outputTab
         case .history: historyTab
         case .timeline: timelineTab
         case .web: webTab
@@ -2503,6 +2568,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
                 ForEach(workspaceToolbarTools) { tool in
+                    let disabled = tool == .draw && !selectedFrameSupportsDrawing
                     Button {
                         workspaceToolBinding.wrappedValue = tool
                     } label: {
@@ -2516,6 +2582,8 @@ struct ContentView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .disabled(disabled)
+                    .opacity(disabled ? 0.38 : 1)
                     .help(workspaceToolTitle(tool))
                 }
             }
@@ -2578,23 +2646,20 @@ struct ContentView: View {
             .help("Redo workspace edit")
 
             Button {
-                openWindow(id: "output")
+                toggleOutputWindow()
             } label: {
                 Image(systemName: "rectangle.inset.filled")
             }
             .buttonStyle(.borderless)
-            .help("Open secondary output window")
+            .help(outputWindow.isOpen ? "Close secondary output window" : "Open secondary output window")
         }
         .controlSize(.small)
         .onAppear { model.ensureWorkspace() }
     }
 
     private var workspaceToolbarTools: [WorkspaceTool] {
-        var tools: [WorkspaceTool] = [.select]
-        if selectedFrameSupportsDrawing {
-            tools.append(.draw)
-        }
-        tools += [.artboard, .pan, .transform, .crop, .mask]
+        var tools: [WorkspaceTool] = [.pan, .select, .draw]
+        tools += [.artboard, .crop, .mask]
         return tools
     }
 
@@ -2690,28 +2755,34 @@ struct ContentView: View {
     private var workspaceToolBinding: Binding<WorkspaceTool> {
         Binding {
             let tool = model.settings.workspace?.activeTool ?? .select
-            return (tool == .pen || tool == .wash) ? .draw : tool
+            if tool == .pen || tool == .wash { return .draw }
+            if tool == .transform { return .select }
+            return tool
         } set: { tool in
-            model.mutateWorkspace { workspace in
-                workspace.activeTool = tool
-            }
-            switch tool {
-            case .draw:
-                model.settings.landmarks.inkEnabled = true
-                inkTool = .draw
-            case .pen:
-                model.settings.landmarks.inkEnabled = true
-                mutateActiveInkConfig { $0.brushMode = .pen }
-                inkTool = .draw
-            case .wash:
-                model.settings.landmarks.inkEnabled = true
-                mutateActiveInkConfig { $0.brushMode = .brush }
-                inkTool = .draw
-            case .select, .transform, .crop, .mask:
-                inkTool = .select
-            case .artboard, .pan:
-                break
-            }
+            setWorkspaceTool(tool)
+        }
+    }
+
+    private func setWorkspaceTool(_ tool: WorkspaceTool) {
+        model.mutateWorkspace { workspace in
+            workspace.activeTool = tool
+        }
+        switch tool {
+        case .draw:
+            model.settings.landmarks.inkEnabled = true
+            inkTool = .draw
+        case .pen:
+            model.settings.landmarks.inkEnabled = true
+            mutateActiveInkConfig { $0.brushMode = .pen }
+            inkTool = .draw
+        case .wash:
+            model.settings.landmarks.inkEnabled = true
+            mutateActiveInkConfig { $0.brushMode = .brush }
+            inkTool = .draw
+        case .select, .transform, .crop, .mask:
+            inkTool = .select
+        case .artboard, .pan:
+            break
         }
     }
 
@@ -2764,6 +2835,13 @@ struct ContentView: View {
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
+        SourcePreviewImage(
+            previews: model.sourcePreviews,
+            source: .camera,
+            active: model.cameraPermissionState == .authorized && !model.settings.testPatternMode
+        )
+        .onAppear { model.setSourcePreviewActive(.camera, active: true) }
+        .onDisappear { model.setSourcePreviewActive(.camera, active: false) }
         HStack {
             Button {
                 model.toggleFreezeOrPause()
@@ -2806,6 +2884,13 @@ struct ContentView: View {
 
     @ViewBuilder private var movieTab: some View {
         SectionHeader("Movie")
+        SourcePreviewImage(
+            previews: model.sourcePreviews,
+            source: .movie,
+            active: model.movieURL != nil
+        )
+        .onAppear { model.setSourcePreviewActive(.movie, active: true) }
+        .onDisappear { model.setSourcePreviewActive(.movie, active: false) }
         HStack {
             Button {
                 model.toggleFreezeOrPause()
@@ -2879,6 +2964,8 @@ struct ContentView: View {
         ), range: 0...60, precision: 0, defaultValue: 0, hint: "0 = full-tilt (every published frame)")
         Toggle("Two-finger drag moves artboard", isOn: artboardDragCanvasWithScrollBinding)
             .help("On: two-finger drag moves the visible artboard with your fingers. Off: the viewport moves opposite the gesture.")
+        Toggle("Show frame labels", isOn: $model.settings.showArtboardFrameLabels)
+            .help("Show frame names directly on the artboard overlay.")
 
         SectionHeader("Window")
         HStack {
@@ -2947,6 +3034,124 @@ struct ContentView: View {
             .foregroundStyle(.secondary)
     }
 
+    @ViewBuilder private var outputTab: some View {
+        SectionHeader("Window")
+        HStack {
+            Label(outputWindow.selectedWindowName, systemImage: "rectangle.inset.filled")
+                .font(.callout.weight(.medium))
+            Spacer()
+            Button {
+                toggleOutputWindow()
+            } label: {
+                Label(outputWindow.isOpen ? "Close" : "Open", systemImage: outputWindow.isOpen ? "xmark.rectangle" : "macwindow")
+            }
+            .help(outputWindow.isOpen ? "Close the selected output window" : "Open or focus the selected output window")
+        }
+        .controlSize(.small)
+
+        if outputWindow.window == nil {
+            Text("Open the output window to edit live placement.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        HStack {
+            Toggle("Borderless", isOn: $outputWindow.borderless)
+            Toggle("Transparent", isOn: $outputWindow.transparent)
+        }
+        .toggleStyle(.checkbox)
+
+        HStack {
+            Toggle("On top", isOn: $outputWindow.alwaysOnTop)
+            Toggle("Click through", isOn: $outputWindow.clickThrough)
+        }
+        .toggleStyle(.checkbox)
+
+        HStack {
+            Toggle("Fullscreen", isOn: $outputWindow.fullscreen)
+        }
+        .toggleStyle(.checkbox)
+
+        SliderRow(
+            title: "Opacity",
+            value: $outputWindow.opacity,
+            range: 0.05...1,
+            precision: 2,
+            defaultValue: 1,
+            hint: "Window opacity for projector and overlay placement."
+        )
+        SliderRow(
+            title: "Scale",
+            value: Binding(
+                get: { outputWindow.scale },
+                set: { newValue in
+                    outputWindow.scale = newValue
+                    outputWindow.applyScale(outputSize: model.outputFormat.size)
+                }
+            ),
+            range: 0.1...2,
+            precision: 2,
+            defaultValue: 0.5,
+            hint: "Scale relative to the current output format."
+        )
+
+        SectionHeader("Position")
+        HStack(spacing: 8) {
+            outputWindowNumberField("X", value: $outputWindow.x)
+            outputWindowNumberField("Y", value: $outputWindow.y)
+        }
+        HStack(spacing: 8) {
+            outputWindowNumberField("W", value: $outputWindow.width)
+            outputWindowNumberField("H", value: $outputWindow.height)
+        }
+        HStack {
+            Button("Center") {
+                outputWindow.centerOnScreen()
+            }
+            Button("Refresh") {
+                outputWindow.updateGeometryFromWindow()
+            }
+        }
+        .controlSize(.small)
+
+        SectionHeader("Source")
+        HStack {
+            Text("Source")
+            Spacer()
+            Menu(outputWindowSourceTitle) {
+                Button("Active viewport") {
+                    outputWindow.source = .activeViewport
+                }
+                Button("Camera") {
+                    outputWindow.source = .camera
+                }
+                Button("Movie") {
+                    outputWindow.source = .movie
+                }
+                let sources = outputTextureSources()
+                if !sources.isEmpty {
+                    Divider()
+                    ForEach(sources, id: \.id) { source in
+                        Button(source.name) {
+                            outputWindow.source = .texture(nodeID: source.id, name: source.name)
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .help("Texture source displayed by the selected output window")
+        }
+        .font(.caption)
+        HStack {
+            Text("Format")
+            Spacer()
+            Text(model.outputFormat.displayName)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
+    }
+
     private var inkUndoStateBytes: Double {
         let size = model.outputFormat.size
         let width = max(1, Int(size.width.rounded()))
@@ -2986,6 +3191,62 @@ struct ContentView: View {
         let totalGB = inkUndoStateBytes * Double(inkUndoGPUStateCount) / 1_000_000_000
         let warning = inkUndoUsesLargeMemoryShare ? " · Warning: large shared-memory allocation" : ""
         return String(format: "About %.0f MB per state · %.2f GB maximum%@", eachMB, totalGB, warning)
+    }
+
+    private func outputWindowNumberField(_ title: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .leading)
+            BufferedNumberField(value: value, precision: 0, font: .caption, width: 58, roundedBorder: true)
+        }
+        .help("\(title) for the selected output window")
+    }
+
+    private func toggleOutputWindow() {
+        if outputWindow.isOpen {
+            outputWindow.close()
+        } else {
+            openWindow(id: "output")
+        }
+    }
+
+    private func outputTextureSources() -> [(id: UUID, name: String)] {
+        let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        var seen = Set<UUID>()
+        var sources: [(id: UUID, name: String)] = []
+
+        if let workspace = model.settings.workspace {
+            for frame in workspace.frames {
+                guard case .layer(let layerID) = frame.material,
+                      let layer = graph.layers.first(where: { $0.id == layerID }),
+                      let node = graph.node(layer.node),
+                      node.kind.output == .pixel,
+                      !seen.contains(node.id) else { continue }
+                seen.insert(node.id)
+                sources.append((id: node.id, name: frame.name))
+            }
+        }
+
+        for layer in graph.layers {
+            guard let node = graph.node(layer.node),
+                  node.kind.output == .pixel,
+                  !seen.contains(node.id) else { continue }
+            seen.insert(node.id)
+            sources.append((id: node.id, name: node.name))
+        }
+
+        return sources
+    }
+
+    private var outputWindowSourceTitle: String {
+        switch outputWindow.source {
+        case .texture(let nodeID, let storedName):
+            return outputTextureSources().first(where: { $0.id == nodeID })?.name ?? storedName
+        case .activeViewport, .camera, .movie:
+            return outputWindow.source.title
+        }
     }
 
     // MARK: - Layers tab
@@ -4241,8 +4502,20 @@ struct ContentView: View {
                    default: KeyBinding(key: "p", modifiers: [.control, .option])) {
             appUI.toggleDebugOverlay()
         }
-        r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
+        r.register(id: "workspace.tool.select", title: "Workspace: Select", category: "Workspace",
                    default: KeyBinding(key: "v", modifiers: [])) {
+            setWorkspaceTool(.select)
+        }
+        r.register(id: "workspace.tool.draw", title: "Workspace: Draw", category: "Workspace",
+                   default: KeyBinding(key: "p", modifiers: [])) {
+            setWorkspaceTool(.draw)
+        }
+        r.register(id: "workspace.tool.pan", title: "Workspace: Pan", category: "Workspace",
+                   default: KeyBinding(key: "h", modifiers: [])) {
+            setWorkspaceTool(.pan)
+        }
+        r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
+                   default: nil) {
             guard tab == .ink else { return }
             inkTool = .select
         }
@@ -4252,7 +4525,7 @@ struct ContentView: View {
             inkTool = .select
         }
         r.register(id: "ink.tool.draw", title: "Ink: Draw Tool", category: "Ink",
-                   default: KeyBinding(key: "p", modifiers: [])) {
+                   default: nil) {
             guard tab == .ink else { return }
             inkTool = .draw
         }
@@ -4372,6 +4645,41 @@ struct ContentView: View {
             guard tab == .ink else { return }
             adjustInkBrushInk(by: 0.05)
         }
+    }
+
+    private func installSpacePanMonitor() {
+        guard spacePanMonitor == nil else { return }
+        spacePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            guard event.keyCode == 49,
+                  event.modifierFlags.intersection(KeyBinding.relevantFlags).isEmpty,
+                  !(NSApp.keyWindow?.firstResponder is NSTextView) else {
+                return event
+            }
+            switch event.type {
+            case .keyDown:
+                guard !event.isARepeat, spacePanToolBeforeHold == nil else { return nil }
+                let current = model.settings.workspace?.activeTool ?? .select
+                spacePanToolBeforeHold = current
+                setWorkspaceTool(.pan)
+                return nil
+            case .keyUp:
+                if let previous = spacePanToolBeforeHold {
+                    setWorkspaceTool(previous == .transform ? .select : previous)
+                    spacePanToolBeforeHold = nil
+                }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeSpacePanMonitor() {
+        if let spacePanMonitor {
+            NSEvent.removeMonitor(spacePanMonitor)
+            self.spacePanMonitor = nil
+        }
+        spacePanToolBeforeHold = nil
     }
 
     // MARK: - Bindings
@@ -6927,6 +7235,9 @@ private struct FocusEscapeHandler: NSViewRepresentable {
 
         func install() {
             guard monitor == nil else { return }
+            DispatchQueue.main.async {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard event.keyCode == 53 else { return event }
                 guard let window = event.window ?? NSApp.keyWindow else { return event }
@@ -7326,14 +7637,22 @@ private struct ArtboardMagnifyEvent {
     var magnification: CGFloat
 }
 
+private struct ArtboardMouseEvent {
+    var location: CGPoint
+    var modifiers: NSEvent.ModifierFlags
+    var clickCount: Int
+}
+
 private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     var onScroll: (ArtboardNavigationEvent) -> Void
     var onMagnify: (ArtboardMagnifyEvent) -> Void
+    var onMouseDown: (ArtboardMouseEvent) -> Void
 
     func makeNSView(context: Context) -> EventView {
         let view = EventView()
         view.onScroll = onScroll
         view.onMagnify = onMagnify
+        view.onMouseDown = onMouseDown
         view.installMonitors()
         return view
     }
@@ -7341,6 +7660,7 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: EventView, context: Context) {
         nsView.onScroll = onScroll
         nsView.onMagnify = onMagnify
+        nsView.onMouseDown = onMouseDown
     }
 
     static func dismantleNSView(_ nsView: EventView, coordinator: ()) {
@@ -7350,19 +7670,25 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     final class EventView: NSView {
         var onScroll: ((ArtboardNavigationEvent) -> Void)?
         var onMagnify: ((ArtboardMagnifyEvent) -> Void)?
+        var onMouseDown: ((ArtboardMouseEvent) -> Void)?
         private var scrollMonitor: Any?
         private var magnifyMonitor: Any?
+        private var mouseDownMonitor: Any?
 
         override var isFlipped: Bool { true }
 
         func installMonitors() {
-            guard scrollMonitor == nil, magnifyMonitor == nil else { return }
+            guard scrollMonitor == nil, magnifyMonitor == nil, mouseDownMonitor == nil else { return }
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 self?.handleScroll(event)
                 return event
             }
             magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
                 self?.handleMagnify(event)
+                return event
+            }
+            mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                self?.handleMouseDown(event)
                 return event
             }
         }
@@ -7375,6 +7701,10 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
             if let magnifyMonitor {
                 NSEvent.removeMonitor(magnifyMonitor)
                 self.magnifyMonitor = nil
+            }
+            if let mouseDownMonitor {
+                NSEvent.removeMonitor(mouseDownMonitor)
+                self.mouseDownMonitor = nil
             }
         }
 
@@ -7391,6 +7721,15 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
         private func handleMagnify(_ event: NSEvent) {
             guard let point = localPoint(for: event) else { return }
             onMagnify?(ArtboardMagnifyEvent(location: point, magnification: event.magnification))
+        }
+
+        private func handleMouseDown(_ event: NSEvent) {
+            guard let point = localPoint(for: event) else { return }
+            onMouseDown?(ArtboardMouseEvent(
+                location: point,
+                modifiers: event.modifierFlags,
+                clickCount: event.clickCount
+            ))
         }
 
         private func localPoint(for event: NSEvent) -> CGPoint? {
@@ -7431,11 +7770,48 @@ private struct WorkspaceArtboardOverlay: View {
     @State private var dragStarted = false
     @State private var dragOperation: DragOperation?
     @State private var magnifyStartZoom: Double?
+    @State private var suppressDragUntilMouseUp = false
+
+    private enum CropHandle {
+        case minX
+        case maxX
+        case minY
+        case maxY
+        case minXMinY
+        case maxXMinY
+        case maxXMaxY
+        case minXMaxY
+
+        var movesMinX: Bool {
+            self == .minX || self == .minXMinY || self == .minXMaxY
+        }
+
+        var movesMaxX: Bool {
+            self == .maxX || self == .maxXMinY || self == .maxXMaxY
+        }
+
+        var movesMinY: Bool {
+            self == .minY || self == .minXMinY || self == .maxXMinY
+        }
+
+        var movesMaxY: Bool {
+            self == .maxY || self == .maxXMaxY || self == .minXMaxY
+        }
+
+        var movesX: Bool {
+            movesMinX || movesMaxX
+        }
+
+        var movesY: Bool {
+            movesMinY || movesMaxY
+        }
+    }
 
     private enum DragOperation {
         case pan(startView: CGPoint, startCenter: CGPoint)
         case move(frameID: UUID, startWorld: CGPoint, transform: WorkspaceAffineTransform)
-        case scale(frameID: UUID, centerWorld: CGPoint, startDistance: CGFloat, transform: WorkspaceAffineTransform)
+        case resize(frameID: UUID, handle: CropHandle, startBounds: CGRect, transform: WorkspaceAffineTransform)
+        case crop(frameID: UUID, handle: CropHandle, startCrop: CGRect, startUnit: CGPoint)
     }
 
     var body: some View {
@@ -7451,6 +7827,9 @@ private struct WorkspaceArtboardOverlay: View {
                     },
                     onMagnify: { event in
                         handleMagnifyEvent(event, outputRect: outputRect)
+                    },
+                    onMouseDown: { event in
+                        handleMouseDown(event, outputRect: outputRect)
                     }
                 )
                 Color.black.opacity(0.001)
@@ -7509,22 +7888,31 @@ private struct WorkspaceArtboardOverlay: View {
             )
 
             if selected {
-                for point in corners {
+                for point in cropHandlePoints(corners).map(\.point) {
                     let handle = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
                     context.fill(Path(ellipseIn: handle), with: .color(color.opacity(0.95)))
                 }
-                drawCrop(frame, context: &context, viewport: workspace.outputViewport.frame, outputRect: outputRect, color: color)
+                drawCrop(
+                    frame,
+                    context: &context,
+                    viewport: workspace.outputViewport.frame,
+                    outputRect: outputRect,
+                    color: color,
+                    showHandles: workspace.activeTool == .crop
+                )
             }
 
-            let labelPoint = corners.reduce(corners[0]) { best, point in
-                point.y < best.y || (point.y == best.y && point.x < best.x) ? point : best
+            if model.settings.showArtboardFrameLabels {
+                let labelPoint = corners.reduce(corners[0]) { best, point in
+                    point.y < best.y || (point.y == best.y && point.x < best.x) ? point : best
+                }
+                let label = context.resolve(
+                    Text(frame.name)
+                        .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                        .foregroundColor(color.opacity(selected ? 0.95 : 0.65))
+                )
+                context.draw(label, at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 12), anchor: .leading)
             }
-            let label = context.resolve(
-                Text(frame.name)
-                    .font(.system(size: 11, weight: selected ? .semibold : .medium))
-                    .foregroundColor(color.opacity(selected ? 0.95 : 0.65))
-            )
-            context.draw(label, at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 12), anchor: .leading)
         }
     }
 
@@ -7533,20 +7921,11 @@ private struct WorkspaceArtboardOverlay: View {
         context: inout GraphicsContext,
         viewport: CGRect,
         outputRect: CGRect,
-        color: Color
+        color: Color,
+        showHandles: Bool
     ) {
-        guard frame.cropRect != CGRect(x: 0, y: 0, width: 1, height: 1) else { return }
-        let crop = frame.cropRect.standardized
-        let bounds = frame.localBounds
-        let local = CGRect(
-            x: bounds.minX + crop.minX * bounds.width,
-            y: bounds.minY + crop.minY * bounds.height,
-            width: crop.width * bounds.width,
-            height: crop.height * bounds.height
-        )
-        let points = rectCorners(local)
-            .map { $0.applying(frame.transform.cgAffineTransform) }
-            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+        guard showHandles || frame.cropRect != CGRect(x: 0, y: 0, width: 1, height: 1) else { return }
+        let points = cropViewCorners(frame, viewport: viewport, outputRect: outputRect, handlesFollowRenderedContent: showHandles)
         guard points.count == 4 else { return }
         var path = Path()
         path.move(to: points[0])
@@ -7555,9 +7934,18 @@ private struct WorkspaceArtboardOverlay: View {
         }
         path.closeSubpath()
         context.stroke(path, with: .color(color.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+        if showHandles {
+            for point in cropHandlePoints(points).map(\.point) {
+                context.fill(
+                    Path(roundedRect: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8), cornerRadius: 2),
+                    with: .color(color.opacity(0.95))
+                )
+            }
+        }
     }
 
     private func handleDragChanged(_ value: DragGesture.Value, outputRect: CGRect) {
+        if suppressDragUntilMouseUp { return }
         guard outputRect.width > 0,
               outputRect.height > 0,
               let workspace = model.settings.workspace else { return }
@@ -7568,16 +7956,40 @@ private struct WorkspaceArtboardOverlay: View {
         let world = worldPoint(view: value.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
         if !dragStarted {
             dragStarted = true
+            if workspace.activeTool == .crop {
+                if let cropHit = hitCropHandle(at: value.location, workspace: workspace, outputRect: outputRect) {
+                    model.updateWorkspaceLiveEdit {
+                        $0.activeFrameID = cropHit.frame.id
+                        $0.selectedFrameIDs = [cropHit.frame.id]
+                    }
+                    model.beginWorkspaceLiveEdit()
+                    let startUnit = cropUnitPoint(world: world, frame: cropHit.frame) ?? .zero
+                    dragOperation = .crop(
+                        frameID: cropHit.frame.id,
+                        handle: cropHit.handle,
+                        startCrop: cropHit.frame.cropRect,
+                        startUnit: startUnit
+                    )
+                    return
+                }
+                if let hit = hitFrame(at: world, workspace: workspace, outputRect: outputRect) {
+                    model.updateWorkspaceLiveEdit {
+                        $0.activeFrameID = hit.id
+                        $0.selectedFrameIDs = [hit.id]
+                    }
+                }
+                return
+            }
             if let handleHit = hitScaleHandle(at: value.location, workspace: workspace, outputRect: outputRect) {
                 model.updateWorkspaceLiveEdit {
                     $0.activeFrameID = handleHit.frame.id
                     $0.selectedFrameIDs = [handleHit.frame.id]
                 }
                 model.beginWorkspaceLiveEdit()
-                dragOperation = .scale(
+                dragOperation = .resize(
                     frameID: handleHit.frame.id,
-                    centerWorld: handleHit.centerWorld,
-                    startDistance: max(1, distance(world, handleHit.centerWorld)),
+                    handle: handleHit.handle,
+                    startBounds: handleHit.frame.localBounds,
                     transform: handleHit.frame.transform
                 )
             }
@@ -7618,12 +8030,30 @@ private struct WorkspaceArtboardOverlay: View {
                 workspace.frames[index].transform.tx = transform.tx + delta.x
                 workspace.frames[index].transform.ty = transform.ty + delta.y
             }
-        case .scale(let id, let center, let startDistance, let transform):
-            let scale = max(0.05, distance(world, center) / max(1, startDistance))
+        case .resize(let id, let handle, let startBounds, let transform):
+            let local = world.applying(transform.cgAffineTransform.inverted())
+            let modifiers = NSEvent.modifierFlags
             model.updateWorkspaceLiveEdit { workspace in
                 guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
                       !workspace.frames[index].locked else { return }
-                scaleFrame(&workspace.frames[index], from: transform, around: center, scale: scale)
+                workspace.frames[index].localBounds = resizedBounds(
+                    startBounds,
+                    handle: handle,
+                    localPoint: local,
+                    centerPivot: modifiers.contains(.option),
+                    preserveAspect: modifiers.contains(.shift)
+                )
+            }
+        case .crop(let id, let handle, let startCrop, let startUnit):
+            model.updateWorkspaceLiveEdit { workspace in
+                guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                      !workspace.frames[index].locked,
+                      let unit = cropUnitPoint(world: world, frame: workspace.frames[index]) else { return }
+                workspace.frames[index].cropRect = updatedCrop(
+                    startCrop,
+                    handle: handle,
+                    by: CGPoint(x: unit.x - startUnit.x, y: unit.y - startUnit.y)
+                )
             }
         case nil:
             break
@@ -7631,6 +8061,12 @@ private struct WorkspaceArtboardOverlay: View {
     }
 
     private func handleDragEnded() {
+        if suppressDragUntilMouseUp {
+            suppressDragUntilMouseUp = false
+            dragStarted = false
+            dragOperation = nil
+            return
+        }
         if case .pan = dragOperation {
             model.endWorkspaceLiveEdit(commit: false)
         } else {
@@ -7638,6 +8074,123 @@ private struct WorkspaceArtboardOverlay: View {
         }
         dragStarted = false
         dragOperation = nil
+    }
+
+    private func handleMouseDown(_ event: ArtboardMouseEvent, outputRect: CGRect) {
+        guard event.clickCount == 2,
+              let workspace = model.settings.workspace else { return }
+        let world = worldPoint(view: event.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
+
+        if event.modifiers.contains(.command), event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            fitFrame(frame.id, to: .viewport)
+            return
+        }
+
+        if event.modifiers.contains(.command), event.modifiers.contains(.shift) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            fitFrame(frame.id, to: .artboard)
+            return
+        }
+
+        if event.modifiers.contains(.control), event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            setFrame(frame.id, locked: true)
+            return
+        }
+
+        if event.modifiers.contains(.control), event.modifiers.contains(.shift) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            setFrame(frame.id, locked: false)
+            return
+        }
+
+        if event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect),
+                  let aspect = sourceAspectRatio(for: frame, workspace: workspace) else { return }
+            restoreAspect(
+                frameID: frame.id,
+                handle: .maxXMaxY,
+                aspect: aspect,
+                centerPivot: true,
+                keepClickedHandleFixed: false
+            )
+            return
+        }
+
+        guard event.modifiers.contains(.shift),
+              let handleHit = hitScaleHandle(at: event.location, workspace: workspace, outputRect: outputRect),
+              let aspect = sourceAspectRatio(for: handleHit.frame, workspace: workspace) else { return }
+        restoreAspect(
+            frameID: handleHit.frame.id,
+            handle: handleHit.handle,
+            aspect: aspect,
+            centerPivot: false,
+            keepClickedHandleFixed: true
+        )
+    }
+
+    private enum FrameFitTarget {
+        case viewport
+        case artboard
+    }
+
+    private func fitFrame(_ id: UUID, to target: FrameFitTarget) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                  !workspace.frames[index].locked else { return }
+            let viewport = workspace.outputViewport.frame
+            let bounds: CGRect
+            switch target {
+            case .viewport:
+                bounds = viewport
+            case .artboard:
+                bounds = viewport.insetBy(dx: -viewport.width * 0.5, dy: -viewport.height * 0.5)
+            }
+            workspace.frames[index].localBounds = CGRect(origin: .zero, size: bounds.size)
+            workspace.frames[index].transform = .translation(x: bounds.minX, y: bounds.minY)
+            workspace.frames[index].cropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+            workspace.viewCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+            if target == .artboard {
+                workspace.zoom = min(workspace.zoom, 0.7)
+            }
+        }
+    }
+
+    private func setFrame(_ id: UUID, locked: Bool) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }) else { return }
+            workspace.frames[index].locked = locked
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+        }
+    }
+
+    private func restoreAspect(
+        frameID: UUID,
+        handle: CropHandle,
+        aspect: CGFloat,
+        centerPivot: Bool,
+        keepClickedHandleFixed: Bool
+    ) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == frameID }),
+                  !workspace.frames[index].locked else { return }
+            workspace.frames[index].localBounds = aspectRestoredBounds(
+                workspace.frames[index].localBounds,
+                handle: handle,
+                aspect: aspect,
+                centerPivot: centerPivot,
+                keepClickedHandleFixed: keepClickedHandleFixed
+            )
+            workspace.activeFrameID = frameID
+            workspace.selectedFrameIDs = [frameID]
+        }
     }
 
     private func handlePan(_ value: DragGesture.Value, outputRect: CGRect, workspace: CollageWorkspace) {
@@ -7734,35 +8287,235 @@ private struct WorkspaceArtboardOverlay: View {
         }
     }
 
-    private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, centerWorld: CGPoint)? {
+    private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, handle: CropHandle)? {
         for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
             let corners = frameCorners(frame, viewport: workspace.outputViewport.frame, outputRect: outputRect)
-            if corners.contains(where: { distance($0, view) <= 12 }) {
-                return (frame, centerWorld(frame))
+            let hits = cropHandlePoints(corners)
+                .map { item in (handle: item.handle, distance: distance(item.point, view)) }
+                .filter { $0.distance <= 12 }
+                .sorted { $0.distance < $1.distance }
+            if let hit = hits.first {
+                return (frame, hit.handle)
             }
         }
         return nil
     }
 
-    private func centerWorld(_ frame: WorkspaceFrame) -> CGPoint {
-        CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
-            .applying(frame.transform.cgAffineTransform)
+    private func hitCropHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, handle: CropHandle)? {
+        for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
+            let points = cropViewCorners(
+                frame,
+                viewport: workspace.outputViewport.frame,
+                outputRect: outputRect,
+                handlesFollowRenderedContent: true
+            )
+            let hits = cropHandlePoints(points)
+                .map { item in (handle: item.handle, distance: distance(item.point, view)) }
+                .filter { $0.distance <= 12 }
+                .sorted { $0.distance < $1.distance }
+            if let hit = hits.first {
+                return (frame, hit.handle)
+            }
+        }
+        return nil
     }
 
-    private func scaleFrame(
-        _ frame: inout WorkspaceFrame,
-        from transform: WorkspaceAffineTransform,
-        around centerWorld: CGPoint,
-        scale: CGFloat
-    ) {
-        let centerLocal = CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
-        let factor = Double(scale)
-        frame.transform.a = transform.a * factor
-        frame.transform.b = transform.b * factor
-        frame.transform.c = transform.c * factor
-        frame.transform.d = transform.d * factor
-        frame.transform.tx = Double(centerWorld.x) - (Double(centerLocal.x) * frame.transform.a + Double(centerLocal.y) * frame.transform.c)
-        frame.transform.ty = Double(centerWorld.y) - (Double(centerLocal.x) * frame.transform.b + Double(centerLocal.y) * frame.transform.d)
+    private func resizedBounds(
+        _ start: CGRect,
+        handle: CropHandle,
+        localPoint: CGPoint,
+        centerPivot: Bool,
+        preserveAspect: Bool
+    ) -> CGRect {
+        let minimumSize: CGFloat = 8
+        var minX = start.minX
+        var maxX = start.maxX
+        var minY = start.minY
+        var maxY = start.maxY
+
+        if centerPivot {
+            let center = CGPoint(x: start.midX, y: start.midY)
+            if handle.movesX {
+                let halfWidth = max(minimumSize * 0.5, abs(localPoint.x - center.x))
+                minX = center.x - halfWidth
+                maxX = center.x + halfWidth
+            }
+            if handle.movesY {
+                let halfHeight = max(minimumSize * 0.5, abs(localPoint.y - center.y))
+                minY = center.y - halfHeight
+                maxY = center.y + halfHeight
+            }
+        } else {
+            switch handle {
+            case .minX, .minXMinY, .minXMaxY:
+                minX = min(localPoint.x, maxX - minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .maxX, .maxXMinY, .maxXMaxY:
+                maxX = max(localPoint.x, minX + minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .minY, .minXMinY, .maxXMinY:
+                minY = min(localPoint.y, maxY - minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .maxY, .maxXMaxY, .minXMaxY:
+                maxY = max(localPoint.y, minY + minimumSize)
+            default:
+                break
+            }
+        }
+
+        if preserveAspect, start.width > 0, start.height > 0 {
+            let aspect = start.width / start.height
+            var width = max(minimumSize, maxX - minX)
+            var height = max(minimumSize, maxY - minY)
+            if handle.movesX && handle.movesY {
+                if width / height > aspect {
+                    height = width / aspect
+                } else {
+                    width = height * aspect
+                }
+            } else if handle.movesX {
+                height = width / aspect
+            } else if handle.movesY {
+                width = height * aspect
+            }
+            (minX, maxX) = adjustedAxis(
+                originalMin: start.minX,
+                originalMax: start.maxX,
+                currentMin: minX,
+                currentMax: maxX,
+                length: width,
+                movesMin: handle.movesMinX,
+                movesMax: handle.movesMaxX,
+                centerPivot: centerPivot
+            )
+            (minY, maxY) = adjustedAxis(
+                originalMin: start.minY,
+                originalMax: start.maxY,
+                currentMin: minY,
+                currentMax: maxY,
+                length: height,
+                movesMin: handle.movesMinY,
+                movesMax: handle.movesMaxY,
+                centerPivot: centerPivot
+            )
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func adjustedAxis(
+        originalMin: CGFloat,
+        originalMax: CGFloat,
+        currentMin: CGFloat,
+        currentMax: CGFloat,
+        length: CGFloat,
+        movesMin: Bool,
+        movesMax: Bool,
+        centerPivot: Bool,
+        anchorMovedSide: Bool = false
+    ) -> (CGFloat, CGFloat) {
+        if centerPivot || (movesMin && movesMax) || (!movesMin && !movesMax) {
+            let center = (currentMin + currentMax) * 0.5
+            return (center - length * 0.5, center + length * 0.5)
+        }
+        if anchorMovedSide {
+            if movesMin {
+                return (originalMin, originalMin + length)
+            }
+            if movesMax {
+                return (originalMax - length, originalMax)
+            }
+        }
+        if movesMin {
+            return (originalMax - length, originalMax)
+        }
+        if movesMax {
+            return (originalMin, originalMin + length)
+        }
+        let center = (originalMin + originalMax) * 0.5
+        return (center - length * 0.5, center + length * 0.5)
+    }
+
+    private func aspectRestoredBounds(
+        _ bounds: CGRect,
+        handle: CropHandle,
+        aspect: CGFloat,
+        centerPivot: Bool,
+        keepClickedHandleFixed: Bool
+    ) -> CGRect {
+        guard bounds.width > 0, bounds.height > 0, aspect > 0 else { return bounds }
+        let currentAspect = bounds.width / bounds.height
+        let targetWidth: CGFloat
+        let targetHeight: CGFloat
+        if currentAspect > aspect {
+            targetWidth = bounds.height * aspect
+            targetHeight = bounds.height
+        } else {
+            targetWidth = bounds.width
+            targetHeight = bounds.width / aspect
+        }
+
+        let (minX, maxX) = adjustedAxis(
+            originalMin: bounds.minX,
+            originalMax: bounds.maxX,
+            currentMin: bounds.minX,
+            currentMax: bounds.maxX,
+            length: max(8, targetWidth),
+            movesMin: handle.movesMinX,
+            movesMax: handle.movesMaxX,
+            centerPivot: centerPivot,
+            anchorMovedSide: keepClickedHandleFixed
+        )
+        let (minY, maxY) = adjustedAxis(
+            originalMin: bounds.minY,
+            originalMax: bounds.maxY,
+            currentMin: bounds.minY,
+            currentMax: bounds.maxY,
+            length: max(8, targetHeight),
+            movesMin: handle.movesMinY,
+            movesMax: handle.movesMaxY,
+            centerPivot: centerPivot,
+            anchorMovedSide: keepClickedHandleFixed
+        )
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func sourceAspectRatio(for frame: WorkspaceFrame, workspace: CollageWorkspace) -> CGFloat? {
+        var aspect: CGFloat?
+        if let graph = model.settings.layerGraph,
+           case .layer(let layerID) = frame.material,
+           let layer = graph.layers.first(where: { $0.id == layerID }),
+           let node = graph.node(layer.node) {
+            switch node.kind {
+            case .movie:
+                aspect = aspectRatio(model.sourcePreviews.movieSize)
+            case .video:
+                aspect = aspectRatio(model.sourcePreviews.cameraSize)
+            default:
+                break
+            }
+        }
+        if aspect == nil {
+            aspect = aspectRatio(workspace.outputViewport.frame.size)
+        }
+        guard let baseAspect = aspect else { return nil }
+        let crop = WorkspaceFrame.clampedCropRect(frame.cropRect)
+        guard crop.width > 0, crop.height > 0 else { return baseAspect }
+        return baseAspect * crop.width / crop.height
+    }
+
+    private func aspectRatio(_ size: CGSize) -> CGFloat? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        return size.width / size.height
     }
 
     private func hitFrame(
@@ -7804,6 +8557,96 @@ private struct WorkspaceArtboardOverlay: View {
             .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
     }
 
+    private func cropViewCorners(
+        _ frame: WorkspaceFrame,
+        viewport: CGRect,
+        outputRect: CGRect,
+        handlesFollowRenderedContent: Bool = false
+    ) -> [CGPoint] {
+        if handlesFollowRenderedContent, frame.contentFit != .none {
+            return frameCorners(frame, viewport: viewport, outputRect: outputRect)
+        }
+        let crop = WorkspaceFrame.clampedCropRect(frame.cropRect).standardized
+        let bounds = frame.localBounds
+        let cropSize = CGSize(width: crop.width * bounds.width, height: crop.height * bounds.height)
+        let local: CGRect
+        if handlesFollowRenderedContent, frame.contentFit == .none {
+            local = CGRect(
+                x: bounds.minX,
+                y: bounds.maxY - cropSize.height,
+                width: cropSize.width,
+                height: cropSize.height
+            )
+        } else {
+            local = CGRect(
+                x: bounds.minX + crop.minX * bounds.width,
+                y: bounds.minY + crop.minY * bounds.height,
+                width: cropSize.width,
+                height: cropSize.height
+            )
+        }
+        return rectCorners(local)
+            .map { $0.applying(frame.transform.cgAffineTransform) }
+            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+    }
+
+    private func cropHandlePoints(_ corners: [CGPoint]) -> [(handle: CropHandle, point: CGPoint)] {
+        guard corners.count == 4 else { return [] }
+        let top = midpoint(corners[0], corners[1])
+        let right = midpoint(corners[1], corners[2])
+        let bottom = midpoint(corners[2], corners[3])
+        let left = midpoint(corners[3], corners[0])
+        return [
+            (.minXMinY, corners[0]),
+            (.maxXMinY, corners[1]),
+            (.maxXMaxY, corners[2]),
+            (.minXMaxY, corners[3]),
+            (.minY, top),
+            (.maxX, right),
+            (.maxY, bottom),
+            (.minX, left)
+        ]
+    }
+
+    private func cropUnitPoint(world: CGPoint, frame: WorkspaceFrame) -> CGPoint? {
+        let inverse = frame.transform.cgAffineTransform.inverted()
+        let local = world.applying(inverse)
+        let bounds = frame.localBounds
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        return CGPoint(
+            x: max(0, min(1, (local.x - bounds.minX) / bounds.width)),
+            y: max(0, min(1, (local.y - bounds.minY) / bounds.height))
+        )
+    }
+
+    private func updatedCrop(_ startCrop: CGRect, handle: CropHandle, by delta: CGPoint) -> CGRect {
+        var minX = startCrop.minX
+        var maxX = startCrop.maxX
+        var minY = startCrop.minY
+        var maxY = startCrop.maxY
+        switch handle {
+        case .minX:
+            minX += delta.x
+        case .maxX:
+            maxX += delta.x
+        case .minY:
+            minY += delta.y
+        case .maxY:
+            maxY += delta.y
+        case .minXMinY:
+            minX += delta.x; minY += delta.y
+        case .maxXMinY:
+            maxX += delta.x; minY += delta.y
+        case .maxXMaxY:
+            maxX += delta.x; maxY += delta.y
+        case .minXMaxY:
+            minX += delta.x; maxY += delta.y
+        }
+        return WorkspaceFrame.clampedCropRect(
+            CGRect(x: min(minX, maxX), y: min(minY, maxY), width: abs(maxX - minX), height: abs(maxY - minY))
+        )
+    }
+
     private func rectCorners(_ rect: CGRect) -> [CGPoint] {
         [
             CGPoint(x: rect.minX, y: rect.minY),
@@ -7815,6 +8658,10 @@ private struct WorkspaceArtboardOverlay: View {
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
         hypot(a.x - b.x, a.y - b.y)
+    }
+
+    private func midpoint(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+        CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
     }
 
     private func viewPoint(world: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
@@ -8377,6 +9224,75 @@ private struct LivePreviewImage: View {
         } else {
             ProgressView()
                 .controlSize(.large)
+        }
+    }
+}
+
+private struct SourcePreviewImage: View {
+    @ObservedObject var previews: SourcePreviewReadouts
+    let source: SketchCamViewModel.FrameSource
+    let active: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(0.22))
+            if active, let image {
+                Image(image, scale: 1, label: Text("\(source.title) source preview"))
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text(sizeLabel)
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.78))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.42), in: Capsule())
+                    }
+                    .padding(5)
+                }
+            } else {
+                Text(placeholder)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(height: 118)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var image: CGImage? {
+        switch source {
+        case .camera: previews.cameraImage
+        case .movie: previews.movieImage
+        }
+    }
+
+    private var sourceSize: CGSize {
+        switch source {
+        case .camera: previews.cameraSize
+        case .movie: previews.movieSize
+        }
+    }
+
+    private var sizeLabel: String {
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return "raw" }
+        return "\(Int(sourceSize.width)) x \(Int(sourceSize.height))"
+    }
+
+    private var placeholder: String {
+        switch source {
+        case .camera: active ? "Waiting for camera" : "Camera preview unavailable"
+        case .movie: active ? "Waiting for movie" : "No movie selected"
         }
     }
 }

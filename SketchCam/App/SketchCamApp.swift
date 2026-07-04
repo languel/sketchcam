@@ -1,9 +1,12 @@
 import SwiftUI
+import AppKit
 
 @main
 struct SketchCamApp: App {
     @StateObject private var appUI = AppUIState()
     @StateObject private var model = SketchCamViewModel()
+    @StateObject private var outputWindow = OutputWindowController()
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(LayoutStorageKeys.visibleTabs) private var visibleTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.leftTabs) private var leftTabsRaw: String = ""
     @AppStorage(LayoutStorageKeys.topTabs) private var topTabsRaw: String = ""
@@ -23,12 +26,35 @@ struct SketchCamApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView(model: model)
+        WindowGroup("SketchCam", id: "main") {
+            ContentView(model: model, outputWindow: outputWindow)
                 .environmentObject(appUI)
                 .frame(minWidth: 120, minHeight: 68)
         }
         .commands {
+            CommandMenu("Outputs") {
+                Button("Show Main Canvas") {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .keyboardShortcut("0", modifiers: [.command, .option])
+                Divider()
+                Button(outputWindow.isOpen ? "Close Output Window" : "Open Output Window") {
+                    toggleOutputWindow()
+                }
+                .keyboardShortcut("w", modifiers: [.command, .option])
+                Button("Bring Output To Front") {
+                    if outputWindow.isOpen {
+                        outputWindow.bringToFront()
+                    } else {
+                        openWindow(id: "output")
+                    }
+                }
+                .keyboardShortcut("o", modifiers: [.command, .option])
+                Divider()
+                Toggle("Output On Top", isOn: $outputWindow.alwaysOnTop)
+                Toggle("Output Click Through", isOn: $outputWindow.clickThrough)
+            }
             CommandMenu("Panels") {
                 Button("Show All Panels") {
                     appUI.sendLayoutCommand(.showAll)
@@ -78,10 +104,18 @@ struct SketchCamApp: App {
         .windowResizability(.contentMinSize)
 
         Window("SketchCam Output", id: "output") {
-            SecondaryOutputWindow(model: model)
+            SecondaryOutputWindow(model: model, outputWindow: outputWindow)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+    }
+
+    private func toggleOutputWindow() {
+        if outputWindow.isOpen {
+            outputWindow.close()
+        } else {
+            openWindow(id: "output")
+        }
     }
 
     private var visibleTabs: [ControlTab] {

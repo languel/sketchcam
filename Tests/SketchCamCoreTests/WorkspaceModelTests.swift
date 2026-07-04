@@ -92,6 +92,30 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(workspace.visibleOutputFrames().map(\.id), [visible.id])
     }
 
+    func testCropRectClampsToUnitBoundsAndMinimumSize() {
+        let crop = WorkspaceFrame.clampedCropRect(
+            CGRect(x: -0.5, y: 0.95, width: 2, height: 0.001),
+            minimumSize: 0.1
+        )
+
+        XCTAssertEqual(crop.minX, 0, accuracy: 0.0001)
+        XCTAssertEqual(crop.maxX, 1, accuracy: 0.0001)
+        XCTAssertEqual(crop.minY, 0.9, accuracy: 0.0001)
+        XCTAssertEqual(crop.height, 0.1, accuracy: 0.0001)
+    }
+
+    func testCropRectStandardizesInvertedDragRect() {
+        let crop = WorkspaceFrame.clampedCropRect(
+            CGRect(x: 0.8, y: 0.7, width: -0.3, height: -0.4),
+            minimumSize: 0.05
+        )
+
+        XCTAssertEqual(crop.minX, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(crop.minY, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(crop.width, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(crop.height, 0.4, accuracy: 0.0001)
+    }
+
     func testRenderRouteCycleDetection() {
         let a = WorkspaceFrame(name: "A", role: .layer, material: .node(UUID()), localBounds: CGRect(x: 0, y: 0, width: 1, height: 1))
         let b = WorkspaceFrame(name: "B", role: .layer, material: .node(UUID()), localBounds: CGRect(x: 0, y: 0, width: 1, height: 1))

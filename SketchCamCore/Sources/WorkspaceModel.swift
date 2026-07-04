@@ -33,6 +33,7 @@ public enum WorkspacePreviewPolicy: String, CaseIterable, Identifiable, Sendable
 }
 
 public enum WorkspaceContentFit: String, CaseIterable, Identifiable, Sendable, Codable {
+    case none
     case fill
     case fit
     case stretch
@@ -182,6 +183,16 @@ public struct WorkspaceFrame: Identifiable, Equatable, Sendable, Codable {
         return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { rect, point in
             rect.union(CGRect(origin: point, size: .zero))
         }
+    }
+
+    public static func clampedCropRect(_ rect: CGRect, minimumSize: CGFloat = 0.02) -> CGRect {
+        let minSize = max(0.001, min(1, minimumSize))
+        var crop = rect.standardized
+        crop.origin.x = max(0, min(1 - minSize, crop.origin.x))
+        crop.origin.y = max(0, min(1 - minSize, crop.origin.y))
+        crop.size.width = max(minSize, min(1 - crop.origin.x, crop.size.width))
+        crop.size.height = max(minSize, min(1 - crop.origin.y, crop.size.height))
+        return crop
     }
 }
 
