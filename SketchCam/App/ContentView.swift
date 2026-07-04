@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SketchCamCore
 import SketchCamShared
 import SwiftUI
@@ -3049,7 +3050,7 @@ struct ContentView: View {
         }
         .controlSize(.small)
 
-        if outputWindow.window == nil {
+        if !outputWindow.isOpen {
             Text("Open the output window to edit live placement.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -3199,6 +3200,7 @@ struct ContentView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 14, alignment: .leading)
+                .numericScrub(value: value, precision: 0)
             BufferedNumberField(value: value, precision: 0, font: .caption, width: 58, roundedBorder: true)
         }
         .help("\(title) for the selected output window")
@@ -3209,6 +3211,7 @@ struct ContentView: View {
             outputWindow.close()
         } else {
             openWindow(id: "output")
+            outputWindow.recoverWindowReferenceAfterOpen()
         }
     }
 
@@ -5346,9 +5349,10 @@ private struct FloatSliderRow: View {
         HStack(spacing: 6) {
             Text(title)
                 .font(.caption2)
-                .frame(width: 76, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: doubleValue, precision: precision)
                 .onTapGesture(count: 2) { value = defaultValue }
+                .frame(width: 76, alignment: .leading)
             Slider(value: $value, in: range)
                 .controlSize(.small)
             BufferedNumberField(value: doubleValue, precision: precision, font: .caption2)
@@ -5428,6 +5432,117 @@ private struct BufferedNumberField: View {
         return formatted
             .replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\.$"#, with: "", options: .regularExpression)
+    }
+}
+
+private struct NumericScrubModifier: ViewModifier {
+    @Binding var value: Double
+    let precision: Int
+    @State private var isScrubbing = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 2)
+            .overlay(alignment: .bottom) {
+                if isScrubbing {
+                    Image(systemName: "arrow.left.and.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .offset(y: 7)
+                }
+            }
+            .contentShape(Rectangle())
+            .overlay {
+                NumericScrubCatcher(value: $value, precision: precision, isScrubbing: $isScrubbing)
+            }
+    }
+}
+
+private struct NumericScrubCatcher: NSViewRepresentable {
+    @Binding var value: Double
+    let precision: Int
+    @Binding var isScrubbing: Bool
+
+    func makeNSView(context: Context) -> ScrubView {
+        let view = ScrubView()
+        view.value = $value
+        view.isScrubbing = $isScrubbing
+        view.precision = precision
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrubView, context: Context) {
+        nsView.value = $value
+        nsView.isScrubbing = $isScrubbing
+        nsView.precision = precision
+    }
+
+    final class ScrubView: NSView {
+        var value: Binding<Double> = .constant(0)
+        var isScrubbing: Binding<Bool> = .constant(false)
+        var precision = 0
+
+        private var anchorScreenPoint: CGPoint?
+        private var cursorHidden = false
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard NSApp.currentEvent?.modifierFlags.contains(.command) == true else { return nil }
+            return self
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard event.modifierFlags.contains(.command) else { return }
+            window?.makeFirstResponder(self)
+            anchorScreenPoint = CGEvent(source: nil)?.location
+            isScrubbing.wrappedValue = true
+            if !cursorHidden {
+                NSCursor.hide()
+                cursorHidden = true
+            }
+            resetCursor()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard isScrubbing.wrappedValue else { return }
+            let fine = event.modifierFlags.contains(.shift)
+            let baseStep = pow(10, Double(-max(0, precision)))
+            let step = fine ? baseStep * 0.1 : baseStep
+            let delta = Double(event.deltaX + event.deltaY)
+            value.wrappedValue += delta * step * 0.25
+            resetCursor()
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            endScrub()
+        }
+
+        override func viewDidMoveToWindow() {
+            if window == nil {
+                endScrub()
+            }
+        }
+
+        private func resetCursor() {
+            guard let anchorScreenPoint else { return }
+            CGWarpMouseCursorPosition(anchorScreenPoint)
+        }
+
+        private func endScrub() {
+            if cursorHidden {
+                NSCursor.unhide()
+                cursorHidden = false
+            }
+            isScrubbing.wrappedValue = false
+            anchorScreenPoint = nil
+        }
+    }
+}
+
+private extension View {
+    func numericScrub(value: Binding<Double>, precision: Int) -> some View {
+        modifier(NumericScrubModifier(value: value, precision: precision))
     }
 }
 
@@ -5795,6 +5910,7 @@ private struct WorkspaceFrameStackEditor: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .numericScrub(value: value, precision: 1)
             BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true)
         }
     }
@@ -6634,9 +6750,10 @@ private struct SliderRow: View {
         let text = Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
-            .frame(width: 70, alignment: .leading)
             .contentShape(Rectangle())
+            .numericScrub(value: $value, precision: precision)
             .onTapGesture(count: 2) { value = defaultValue }
+            .frame(width: 70, alignment: .leading)
         if let toolbarDragProvider {
             text
                 .onDrag { toolbarDragProvider() }

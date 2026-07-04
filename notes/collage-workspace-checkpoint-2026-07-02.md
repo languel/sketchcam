@@ -16,6 +16,8 @@ frames are easier to manage in the layer stack, paper is treated as its own edit
 - Added buffered numeric fields for sliders and frame transforms so partial float entry does not fight the cursor.
 - Cleaned up the Layers/frame-stack row: compact add menu, icon-only role/blend controls, lock toggle, tighter spacing, and selected-frame-aware workspace hit testing with Cmd-click cycling through overlaps.
 - Updated draw-tool and toolbar color-picker details: `scribble.variable` for Draw and stable RGBA color picking for the ink toolbar swatch.
+- Added secondary output-window controls for open/close, borderless/transparent/on-top/click-through, live position/size tracking, and selectable texture sources.
+- Added Command-drag numeric scrubbing on value labels, with Shift for fine adjustment and a pinned cursor so screen edges do not cap the scrub.
 
 ## Manual Test Notes
 
@@ -23,3 +25,5 @@ frames are easier to manage in the layer stack, paper is treated as its own edit
 - Verify Paper tint/opacity affects the selected Paper frame only.
 - Verify layer stack controls fit at the default panel width.
 - Verify selecting a lower frame from Layers allows workspace dragging without the top frame stealing the drag; Cmd-click should cycle overlapping frames.
+- Verify moving/resizing the output window by hand updates the Output panel fields.
+- Verify Command-dragging value labels changes numbers smoothly, and Shift-Command-drag uses finer steps.

@@ -27,6 +27,8 @@ enum OutputWindowSource: Equatable, Identifiable {
 }
 
 final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate {
+    private static let windowIdentifier = NSUserInterfaceItemIdentifier("SketchCam.OutputWindow")
+
     @Published var selectedWindowName = "Output 1"
     @Published var source: OutputWindowSource = .activeViewport
     @Published private(set) var isOpen = false
@@ -93,9 +95,52 @@ final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate
         isOpen = false
     }
 
+    func attachWindow(_ window: NSWindow) {
+        window.identifier = Self.windowIdentifier
+        window.title = "SketchCam Output"
+        self.window = window
+        isOpen = !window.isMiniaturized
+    }
+
+    func recoverWindowReference() {
+        if let window, window.isVisible {
+            isOpen = !window.isMiniaturized
+            applyChrome()
+            return
+        }
+        if let found = NSApp.windows.first(where: { window in
+            window.identifier == Self.windowIdentifier || window.title == "SketchCam Output"
+        }) {
+            attachWindow(found)
+        } else {
+            isOpen = false
+        }
+    }
+
+    func recoverWindowReferenceAfterOpen() {
+        for delay in [0.0, 0.05, 0.2, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.recoverWindowReference()
+            }
+        }
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         if notification.object as? NSWindow === window {
             isOpen = true
+            updateGeometryFromWindow()
+        }
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        if notification.object as? NSWindow === window {
+            updateGeometryFromWindow()
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        if notification.object as? NSWindow === window {
+            updateGeometryFromWindow()
         }
     }
 
@@ -208,19 +253,28 @@ struct OutputWindowAccessor: NSViewRepresentable {
     let controller: OutputWindowController
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                controller.window = window
-            }
-        }
+        let view = OutputWindowProbeView()
+        view.controller = controller
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         if let window = nsView.window,
            controller.window !== window {
-            controller.window = window
+            controller.attachWindow(window)
+        }
+    }
+
+    private final class OutputWindowProbeView: NSView {
+        weak var controller: OutputWindowController?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.controller?.attachWindow(window)
+            }
         }
     }
 }

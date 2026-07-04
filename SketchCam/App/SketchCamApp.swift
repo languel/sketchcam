@@ -48,6 +48,7 @@ struct SketchCamApp: App {
                         outputWindow.bringToFront()
                     } else {
                         openWindow(id: "output")
+                        outputWindow.recoverWindowReferenceAfterOpen()
                     }
                 }
                 .keyboardShortcut("o", modifiers: [.command, .option])
@@ -115,6 +116,7 @@ struct SketchCamApp: App {
             outputWindow.close()
         } else {
             openWindow(id: "output")
+            outputWindow.recoverWindowReferenceAfterOpen()
         }
     }
 
