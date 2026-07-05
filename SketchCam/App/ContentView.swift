@@ -2907,9 +2907,9 @@ struct ContentView: View {
         }
         .controlSize(.small)
         HStack {
-            Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
+            Button("Open Movie…") { model.openMoviePanel() }
                 .panelButton()
-            Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
+            Button("Demo clip") { model.loadDemoClip() }
                 .panelButton()
             Text(model.movieURL?.lastPathComponent ?? "No movie selected")
                 .font(.caption)
@@ -2920,7 +2920,7 @@ struct ContentView: View {
         HStack {
             TextField("https://… (stream URL)", text: $movieURLField)
                 .textFieldStyle(.roundedBorder)
-            Button("Load") { model.frameSource = .movie; model.openMovieURL(movieURLField) }
+            Button("Load") { model.openMovieURL(movieURLField) }
                 .panelButton()
                 .disabled(movieURLField.isEmpty)
         }
@@ -3015,6 +3015,7 @@ struct ContentView: View {
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
                 .frame(width: 72)
+                .numericScrub(value: inkUndoGPUStateCountBinding, defaultValue: InkUndoPreferences.defaultGPUStateCount)
                 .help("Click or double-click to type an exact state count.")
             Stepper("", value: inkUndoGPUStateCountBinding, in: 0...inkUndoMaximumStateCount)
                 .labelsHidden()
@@ -3195,13 +3196,21 @@ struct ContentView: View {
     }
 
     private func outputWindowNumberField(_ title: String, value: Binding<Double>) -> some View {
-        HStack(spacing: 4) {
+        let defaultValue: Double? = {
+            switch title {
+            case "X", "Y": return 0
+            case "W": return 960
+            case "H": return 540
+            default: return nil
+            }
+        }()
+        return HStack(spacing: 4) {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 14, alignment: .leading)
-                .numericScrub(value: value, precision: 0)
-            BufferedNumberField(value: value, precision: 0, font: .caption, width: 58, roundedBorder: true)
+                .numericScrub(value: value, precision: 0, defaultValue: defaultValue)
+            BufferedNumberField(value: value, precision: 0, font: .caption, width: 58, roundedBorder: true, defaultValue: defaultValue)
         }
         .help("\(title) for the selected output window")
     }
@@ -3967,7 +3976,7 @@ struct ContentView: View {
     }
     private var inkDynamicInputMenuBinding: Binding<PortBinding?> {
         Binding(
-            get: { activeInkConfig.dynamicInput ?? .none },
+            get: { activeInkConfig.dynamicInput ?? PortBinding.none },
             set: { value in mutateActiveInkConfig { $0.dynamicInput = value } }
         )
     }
@@ -3998,7 +4007,7 @@ struct ContentView: View {
         portBindingLabel(inkTextureBinding.wrappedValue, noneLabel: "None", nilLabel: "None")
     }
     private var inkDynamicInputLabel: String {
-        portBindingLabel(activeInkConfig.dynamicInput ?? .none, noneLabel: "None", nilLabel: "None")
+        portBindingLabel(activeInkConfig.dynamicInput ?? PortBinding.none, noneLabel: "None", nilLabel: "None")
     }
 
     @ViewBuilder private func inkInputMenu(
@@ -4191,7 +4200,12 @@ struct ContentView: View {
                 value: Binding(get: { model.settings[keyPath: keyPath] }, set: { model.settings[keyPath: keyPath] = $0 }),
                 in: 0...99_999
             ) {
-                Text("Seed \(model.settings[keyPath: keyPath])").monospacedDigit()
+                Text("Seed \(model.settings[keyPath: keyPath])")
+                    .monospacedDigit()
+                    .numericScrub(
+                        value: Binding(get: { model.settings[keyPath: keyPath] }, set: { model.settings[keyPath: keyPath] = $0 }),
+                        defaultValue: 0
+                    )
             }
             Button("Shuffle") { model.settings[keyPath: keyPath] = Int.random(in: 0..<100_000) }
         }
@@ -4201,7 +4215,9 @@ struct ContentView: View {
         SectionHeader("Seed")
         HStack {
             Stepper(value: inkSeedBinding, in: 0...99_999) {
-                Text("Seed \(activeInkConfig.seed)").monospacedDigit()
+                Text("Seed \(activeInkConfig.seed)")
+                    .monospacedDigit()
+                    .numericScrub(value: inkSeedBinding, defaultValue: 0)
             }
             Button("Shuffle") { mutateActiveInkConfig { $0.seed = Int.random(in: 0..<100_000) } }
         }
@@ -5170,10 +5186,14 @@ private struct EffectPanel: View {
             HStack {
                 Text(amountLabel).font(.caption2).frame(width: 56, alignment: .leading)
                     .contentShape(Rectangle())
+                    .numericScrub(value: $effect.amount, defaultValue: defaultAmount)
                     .onTapGesture(count: 2) { effect.amount = defaultAmount }
                     .help("Double-click to reset to \(String(format: "%.2f", defaultAmount))")
                 Slider(value: $effect.amount, in: amountRange).controlSize(.small)
-                Text(String(format: "%.2f", effect.amount)).font(.caption2).frame(width: 32)
+                Text(String(format: "%.2f", effect.amount))
+                    .font(.caption2)
+                    .frame(width: 32)
+                    .numericScrub(value: $effect.amount, defaultValue: defaultAmount)
             }
         }
         if effect.kind.usesColor {
@@ -5205,10 +5225,14 @@ private struct EffectPanel: View {
         HStack {
             Text(title).font(.caption2).frame(width: 56, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: value, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
                 .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).frame(width: 32)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption2)
+                .frame(width: 32)
+                .numericScrub(value: value, defaultValue: defaultValue)
         }
     }
 
@@ -5325,10 +5349,15 @@ private struct AcrylicNodeEditor: View {
         HStack {
             Text(title).font(.caption2).frame(width: 72, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: value, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
                 .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).monospacedDigit().frame(width: 38)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption2)
+                .monospacedDigit()
+                .frame(width: 38)
+                .numericScrub(value: value, defaultValue: defaultValue)
         }
     }
 }
@@ -5350,12 +5379,12 @@ private struct FloatSliderRow: View {
             Text(title)
                 .font(.caption2)
                 .contentShape(Rectangle())
-                .numericScrub(value: doubleValue, precision: precision)
+                .numericScrub(value: doubleValue, precision: precision, defaultValue: Double(defaultValue))
                 .onTapGesture(count: 2) { value = defaultValue }
                 .frame(width: 76, alignment: .leading)
             Slider(value: $value, in: range)
                 .controlSize(.small)
-            BufferedNumberField(value: doubleValue, precision: precision, font: .caption2)
+            BufferedNumberField(value: doubleValue, precision: precision, font: .caption2, defaultValue: Double(defaultValue))
         }
         .contentShape(Rectangle())
         .help("\(hint) Double-click the label to restore the default; type an exact value in the number field and press Return.")
@@ -5368,6 +5397,7 @@ private struct BufferedNumberField: View {
     var font: Font = .caption
     var width: CGFloat = 42
     var roundedBorder = false
+    var defaultValue: Double?
 
     @State private var text = ""
     @FocusState private var editing: Bool
@@ -5409,6 +5439,7 @@ private struct BufferedNumberField: View {
                 text = formatted(value)
                 editing = false
             }
+            .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
     }
 
     private func commit() {
@@ -5438,6 +5469,8 @@ private struct BufferedNumberField: View {
 private struct NumericScrubModifier: ViewModifier {
     @Binding var value: Double
     let precision: Int
+    let step: Double?
+    let defaultValue: Double?
     @State private var isScrubbing = false
 
     func body(content: Content) -> some View {
@@ -5453,7 +5486,7 @@ private struct NumericScrubModifier: ViewModifier {
             }
             .contentShape(Rectangle())
             .overlay {
-                NumericScrubCatcher(value: $value, precision: precision, isScrubbing: $isScrubbing)
+                NumericScrubCatcher(value: $value, precision: precision, step: step, defaultValue: defaultValue, isScrubbing: $isScrubbing)
             }
     }
 }
@@ -5461,6 +5494,8 @@ private struct NumericScrubModifier: ViewModifier {
 private struct NumericScrubCatcher: NSViewRepresentable {
     @Binding var value: Double
     let precision: Int
+    let step: Double?
+    let defaultValue: Double?
     @Binding var isScrubbing: Bool
 
     func makeNSView(context: Context) -> ScrubView {
@@ -5468,6 +5503,8 @@ private struct NumericScrubCatcher: NSViewRepresentable {
         view.value = $value
         view.isScrubbing = $isScrubbing
         view.precision = precision
+        view.step = step
+        view.defaultValue = defaultValue
         return view
     }
 
@@ -5475,12 +5512,16 @@ private struct NumericScrubCatcher: NSViewRepresentable {
         nsView.value = $value
         nsView.isScrubbing = $isScrubbing
         nsView.precision = precision
+        nsView.step = step
+        nsView.defaultValue = defaultValue
     }
 
     final class ScrubView: NSView {
         var value: Binding<Double> = .constant(0)
         var isScrubbing: Binding<Bool> = .constant(false)
         var precision = 0
+        var step: Double?
+        var defaultValue: Double?
 
         private var anchorScreenPoint: CGPoint?
         private var cursorHidden = false
@@ -5494,6 +5535,10 @@ private struct NumericScrubCatcher: NSViewRepresentable {
 
         override func mouseDown(with event: NSEvent) {
             guard event.modifierFlags.contains(.command) else { return }
+            if event.clickCount >= 2, let defaultValue {
+                value.wrappedValue = defaultValue
+                return
+            }
             window?.makeFirstResponder(self)
             anchorScreenPoint = CGEvent(source: nil)?.location
             isScrubbing.wrappedValue = true
@@ -5507,7 +5552,7 @@ private struct NumericScrubCatcher: NSViewRepresentable {
         override func mouseDragged(with event: NSEvent) {
             guard isScrubbing.wrappedValue else { return }
             let fine = event.modifierFlags.contains(.shift)
-            let baseStep = pow(10, Double(-max(0, precision)))
+            let baseStep = step ?? Self.defaultStep(precision: precision)
             let step = fine ? baseStep * 0.1 : baseStep
             let delta = Double(event.deltaX + event.deltaY)
             value.wrappedValue += delta * step * 0.25
@@ -5537,12 +5582,34 @@ private struct NumericScrubCatcher: NSViewRepresentable {
             isScrubbing.wrappedValue = false
             anchorScreenPoint = nil
         }
+
+        private static func defaultStep(precision: Int) -> Double {
+            precision <= 0 ? 10 : 0.1
+        }
     }
 }
 
 private extension View {
-    func numericScrub(value: Binding<Double>, precision: Int) -> some View {
-        modifier(NumericScrubModifier(value: value, precision: precision))
+    func numericScrub(value: Binding<Double>, precision: Int, step: Double? = nil, defaultValue: Double? = nil) -> some View {
+        modifier(NumericScrubModifier(value: value, precision: precision, step: step, defaultValue: defaultValue))
+    }
+
+    func numericScrub(value: Binding<Int>, step: Double = 10, defaultValue: Int? = nil) -> some View {
+        let doubleValue = Binding<Double>(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = Int($0.rounded()) }
+        )
+        let resetValue = defaultValue.map { Double($0) }
+        return numericScrub(value: doubleValue, precision: 0, step: step, defaultValue: resetValue)
+    }
+
+    func numericScrub(value: Binding<Float>, precision: Int = 2, step: Double? = nil, defaultValue: Float? = nil) -> some View {
+        let doubleValue = Binding<Double>(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = Float($0) }
+        )
+        let resetValue = defaultValue.map { Double($0) }
+        return numericScrub(value: doubleValue, precision: precision, step: step, defaultValue: resetValue)
     }
 }
 
@@ -5590,8 +5657,11 @@ private struct PaperControls: View {
             paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3,
                         hint: "Fine-grain variation across Y. Unequal scales stretch the pattern and also change the hidden material map.")
             HStack {
-                Stepper("Seed \(config.seed ?? 0)", value: seedBinding, in: 0...99_999)
-                    .font(.caption2)
+                Stepper(value: seedBinding, in: 0...99_999) {
+                    Text("Seed \(config.seed ?? 0)")
+                        .font(.caption2)
+                        .numericScrub(value: seedBinding, defaultValue: 0)
+                }
                 Spacer()
                 Button("Shuffle") { config.seed = Int.random(in: 0..<100_000) }
                     .buttonStyle(.borderless)
@@ -5856,13 +5926,13 @@ private struct WorkspaceFrameStackEditor: View {
     @ViewBuilder private func frameDetails(_ frame: WorkspaceFrame) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                field("X", value: transformValue(frame.id, get: { $0.tx }, set: { $0.tx = $1 }))
-                field("Y", value: transformValue(frame.id, get: { $0.ty }, set: { $0.ty = $1 }))
-                field("W", value: boundsValue(frame.id, get: { $0.width }, set: { $0.size.width = max(1, $1) }))
-                field("H", value: boundsValue(frame.id, get: { $0.height }, set: { $0.size.height = max(1, $1) }))
+                field("X", value: transformValue(frame.id, get: { $0.tx }, set: { $0.tx = $1 }), defaultValue: 0)
+                field("Y", value: transformValue(frame.id, get: { $0.ty }, set: { $0.ty = $1 }), defaultValue: 0)
+                field("W", value: boundsValue(frame.id, get: { $0.width }, set: { $0.size.width = max(1, $1) }), defaultValue: model.outputFormat.size.width)
+                field("H", value: boundsValue(frame.id, get: { $0.height }, set: { $0.size.height = max(1, $1) }), defaultValue: model.outputFormat.size.height)
             }
             HStack {
-                field("Rot", value: rotation(frame.id))
+                field("Rot", value: rotation(frame.id), defaultValue: 0)
                 Picker("Fit", selection: contentFitBinding(frame.id)) {
                     ForEach(WorkspaceContentFit.allCases) { fit in
                         Text(fit.rawValue.capitalized).tag(fit)
@@ -5890,10 +5960,10 @@ private struct WorkspaceFrameStackEditor: View {
             .buttonStyle(.borderless)
             .controlSize(.small)
             HStack {
-                field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x))
-                field("Y", value: cropValue(frame.id, keyPath: \.origin.y))
-                field("W", value: cropValue(frame.id, keyPath: \.size.width))
-                field("H", value: cropValue(frame.id, keyPath: \.size.height))
+                field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x), defaultValue: 0)
+                field("Y", value: cropValue(frame.id, keyPath: \.origin.y), defaultValue: 0)
+                field("W", value: cropValue(frame.id, keyPath: \.size.width), defaultValue: 1)
+                field("H", value: cropValue(frame.id, keyPath: \.size.height), defaultValue: 1)
             }
             MaskEditor(mask: frameMaskBinding(frame.id),
                        personMatteQuality: $model.settings.segmentation.quality,
@@ -5905,13 +5975,13 @@ private struct WorkspaceFrameStackEditor: View {
         }
     }
 
-    private func field(_ label: String, value: Binding<Double>) -> some View {
+    private func field(_ label: String, value: Binding<Double>, defaultValue: Double? = nil) -> some View {
         HStack(spacing: 3) {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .numericScrub(value: value, precision: 1)
-            BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true)
+                .numericScrub(value: value, precision: 1, defaultValue: defaultValue)
+            BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true, defaultValue: defaultValue)
         }
     }
 
@@ -6739,7 +6809,7 @@ private struct SliderRow: View {
             // experiment; the slider thumb just pins to its end. Enter or Escape
             // commits and releases focus so keyboard shortcuts ([, ], etc.) work
             // again (clicking the canvas also releases it).
-            BufferedNumberField(value: $value, precision: precision)
+            BufferedNumberField(value: $value, precision: precision, defaultValue: defaultValue)
         }
         .frame(minHeight: 22)
         .contentShape(Rectangle())
@@ -6751,7 +6821,7 @@ private struct SliderRow: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .contentShape(Rectangle())
-            .numericScrub(value: $value, precision: precision)
+            .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
             .onTapGesture(count: 2) { value = defaultValue }
             .frame(width: 70, alignment: .leading)
         if let toolbarDragProvider {
@@ -6823,9 +6893,11 @@ private struct OutputExportControls: View {
                 Text("Size")
                 TextField("W", value: width, format: .number)
                     .frame(width: 64)
+                    .numericScrub(value: width, defaultValue: ExportConfiguration().width)
                 Text("x")
                 TextField("H", value: height, format: .number)
                     .frame(width: 64)
+                    .numericScrub(value: height, defaultValue: ExportConfiguration().height)
             }
             .textFieldStyle(.roundedBorder)
 
@@ -6833,9 +6905,11 @@ private struct OutputExportControls: View {
                 Text("FPS")
                 TextField("Capture", value: captureFPS, format: .number.precision(.fractionLength(0)))
                     .frame(width: 72)
+                    .numericScrub(value: captureFPS, precision: 0, defaultValue: ExportConfiguration().captureFPS)
                 Text("->")
                 TextField("Playback", value: playbackFPS, format: .number.precision(.fractionLength(0)))
                     .frame(width: 72)
+                    .numericScrub(value: playbackFPS, precision: 0, defaultValue: ExportConfiguration().playbackFPS)
             }
             .textFieldStyle(.roundedBorder)
 
@@ -7111,6 +7185,7 @@ private struct InkToolbarStrip: View {
             Text(label)
                 .hudLabel()
                 .contentShape(Rectangle())
+                .numericScrub(value: value, precision: 2, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
                 .help("Double-click to reset")
             Slider(value: value, in: range)
