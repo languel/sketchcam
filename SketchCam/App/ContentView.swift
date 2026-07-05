@@ -284,6 +284,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
     case mode = "mode"
     case inkKind = "inkKind"
     case hue = "hue"
+    case washHue = "washHue"
     case smooth = "smooth"
     case penSize = "penSize"
     case washSize = "washSize"
@@ -296,6 +297,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
     case colorSeparation = "colorSeparation"
     case brushInk = "brushInk"
     case fix = "fix"
+    case unfix = "unfix"
+    case wetCanvas = "wetCanvas"
+    case dryCanvas = "dryCanvas"
     case clear = "clear"
     case save = "save"
 
@@ -306,6 +310,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .mode: "Mode"
         case .inkKind: "Ink"
         case .hue: "Hue"
+        case .washHue: "Wash color"
         case .smooth: "Smooth"
         case .penSize: "Pen size"
         case .washSize: "Wash size"
@@ -318,6 +323,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .colorSeparation: "Color"
         case .brushInk: "Brush ink"
         case .fix: "Fix"
+        case .unfix: "Unfix"
+        case .wetCanvas: "Wet canvas"
+        case .dryCanvas: "Dry canvas"
         case .clear: "Clear"
         case .save: "Save"
         }
@@ -330,6 +338,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .wetDecay: "Wet"
         case .colorSeparation: "Color"
         case .brushInk: "Brush"
+        case .washHue: "Wash"
+        case .wetCanvas: "Wet"
+        case .dryCanvas: "Dry"
         default: title
         }
     }
@@ -339,6 +350,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .mode: "paintbrush.pointed"
         case .inkKind: "drop"
         case .hue: "paintpalette"
+        case .washHue: "paintpalette.fill"
         case .smooth: "scribble"
         case .penSize: "slider.horizontal.3"
         case .washSize: "paintbrush"
@@ -351,6 +363,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .colorSeparation: "camera.filters"
         case .brushInk: "drop.fill"
         case .fix: "pin"
+        case .unfix: "pin.slash"
+        case .wetCanvas: "drop.fill"
+        case .dryCanvas: "sun.max"
         case .clear: "trash"
         case .save: "square.and.arrow.down"
         }
@@ -415,7 +430,10 @@ struct ContentView: View {
     @State private var spacePanToolBeforeHold: WorkspaceTool?
     @State private var spacePanMonitor: Any?
     @State private var inkPaperSettingsExpanded = false
+    @State private var inkInputsExpanded = false
     @State private var inkMaterialMapExpanded = false
+    @State private var inkBrushPropertiesExpanded = true
+    @State private var inkPathExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
@@ -2201,7 +2219,7 @@ struct ContentView: View {
             if !isMinimized && !isInlineToolbar {
                 tabContent(activePanel)
                     .id(activePanel.id)
-                    .padding(.top, 10)
+                    .padding(.top, 4)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
                     .transaction { transaction in
@@ -2672,6 +2690,7 @@ struct ContentView: View {
             mode: inkModeBinding,
             inkKind: inkKindBinding,
             inkColor: inkColorRGBA,
+            washColor: inkWashColorRGBA,
             smooth: inkConfigFloatBinding(\.smoothing),
             size: inkSizeBinding,
             washSize: inkWashSizeBinding,
@@ -2687,6 +2706,9 @@ struct ContentView: View {
             removeControl: removeInkToolbarControl,
             resetControls: resetInkToolbarControls,
             fix: fixInk,
+            unfix: unfixInk,
+            wetCanvas: wetInkCanvas,
+            dryCanvas: dryInkCanvas,
             clear: clearInk,
             save: model.exportCurrentFrame
         )
@@ -2699,9 +2721,6 @@ struct ContentView: View {
     }
 
     private func toolbarControlDragProvider(_ control: ToolbarControlID) -> NSItemProvider {
-        guard NSEvent.modifierFlags.contains(.option) else {
-            return NSItemProvider(object: "toolbar-control-cancelled" as NSString)
-        }
         return NSItemProvider(object: "toolbar-control:\(control.id)" as NSString)
     }
 
@@ -3496,134 +3515,154 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var inkTab: some View {
-        Group {
-            SectionHeader("Inputs")
-            inkInputMenu(
-                title: "Surface input",
-                label: inkSurfaceInputLabel,
-                help: "Layer used as the ink surface/substrate. None means the ink sim has no routed surface texture.",
-                binding: inkSurfaceInputMenuBinding
-            )
-            inkInputMenu(
-                title: "Dynamic input",
-                label: inkDynamicInputLabel,
-                help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
-                binding: inkDynamicInputMenuBinding
-            )
-            DisclosureGroup("Material map", isExpanded: $inkMaterialMapExpanded) {
-                PaperMaterialMapControls(config: inkSurfacePaperConfigBinding)
-                    .padding(.top, 4)
-            }
-            .disabled(inkSurfacePaperNodeID == nil)
+        VStack(alignment: .leading, spacing: 2) {
+            DisclosureGroup("Brush properties", isExpanded: $inkBrushPropertiesExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Picker("Mode", selection: inkModeBinding) {
+                            ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        .pickerStyle(.segmented)
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.mode) }
+                        .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
 
-            DisclosureGroup("Ink response") {
-                SliderRow(title: "Surface influence", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
-                SliderRow(title: "Dynamic influence", value: optionalInkConfigFloatBinding(\.dynamicInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
-                SliderRow(title: "Motion force", value: optionalInkConfigFloatBinding(\.motionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
-                          hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
-                SliderRow(title: "Motion wetness", value: optionalInkConfigFloatBinding(\.motionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
-                SliderRow(title: "Dynamic absorbency", value: optionalInkConfigFloatBinding(\.dynamicAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "How strongly the dynamic input accelerates wetting and drying locally.")
-                SliderRow(title: "Dynamic drag", value: optionalInkConfigFloatBinding(\.dynamicDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
-                          hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
-                SliderRow(title: "Dynamic resist", value: optionalInkConfigFloatBinding(\.dynamicResist, defaultValue: 1), range: 0...1, defaultValue: 1,
-                          hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
+                        Picker("Ink", selection: inkKindBinding) {
+                            ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
+                        }
+                        .pickerStyle(.segmented)
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.inkKind) }
+                        .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
+                    }
+                    HStack(spacing: 8) {
+                        HStack(spacing: 5) {
+                            RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
+                                .toolbarControlDragHandle { toolbarControlDragProvider(.hue) }
+                            colorResetButton("Reset ink color") { mutateActiveInkConfig { $0.inkColor = .ink } }
+                            Toggle("", isOn: savePenStrokeBinding)
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                                .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
+                        }
+                        Spacer(minLength: 6)
+                        HStack(spacing: 5) {
+                            RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
+                                .toolbarControlDragHandle { toolbarControlDragProvider(.washHue) }
+                            colorResetButton("Reset wash color") { mutateActiveInkConfig { $0.washColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) } }
+                            Toggle("", isOn: saveWashStrokeBinding)
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                                .help("Save wash stroke as an editable path. Off = immediate.")
+                        }
+                    }
+                    SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5, compact: true,
+                              hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.penSize) })
+                    SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5, compact: true,
+                              hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.washSize) })
+                    SliderRow(title: "Smear", value: inkConfigFloatBinding(\.smearStrength), defaultValue: 0.5, compact: true,
+                              hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.smear) })
+                    SliderRow(title: "Flow", value: inkConfigFloatBinding(\.flow), defaultValue: 0.9, compact: true,
+                              hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.flow) })
+                    SliderRow(title: "Bleed", value: inkConfigFloatBinding(\.bleed), defaultValue: 0.8, compact: true,
+                              hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)",
+                              toolbarDragProvider: { toolbarControlDragProvider(.bleed) })
+                    SliderRow(title: "Dry", value: inkConfigFloatBinding(\.dry), defaultValue: 0.25, compact: true,
+                              hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.dry) })
+                    SliderRow(title: "Wet decay", value: optionalInkConfigFloatBinding(\.wetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1, compact: true,
+                              hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.wetDecay) })
+                    SliderRow(title: "Fade", value: optionalInkConfigFloatBinding(\.fadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2, compact: true,
+                              hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.fade) })
+                    SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5, compact: true,
+                              hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.colorSeparation) })
+                    SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0, compact: true,
+                              hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).",
+                              toolbarDragProvider: { toolbarControlDragProvider(.brushInk) })
+                }
+            }
+            DisclosureGroup("Inputs", isExpanded: $inkInputsExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    inkInputMenu(
+                        title: "Surface input",
+                        label: inkSurfaceInputLabel,
+                        help: "Layer used as the ink surface/substrate. None means the ink sim has no routed surface texture.",
+                        binding: inkSurfaceInputMenuBinding
+                    )
+                    inkInputMenu(
+                        title: "Dynamic input",
+                        label: inkDynamicInputLabel,
+                        help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
+                        binding: inkDynamicInputMenuBinding
+                    )
+                }
+            }
+            DisclosureGroup("Response", isExpanded: $inkMaterialMapExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    PaperMaterialMapControls(config: inkSurfacePaperConfigBinding)
+                        .disabled(inkSurfacePaperNodeID == nil)
+                    Divider().opacity(0.35)
+                    SliderRow(title: "Surface fx", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
+                    SliderRow(title: "Dynamic fx", value: optionalInkConfigFloatBinding(\.dynamicInfluence, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
+                    SliderRow(title: "Motion push", value: optionalInkConfigFloatBinding(\.motionForce, defaultValue: 0), range: 0...2, defaultValue: 0, compact: true,
+                              hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
+                    SliderRow(title: "Motion wet", value: optionalInkConfigFloatBinding(\.motionWetness, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
+                    SliderRow(title: "Dyn absorb", value: optionalInkConfigFloatBinding(\.dynamicAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "How strongly the dynamic input accelerates wetting and drying locally.")
+                    SliderRow(title: "Dyn drag", value: optionalInkConfigFloatBinding(\.dynamicDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5, compact: true,
+                              hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
+                    SliderRow(title: "Dyn resist", value: optionalInkConfigFloatBinding(\.dynamicResist, defaultValue: 1), range: 0...1, defaultValue: 1, compact: true,
+                              hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
+                }
                 HStack(spacing: 6) {
                     Button("Fix") { fixInk() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.fix) }
                         .help("Make all current pigment permanent and immune to wash. Shortcut: Control-Option-F.")
                     Button("Unfix") { unfixInk() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.unfix) }
                         .help("Return permanent pigment to the ordinary dried layer so wetting and wash can mobilize it. Shortcut: Shift-Option-F.")
                     Button("Wet canvas") { wetInkCanvas() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.wetCanvas) }
                         .help("Flood the persistent wetness field once. It then moves and dries normally. Shortcut: Control-Option-W.")
                     Button("Dry canvas") { dryInkCanvas() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.dryCanvas) }
                         .help("Remove all wetness and fluid momentum immediately without moving or fixing pigment. Shortcut: Shift-Option-W.")
                 }
                 .controlSize(.small)
             }
-
-            Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
-                .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
-            SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5,
-                      hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.smooth) })
-
-            SectionHeader("Pen / Wash")
-            HStack(spacing: 12) {
-                Picker("Mode", selection: inkModeBinding) {
-                    ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
-                }
-                .pickerStyle(.segmented)
-                .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
-
-                Picker("Ink", selection: inkKindBinding) {
-                    ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
-                }
-                .pickerStyle(.segmented)
-                .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
-            }
-            // Ink + Wash colours on one row; the checkbox next to each toggles
-            // "save stroke" for that tool (off = immediate: paints straight onto
-            // the canvas without recording an editable path).
-            HStack(spacing: 12) {
-                HStack(spacing: 6) {
-                    RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset ink color") { mutateActiveInkConfig { $0.inkColor = .ink } }
-                    Toggle("", isOn: savePenStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
-                }
-                Spacer(minLength: 6)
-                HStack(spacing: 6) {
-                    RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset wash color") { mutateActiveInkConfig { $0.washColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) } }
-                    Toggle("", isOn: saveWashStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save wash stroke as an editable path. Off = immediate.")
+            DisclosureGroup("Path", isExpanded: $inkPathExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Show cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
+                        .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
+                    SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5, compact: true,
+                              hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.smooth) })
+                    Picker("Curve", selection: inkCurveFitBinding) {
+                        ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
+                    HStack {
+                        Stepper(value: inkSeedBinding, in: 0...99_999) {
+                            Text("Seed \(activeInkConfig.seed)")
+                                .monospacedDigit()
+                                .numericScrub(value: inkSeedBinding, defaultValue: 0)
+                        }
+                        Button("Shuffle") { mutateActiveInkConfig { $0.seed = Int.random(in: 0..<100_000) } }
+                    }
                 }
             }
-            SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5,
-                      hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.penSize) })
-            SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5,
-                      hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.washSize) })
-            SliderRow(title: "Smear", value: inkConfigFloatBinding(\.smearStrength), defaultValue: 0.5,
-                      hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.smear) })
-            SliderRow(title: "Flow", value: inkConfigFloatBinding(\.flow), defaultValue: 0.9,
-                      hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.flow) })
-            SliderRow(title: "Bleed", value: inkConfigFloatBinding(\.bleed), defaultValue: 0.8,
-                      hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)",
-                      toolbarDragProvider: { toolbarControlDragProvider(.bleed) })
-            SliderRow(title: "Dry", value: inkConfigFloatBinding(\.dry), defaultValue: 0.25,
-                      hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.dry) })
-            SliderRow(title: "Wet decay", value: optionalInkConfigFloatBinding(\.wetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1,
-                      hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.wetDecay) })
-            SliderRow(title: "Fade", value: optionalInkConfigFloatBinding(\.fadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
-                      hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.fade) })
-            SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5,
-                      hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.colorSeparation) })
-            SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0,
-                      hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).",
-                      toolbarDragProvider: { toolbarControlDragProvider(.brushInk) })
-            Picker("Curve", selection: inkCurveFitBinding) {
-                ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
-            }
-            .pickerStyle(.segmented)
-            .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
-            inkSeedRow
 
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .disabled(!model.settings.landmarks.inkEnabled)
     }
 
@@ -4017,7 +4056,10 @@ struct ContentView: View {
         binding: Binding<PortBinding?>
     ) -> some View {
         HStack(spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 76, alignment: .leading)
             Menu(label) {
                 Button("None") { binding.wrappedValue = PortBinding.none }
                 Divider()
@@ -5471,13 +5513,24 @@ private struct NumericScrubModifier: ViewModifier {
     let precision: Int
     let step: Double?
     let defaultValue: Double?
+    var externalIsScrubbing: Binding<Bool>?
     @State private var isScrubbing = false
 
     func body(content: Content) -> some View {
+        let scrubbing = Binding<Bool>(
+            get: { externalIsScrubbing?.wrappedValue ?? isScrubbing },
+            set: { newValue in
+                if let externalIsScrubbing {
+                    externalIsScrubbing.wrappedValue = newValue
+                } else {
+                    isScrubbing = newValue
+                }
+            }
+        )
         content
             .padding(.vertical, 2)
             .overlay(alignment: .bottom) {
-                if isScrubbing {
+                if scrubbing.wrappedValue {
                     Image(systemName: "arrow.left.and.right")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -5486,7 +5539,7 @@ private struct NumericScrubModifier: ViewModifier {
             }
             .contentShape(Rectangle())
             .overlay {
-                NumericScrubCatcher(value: $value, precision: precision, step: step, defaultValue: defaultValue, isScrubbing: $isScrubbing)
+                NumericScrubCatcher(value: $value, precision: precision, step: step, defaultValue: defaultValue, isScrubbing: scrubbing)
             }
     }
 }
@@ -5554,7 +5607,7 @@ private struct NumericScrubCatcher: NSViewRepresentable {
             let fine = event.modifierFlags.contains(.shift)
             let baseStep = step ?? Self.defaultStep(precision: precision)
             let step = fine ? baseStep * 0.1 : baseStep
-            let delta = Double(event.deltaX + event.deltaY)
+            let delta = Double(event.deltaX - event.deltaY)
             value.wrappedValue += delta * step * 0.25
             resetCursor()
         }
@@ -5590,8 +5643,14 @@ private struct NumericScrubCatcher: NSViewRepresentable {
 }
 
 private extension View {
-    func numericScrub(value: Binding<Double>, precision: Int, step: Double? = nil, defaultValue: Double? = nil) -> some View {
-        modifier(NumericScrubModifier(value: value, precision: precision, step: step, defaultValue: defaultValue))
+    func numericScrub(
+        value: Binding<Double>,
+        precision: Int,
+        step: Double? = nil,
+        defaultValue: Double? = nil,
+        isScrubbing: Binding<Bool>? = nil
+    ) -> some View {
+        modifier(NumericScrubModifier(value: value, precision: precision, step: step, defaultValue: defaultValue, externalIsScrubbing: isScrubbing))
     }
 
     func numericScrub(value: Binding<Int>, step: Double = 10, defaultValue: Int? = nil) -> some View {
@@ -6796,11 +6855,12 @@ private struct SliderRow: View {
     var range: ClosedRange<Double> = 0...1
     var precision: Int = 2
     let defaultValue: Double
+    var compact = false
     var hint: String?
     var toolbarDragProvider: (() -> NSItemProvider)?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: compact ? 5 : 6) {
             label
             Slider(value: $value, in: range)
                 .controlSize(.small)
@@ -6809,9 +6869,9 @@ private struct SliderRow: View {
             // experiment; the slider thumb just pins to its end. Enter or Escape
             // commits and releases focus so keyboard shortcuts ([, ], etc.) work
             // again (clicking the canvas also releases it).
-            BufferedNumberField(value: $value, precision: precision, defaultValue: defaultValue)
+            BufferedNumberField(value: $value, precision: precision, font: compact ? .caption2 : .caption, width: 42, defaultValue: defaultValue)
         }
-        .frame(minHeight: 22)
+        .frame(minHeight: compact ? 17 : 22)
         .contentShape(Rectangle())
         .help("\(hint ?? title) Double-click the label to restore the default; type an exact value in the number field and press Return.")
     }
@@ -6823,7 +6883,7 @@ private struct SliderRow: View {
             .contentShape(Rectangle())
             .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
             .onTapGesture(count: 2) { value = defaultValue }
-            .frame(width: 70, alignment: .leading)
+            .frame(width: compact ? 76 : 70, alignment: .leading)
         if let toolbarDragProvider {
             text
                 .onDrag { toolbarDragProvider() }
@@ -7084,6 +7144,7 @@ private struct InkToolbarStrip: View {
     @Binding var mode: InkBrushMode
     @Binding var inkKind: InkKind
     @Binding var inkColor: RGBAColor
+    @Binding var washColor: RGBAColor
     @Binding var smooth: Double
     @Binding var size: Double
     @Binding var washSize: Double
@@ -7099,24 +7160,25 @@ private struct InkToolbarStrip: View {
     let removeControl: (ToolbarControlID) -> Void
     let resetControls: () -> Void
     let fix: () -> Void
+    let unfix: () -> Void
+    let wetCanvas: () -> Void
+    let dryCanvas: () -> Void
     let clear: () -> Void
     let save: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .bottom, spacing: 22) {
+            HStack(alignment: .center, spacing: 12) {
                 ForEach(controls) { control in
                     toolbarControl(control)
-                        .onDrag { controlDragProvider(control) }
                         .contextMenu {
                             Button("Remove") { removeControl(control) }
                             Button("Reset Toolbar") { resetControls() }
                         }
-                        .help("Option-drag this control to place it in a toolbar container. Right-click to remove or reset the toolbar.")
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 2)
         }
         .controlSize(.small)
     }
@@ -7124,41 +7186,49 @@ private struct InkToolbarStrip: View {
     @ViewBuilder private func toolbarControl(_ control: ToolbarControlID) -> some View {
         switch control {
         case .mode:
-            buttonControl(control.compactTitle, value: mode.title) { mode = mode.toggled }
+            toggleControl(control.compactTitle.lowercased(), systemImage: control.icon, value: mode.title) { mode = mode.toggled }
         case .inkKind:
-            buttonControl(control.compactTitle, value: inkKind.title) { inkKind = inkKind.toggled }
+            toggleControl(control.compactTitle.lowercased(), systemImage: control.icon, value: inkKind.title) { inkKind = inkKind.toggled }
         case .hue:
-            VStack(spacing: 5) {
-                Text(control.compactTitle)
-                    .hudLabel()
-                RGBAColorPicker("", rgba: $inkColor, supportsOpacity: true)
-                    .labelsHidden()
-                    .frame(width: 26, height: 20)
-            }
+            RGBAColorPicker("", rgba: $inkColor, supportsOpacity: true)
+                .labelsHidden()
+                .frame(width: 30, height: 30)
+                .help("\(control.compactTitle.lowercased()): \(inkColorSummary)")
+        case .washHue:
+            RGBAColorPicker("", rgba: $washColor, supportsOpacity: true)
+                .labelsHidden()
+                .frame(width: 30, height: 30)
+                .help("\(control.compactTitle.lowercased()): \(washColorSummary)")
         case .smooth:
-            hudSlider(control.compactTitle, value: $smooth, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $smooth, defaultValue: 0.5)
         case .penSize:
-            hudSlider(control.compactTitle, value: $size, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $size, defaultValue: 0.5)
         case .washSize:
-            hudSlider(control.compactTitle, value: $washSize, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $washSize, defaultValue: 0.5)
         case .smear:
-            hudSlider(control.compactTitle, value: $smear, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $smear, defaultValue: 0.5)
         case .flow:
-            hudSlider(control.compactTitle, value: $flow, defaultValue: 0.9)
+            toolbarDial(control.compactTitle.lowercased(), value: $flow, defaultValue: 0.9)
         case .bleed:
-            hudSlider(control.compactTitle, value: $bleed, defaultValue: 0.8)
+            toolbarDial(control.compactTitle.lowercased(), value: $bleed, defaultValue: 0.8)
         case .dry:
-            hudSlider(control.compactTitle, value: $dry, defaultValue: 0.25)
+            toolbarDial(control.compactTitle.lowercased(), value: $dry, defaultValue: 0.25)
         case .wetDecay:
-            hudSlider(control.compactTitle, value: $wetDecay, defaultValue: 1)
+            toolbarDial(control.compactTitle.lowercased(), value: $wetDecay, defaultValue: 1)
         case .fade:
-            hudSlider(control.compactTitle, value: $fade, defaultValue: 1.2, range: 0.2...5)
+            toolbarDial(control.compactTitle.lowercased(), value: $fade, defaultValue: 1.2, range: 0.2...5)
         case .colorSeparation:
-            hudSlider(control.compactTitle, value: $colorSeparation, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $colorSeparation, defaultValue: 0.5)
         case .brushInk:
-            hudSlider(control.compactTitle, value: $brushInk, defaultValue: 0)
+            toolbarDial(control.compactTitle.lowercased(), value: $brushInk, defaultValue: 0)
         case .fix:
             command(control.compactTitle, systemImage: control.icon, action: fix)
+        case .unfix:
+            command(control.compactTitle, systemImage: control.icon, action: unfix)
+        case .wetCanvas:
+            command(control.compactTitle, systemImage: control.icon, action: wetCanvas)
+        case .dryCanvas:
+            command(control.compactTitle, systemImage: control.icon, action: dryCanvas)
         case .clear:
             command(control.compactTitle, systemImage: control.icon, action: clear)
         case .save:
@@ -7166,31 +7236,27 @@ private struct InkToolbarStrip: View {
         }
     }
 
-    private func buttonControl(_ label: String, value: String, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 5) {
-            Text(label)
-                .hudLabel()
-            Button(value, action: action)
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
-                .tracking(1.6)
-                .textCase(.uppercase)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 58)
-        }
+    private var inkColorSummary: String {
+        "\(Int(inkColor.red * 255)), \(Int(inkColor.green * 255)), \(Int(inkColor.blue * 255)), \(Int(inkColor.alpha * 100))%"
     }
 
-    private func hudSlider(_ label: String, value: Binding<Double>, defaultValue: Double, range: ClosedRange<Double> = 0...1) -> some View {
-        VStack(spacing: 5) {
-            Text(label)
-                .hudLabel()
-                .contentShape(Rectangle())
-                .numericScrub(value: value, precision: 2, defaultValue: defaultValue)
-                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
-                .help("Double-click to reset")
-            Slider(value: value, in: range)
-                .frame(width: 86)
+    private var washColorSummary: String {
+        "\(Int(washColor.red * 255)), \(Int(washColor.green * 255)), \(Int(washColor.blue * 255)), \(Int(washColor.alpha * 100))%"
+    }
+
+    private func toggleControl(_ title: String, systemImage: String, value: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 30)
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("\(title): \(value)")
+    }
+
+    private func toolbarDial(_ title: String, value: Binding<Double>, defaultValue: Double, range: ClosedRange<Double> = 0...1) -> some View {
+        AbletonDial(title: title, value: value, range: range, defaultValue: defaultValue)
     }
 
     private func command(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -7205,6 +7271,121 @@ private struct InkToolbarStrip: View {
     }
 }
 
+private struct AbletonDial: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let defaultValue: Double
+    @State private var isScrubbing = false
+    @State private var isHovering = false
+    @State private var scrubLinger = false
+    @State private var lingerToken = UUID()
+
+    private var clampedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { value = min(range.upperBound, max(range.lowerBound, $0)) }
+        )
+    }
+
+    private var normalizedValue: Double {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        return min(1, max(0, (value - range.lowerBound) / (range.upperBound - range.lowerBound)))
+    }
+
+    private var formattedValue: String {
+        String(format: "%.2f", value)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let dialSize: CGFloat = 26
+            let side = dialSize
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let radius = max(4, side * 0.36)
+            let start = Angle.degrees(135)
+            let sweep = 270 * normalizedValue
+            let indicatorAngle = (135 + sweep) * Double.pi / 180
+            let indicatorRadius = Double(radius) * 0.82
+            let indicatorEnd = CGPoint(
+                x: center.x + CGFloat(cos(indicatorAngle) * indicatorRadius),
+                y: center.y + CGFloat(sin(indicatorAngle) * indicatorRadius)
+            )
+
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.22), lineWidth: 3)
+                    .frame(width: radius * 2, height: radius * 2)
+                    .position(center)
+                Path { path in
+                    path.addArc(
+                        center: center,
+                        radius: radius,
+                        startAngle: start,
+                        endAngle: .degrees(135 + sweep),
+                        clockwise: false
+                    )
+                }
+                .stroke(Color.secondary.opacity(0.82), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                Path { path in
+                    path.move(to: center)
+                    path.addLine(to: indicatorEnd)
+                }
+                .stroke(Color.secondary.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            }
+        }
+        .frame(width: 28, height: 30)
+        .contentShape(Rectangle())
+        .overlay(alignment: .leading) {
+            if isHovering || isScrubbing || scrubLinger {
+                Text("\(title): \(formattedValue)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.94), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.38)))
+                    .fixedSize()
+                    .offset(x: 32)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+            }
+        }
+        .numericScrub(value: clampedValue, precision: 2, defaultValue: defaultValue, isScrubbing: $isScrubbing)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .onChange(of: isScrubbing) { _, scrubbing in
+            if scrubbing {
+                scrubLinger = true
+                lingerToken = UUID()
+            } else {
+                let token = UUID()
+                lingerToken = token
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    guard lingerToken == token, !isScrubbing else { return }
+                    scrubLinger = false
+                }
+            }
+        }
+        .onTapGesture(count: 2) { value = defaultValue }
+    }
+}
+
+private struct ToolbarControlDragHandleModifier: ViewModifier {
+    let provider: () -> NSItemProvider
+
+    func body(content: Content) -> some View {
+        content.onDrag {
+            guard NSEvent.modifierFlags.contains(.option) else {
+                return NSItemProvider(object: "toolbar-control-cancelled" as NSString)
+            }
+            return provider()
+        }
+    }
+}
+
 private extension Text {
     func hudLabel() -> some View {
         self
@@ -7212,6 +7393,12 @@ private extension Text {
             .tracking(4)
             .textCase(.uppercase)
             .foregroundStyle(.secondary.opacity(0.75))
+    }
+}
+
+private extension View {
+    func toolbarControlDragHandle(_ provider: @escaping () -> NSItemProvider) -> some View {
+        modifier(ToolbarControlDragHandleModifier(provider: provider))
     }
 }
 

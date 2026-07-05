@@ -18,6 +18,7 @@ frames are easier to manage in the layer stack, paper is treated as its own edit
 - Updated draw-tool and toolbar color-picker details: `scribble.variable` for Draw and stable RGBA color picking for the ink toolbar swatch.
 - Added secondary output-window controls for open/close, borderless/transparent/on-top/click-through, live position/size tracking, and selectable texture sources.
 - Added Command-drag numeric scrubbing on value labels, with Shift for fine adjustment and a pinned cursor so screen edges do not cap the scrub.
+- Refined the Layers and Ink panels as UI reference implementations: compact row grids, icon-first frame controls, dense disclosure sections, and a dockable dial-based Ink Toolbar.
 
 ## Manual Test Notes
 
@@ -27,3 +28,4 @@ frames are easier to manage in the layer stack, paper is treated as its own edit
 - Verify selecting a lower frame from Layers allows workspace dragging without the top frame stealing the drag; Cmd-click should cycle overlapping frames.
 - Verify moving/resizing the output window by hand updates the Output panel fields.
 - Verify Command-dragging value labels changes numbers smoothly, and Shift-Command-drag uses finer steps.
+- Use Layers and Ink as the baseline for future panel cleanup: panel content should start close to the title row, collapsed subsections should be tightly stacked, and expanded parameter rows should keep labels/value fields aligned.
