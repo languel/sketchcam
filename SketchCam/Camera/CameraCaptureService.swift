@@ -58,6 +58,8 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private let videoOutput = AVCaptureVideoDataOutput()
     private let outputQueue = DispatchQueue(label: "io.github.languel.sketchcam.camera.output", qos: .userInitiated)
     private(set) var isRunning = false
+    private var configuredDeviceID: String?
+    private var configuredInputResolution: CameraInputResolution?
 
     func availableDevices() -> [CameraDeviceOption] {
         let discovery = AVCaptureDevice.DiscoverySession(
@@ -72,12 +74,19 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     func start(deviceID: String?, inputResolution: CameraInputResolution = .vga) {
         sessionQueue.async {
+            if self.isRunning,
+               self.configuredDeviceID == deviceID,
+               self.configuredInputResolution == inputResolution {
+                return
+            }
             do {
                 try self.configure(deviceID: deviceID, inputResolution: inputResolution)
                 if !self.session.isRunning {
                     self.session.startRunning()
                 }
                 self.isRunning = true
+                self.configuredDeviceID = deviceID
+                self.configuredInputResolution = inputResolution
             } catch {
                 self.isRunning = false
                 NSLog("SketchCam camera start failed: \(error.localizedDescription)")
@@ -91,6 +100,8 @@ final class CameraCaptureService: NSObject, AVCaptureVideoDataOutputSampleBuffer
                 self.session.stopRunning()
             }
             self.isRunning = false
+            self.configuredDeviceID = nil
+            self.configuredInputResolution = nil
         }
     }
 
@@ -215,4 +226,3 @@ private extension CMVideoDimensions {
         CGSize(width: Int(width), height: Int(height))
     }
 }
-

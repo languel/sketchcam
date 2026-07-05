@@ -16,6 +16,13 @@ final class LiveReadouts: ObservableObject {
     @Published var stats = DebugStats()
 }
 
+final class SourcePreviewReadouts: ObservableObject {
+    @Published var cameraImage: CGImage?
+    @Published var cameraSize: CGSize = .zero
+    @Published var movieImage: CGImage?
+    @Published var movieSize: CGSize = .zero
+}
+
 final class SketchCamViewModel: ObservableObject {
     enum FrameSource: String, CaseIterable, Identifiable {
         case camera
@@ -80,6 +87,7 @@ final class SketchCamViewModel: ObservableObject {
     /// SwiftUI Picker tag projections / Observation registrars on every pass).
     /// Only the small views that show them observe this store.
     let live = LiveReadouts()
+    let sourcePreviews = SourcePreviewReadouts()
     let exporter = OutputStreamExporter()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
@@ -123,8 +131,11 @@ final class SketchCamViewModel: ObservableObject {
     private var webPickedURLs: [URL] = []   // retained to keep sandbox grants alive
     private var imageCache: [String: CIImage] = [:]
     private let segmentationService = SegmentationService()
+    private let cameraSegmentationService = SegmentationService()
+    private let movieSegmentationService = SegmentationService()
     private let publisher = VirtualCameraFramePublisher()
     private let processingQueue = DispatchQueue(label: "io.github.languel.sketchcam.processing", qos: .userInitiated)
+    private let sourcePreviewQueue = DispatchQueue(label: "io.github.languel.sketchcam.source-preview", qos: .utility)
     private let timings = PipelineTimings()
     private let frameGate = NSLock()
     private var cameraFrameInFlight = false
@@ -132,6 +143,9 @@ final class SketchCamViewModel: ObservableObject {
     private var activeFrameSource = FrameSource.camera
     private var latestCameraFrame: CVPixelBuffer?
     private var latestMovieFrame: CVPixelBuffer?
+    private let sourcePreviewLock = NSLock()
+    private var sourcePreviewActive: Set<FrameSource> = []
+    private var lastSourcePreviewTime: [FrameSource: CFAbsoluteTime] = [:]
     /// Keeps the OS from throttling us (App Nap / timer coalescing / QoS
     /// clamping) while live — the closest real lever to Apple's "Game Mode"
     /// for a non-fullscreen app. Held for the capture session's lifetime.
@@ -155,6 +169,7 @@ final class SketchCamViewModel: ObservableObject {
 
     /// Preview readback cadence; publishing runs at full frame rate regardless.
     private let statsInterval: CFAbsoluteTime = 0.25
+    private let sourcePreviewInterval: CFAbsoluteTime = 1.0 / 12.0
 
     init() {
         captureService.onConfigurationChanged = { [weak self] size in
@@ -199,6 +214,16 @@ final class SketchCamViewModel: ObservableObject {
         frameSource = .movie
     }
 
+    func setSourcePreviewActive(_ source: FrameSource, active: Bool) {
+        sourcePreviewLock.withLock {
+            if active {
+                sourcePreviewActive.insert(source)
+            } else {
+                sourcePreviewActive.remove(source)
+            }
+        }
+    }
+
     /// Loads the bundled public-domain test clip (Chaplin) — a moving figure for
     /// detection/drawing tests without a person in front of the camera.
     func loadDemoClip() {
@@ -235,14 +260,22 @@ final class SketchCamViewModel: ObservableObject {
     /// is the source, freezes/unfreezes the live input otherwise.
     func toggleFreezeOrPause() {
         if frameSource == .movie {
-            if movieRate == 0 {
-                movieRate = movieRateBeforePause
-            } else {
-                movieRateBeforePause = movieRate
-                movieRate = 0
-            }
+            toggleMoviePause()
         } else {
-            inputFrozen.toggle()
+            toggleCameraFreeze()
+        }
+    }
+
+    func toggleCameraFreeze() {
+        inputFrozen.toggle()
+    }
+
+    func toggleMoviePause() {
+        if movieRate == 0 {
+            movieRate = movieRateBeforePause
+        } else {
+            movieRateBeforePause = movieRate
+            movieRate = 0
         }
     }
 
@@ -305,6 +338,7 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private func handleMovieFrame(_ pixelBuffer: CVPixelBuffer) {
+        updateSourcePreview(.movie, pixelBuffer: pixelBuffer)
         let shouldProcess = sourceFrameLock.withLock {
             latestMovieFrame = pixelBuffer
             return activeFrameSource == .movie
@@ -630,6 +664,7 @@ final class SketchCamViewModel: ObservableObject {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
+        updateSourcePreview(.camera, pixelBuffer: pixelBuffer)
         let shouldProcess = sourceFrameLock.withLock {
             latestCameraFrame = pixelBuffer
             return activeFrameSource == .camera
@@ -640,6 +675,35 @@ final class SketchCamViewModel: ObservableObject {
         guard beginCameraFrame() else { return }
         let effective = effectiveInputFrame(pixelBuffer)
         process(pixelBuffer: effective, timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), originalPixelBuffer: effective, clockSource: .camera)
+    }
+
+    private func updateSourcePreview(_ source: FrameSource, pixelBuffer: CVPixelBuffer) {
+        let shouldRender = sourcePreviewLock.withLock { () -> Bool in
+            guard sourcePreviewActive.contains(source) else { return false }
+            let now = CFAbsoluteTimeGetCurrent()
+            guard now - (lastSourcePreviewTime[source] ?? 0) >= sourcePreviewInterval else { return false }
+            lastSourcePreviewTime[source] = now
+            return true
+        }
+        guard shouldRender else { return }
+        sourcePreviewQueue.async { [weak self, pixelBuffer] in
+            guard let self,
+                  let image = self.previewRenderer.makeImage(from: pixelBuffer) else { return }
+            let size = CGSize(
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+            DispatchQueue.main.async {
+                switch source {
+                case .camera:
+                    self.sourcePreviews.cameraImage = image
+                    self.sourcePreviews.cameraSize = size
+                case .movie:
+                    self.sourcePreviews.movieImage = image
+                    self.sourcePreviews.movieSize = size
+                }
+            }
+        }
     }
 
     /// When frozen, the first incoming frame is deep-copied (camera buffers
@@ -1081,6 +1145,31 @@ final class SketchCamViewModel: ObservableObject {
         }
 
         let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        let needsPersonMatte = graph.layers.contains { layer in
+            layer.visible &&
+            (layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte } ||
+             layer.mask?.source == .source(.personMatte))
+        }
+        var sourceSegmentation = settings.segmentation
+        sourceSegmentation.enabled = sourceSegmentation.enabled || needsPersonMatte
+        let cameraPersonMatteImage = sourceFrames.camera.flatMap {
+            sourcePersonMatteImage(
+                pixelBuffer: $0,
+                service: cameraSegmentationService,
+                settings: sourceSegmentation,
+                outputRect: outputRect,
+                mirrored: settings.mirror
+            )
+        }
+        let moviePersonMatteImage = sourceFrames.movie.flatMap {
+            sourcePersonMatteImage(
+                pixelBuffer: $0,
+                service: movieSegmentationService,
+                settings: sourceSegmentation,
+                outputRect: outputRect,
+                mirrored: settings.mirror
+            )
+        }
         let streams = MetalLayerCompositor.Streams(
             image: { node in
                 switch node.kind {
@@ -1109,7 +1198,17 @@ final class SketchCamViewModel: ObservableObject {
                     return nil
                 }
             },
-            personMatte: personMatteImage
+            personMatte: personMatteImage,
+            personMatteForNode: { node in
+                switch node.kind {
+                case .video:
+                    return cameraPersonMatteImage
+                case .movie:
+                    return moviePersonMatteImage
+                default:
+                    return personMatteImage
+                }
+            }
         )
         let workspace = settings.workspace.map { workspace in
             var resolved = workspace
@@ -1118,6 +1217,23 @@ final class SketchCamViewModel: ObservableObject {
         }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
                              workspace: workspace, frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+    }
+
+    private func sourcePersonMatteImage(
+        pixelBuffer: CVPixelBuffer,
+        service: SegmentationService,
+        settings: SegmentationSettings,
+        outputRect: CGRect,
+        mirrored: Bool
+    ) -> CIImage? {
+        guard let matte = service.currentMatte(pixelBuffer: pixelBuffer, settings: settings) else { return nil }
+        let srcW = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let srcH = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let inSrc = matte.transformed(by: CGAffineTransform(
+            scaleX: srcW / max(1, matte.extent.width),
+            y: srcH / max(1, matte.extent.height)
+        ))
+        return CoreImageFrameProcessor.aspectFill(inSrc, in: outputRect, mirrored: mirrored)
     }
 
     private func imageMaterial(_ config: WorkspaceImageConfig) -> CIImage? {

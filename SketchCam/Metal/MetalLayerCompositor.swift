@@ -20,6 +20,7 @@ final class MetalLayerCompositor {
         var image: (Node) -> CIImage?
         var imageMaterial: (WorkspaceImageConfig) -> CIImage? = { _ in nil }
         var personMatte: CIImage?
+        var personMatteForNode: (Node) -> CIImage? = { _ in nil }
     }
 
     private let effects: MetalEffects
@@ -65,7 +66,7 @@ final class MetalLayerCompositor {
             var chainInput = content
             var chainOutput = masked
             if let mask = item.mask {
-                if case .source(.personMatte) = mask.source, let personMatte = streams.personMatte {
+                if case .source(.personMatte) = mask.source, let personMatte = item.personMatte ?? streams.personMatte {
                     rasterize(personMatte, into: matteBuf)
                     let invert = mask.personKeyInvert != mask.invert
                     if mask.personKeySilhouette {
@@ -100,7 +101,7 @@ final class MetalLayerCompositor {
             // A personKey (or other matte-using) effect needs the person matte
             // rasterized into a buffer for the chain.
             var chainMatte: CVPixelBuffer? = nil
-            if item.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }), let pm = streams.personMatte {
+            if item.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }), let pm = item.personMatte ?? streams.personMatte {
                 rasterize(pm, into: matteBuf)
                 chainMatte = matteBuf
             }
@@ -131,6 +132,7 @@ final class MetalLayerCompositor {
 
     private struct RenderItem {
         var image: CIImage?
+        var personMatte: CIImage?
         var effects: [EffectConfig]
         var mask: MaskBinding?
         var opacity: Float
@@ -149,6 +151,7 @@ final class MetalLayerCompositor {
                       let node = graph.node(layer.node) else { return nil }
                 return RenderItem(
                     image: streams.image(node),
+                    personMatte: streams.personMatteForNode(node) ?? streams.personMatte,
                     effects: layer.effects,
                     mask: layer.mask,
                     opacity: layer.opacity,
@@ -175,20 +178,25 @@ final class MetalLayerCompositor {
     ) -> RenderItem? {
         let image: CIImage?
         let layer: Layer?
+        let node: Node?
         switch frame.material {
         case .layer(let layerID):
             layer = graph.layers.first { $0.id == layerID }
-            guard let layer, let node = graph.node(layer.node) else { return nil }
-            image = streams.image(node)
+            guard let layer, let resolvedNode = graph.node(layer.node) else { return nil }
+            node = resolvedNode
+            image = streams.image(resolvedNode)
         case .node(let nodeID):
             layer = graph.layers.first { $0.node == nodeID }
-            guard let node = graph.node(nodeID) else { return nil }
-            image = streams.image(node)
+            guard let resolvedNode = graph.node(nodeID) else { return nil }
+            node = resolvedNode
+            image = streams.image(resolvedNode)
         case .image(let config):
             layer = nil
+            node = nil
             image = streams.imageMaterial(config)
         case .outputViewport:
             layer = nil
+            node = nil
             image = nil
         }
         guard let transformed = image.flatMap({ transform($0, for: frame, viewport: viewport, outputFormat: outputFormat) }) else {
@@ -196,6 +204,7 @@ final class MetalLayerCompositor {
         }
         return RenderItem(
             image: transformed,
+            personMatte: node.flatMap { streams.personMatteForNode($0) } ?? streams.personMatte,
             effects: layer?.effects ?? [],
             mask: frame.mask ?? layer?.mask,
             opacity: max(0, min(1, frame.opacity)),
@@ -231,6 +240,11 @@ final class MetalLayerCompositor {
         let offsetX: CGFloat
         let offsetY: CGFloat
         switch frame.contentFit {
+        case .none:
+            scaleX = 1
+            scaleY = 1
+            offsetX = target.minX
+            offsetY = target.minY
         case .stretch:
             scaleX = target.width / crop.width
             scaleY = target.height / crop.height
@@ -292,7 +306,7 @@ final class MetalLayerCompositor {
         if let mask = layer.mask {
             let matteImage: CIImage?
             switch mask.source {
-            case .source(.personMatte): matteImage = streams.personMatte
+            case .source(.personMatte): matteImage = streams.personMatteForNode(node) ?? streams.personMatte
             case .node(let id): matteImage = graph.node(id).flatMap(streams.image)
             default: matteImage = nil
             }
@@ -309,7 +323,7 @@ final class MetalLayerCompositor {
         }
         var effectMatte: CVPixelBuffer? = nil
         if enabledEffects.contains(where: { $0.kind.needsPersonMatte }),
-           let personMatte = streams.personMatte {
+           let personMatte = streams.personMatteForNode(node) ?? streams.personMatte {
             rasterize(personMatte, into: routeMatte)
             effectMatte = routeMatte
         }
@@ -345,7 +359,7 @@ final class MetalLayerCompositor {
             }
             var chainMatte: CVPixelBuffer? = nil
             if layer.effects.contains(where: { $0.enabled && $0.kind.needsPersonMatte }),
-               let personMatte = streams.personMatte {
+               let personMatte = streams.personMatteForNode(node) ?? streams.personMatte {
                 rasterize(personMatte, into: personMatteScratch)
                 chainMatte = personMatteScratch
             }

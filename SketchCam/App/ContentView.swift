@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SketchCamCore
 import SketchCamShared
 import SwiftUI
@@ -174,6 +175,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case lineWalk = "Line walk"
     case ink = "Ink"
     case paper = "Paper"
+    case output = "Output"
     case history = "History"
     case timeline = "Timeline"
     case web = "Web"
@@ -252,6 +254,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .lineWalk: "lasso"
         case .ink: "paintbrush.pointed"
         case .paper: "doc.text.image"
+        case .output: "rectangle.inset.filled"
         case .history: "clock.arrow.circlepath"
         case .timeline: "timeline.selection"
         case .web: "globe"
@@ -281,6 +284,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
     case mode = "mode"
     case inkKind = "inkKind"
     case hue = "hue"
+    case washHue = "washHue"
     case smooth = "smooth"
     case penSize = "penSize"
     case washSize = "washSize"
@@ -293,6 +297,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
     case colorSeparation = "colorSeparation"
     case brushInk = "brushInk"
     case fix = "fix"
+    case unfix = "unfix"
+    case wetCanvas = "wetCanvas"
+    case dryCanvas = "dryCanvas"
     case clear = "clear"
     case save = "save"
 
@@ -303,6 +310,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .mode: "Mode"
         case .inkKind: "Ink"
         case .hue: "Hue"
+        case .washHue: "Wash color"
         case .smooth: "Smooth"
         case .penSize: "Pen size"
         case .washSize: "Wash size"
@@ -315,6 +323,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .colorSeparation: "Color"
         case .brushInk: "Brush ink"
         case .fix: "Fix"
+        case .unfix: "Unfix"
+        case .wetCanvas: "Wet canvas"
+        case .dryCanvas: "Dry canvas"
         case .clear: "Clear"
         case .save: "Save"
         }
@@ -327,6 +338,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .wetDecay: "Wet"
         case .colorSeparation: "Color"
         case .brushInk: "Brush"
+        case .washHue: "Wash"
+        case .wetCanvas: "Wet"
+        case .dryCanvas: "Dry"
         default: title
         }
     }
@@ -336,6 +350,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .mode: "paintbrush.pointed"
         case .inkKind: "drop"
         case .hue: "paintpalette"
+        case .washHue: "paintpalette.fill"
         case .smooth: "scribble"
         case .penSize: "slider.horizontal.3"
         case .washSize: "paintbrush"
@@ -348,6 +363,9 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
         case .colorSeparation: "camera.filters"
         case .brushInk: "drop.fill"
         case .fix: "pin"
+        case .unfix: "pin.slash"
+        case .wetCanvas: "drop.fill"
+        case .dryCanvas: "sun.max"
         case .clear: "trash"
         case .save: "square.and.arrow.down"
         }
@@ -372,6 +390,7 @@ private enum ToolbarControlID: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @ObservedObject var model: SketchCamViewModel
+    @ObservedObject var outputWindow: OutputWindowController
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
     @EnvironmentObject private var appUI: AppUIState
@@ -408,8 +427,13 @@ struct ContentView: View {
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
+    @State private var spacePanToolBeforeHold: WorkspaceTool?
+    @State private var spacePanMonitor: Any?
     @State private var inkPaperSettingsExpanded = false
+    @State private var inkInputsExpanded = false
     @State private var inkMaterialMapExpanded = false
+    @State private var inkBrushPropertiesExpanded = true
+    @State private var inkPathExpanded = false
     @State private var debugOverlayOffset = CGSize.zero
     @State private var draggingPanel: ControlTab?
     @State private var dockDragBaselines: [PanelDropDestination: CGFloat] = [:]
@@ -440,8 +464,9 @@ struct ContentView: View {
     @State private var hoveredFloatingResizeGroupID: String?
     @State private var workspaceRootSize = CGSize(width: 1200, height: 800)
 
-    init(model: SketchCamViewModel) {
+    init(model: SketchCamViewModel, outputWindow: OutputWindowController) {
         self.model = model
+        self.outputWindow = outputWindow
     }
 
     var body: some View {
@@ -468,6 +493,7 @@ struct ContentView: View {
             ensureInkToolbarPanelVisible()
             registerShortcuts()
             ShortcutRegistry.shared.start()
+            installSpacePanMonitor()
         }
         .onReceive(appUI.$layoutCommand.compactMap { $0 }) { command in
             applyLayoutCommand(command)
@@ -476,7 +502,10 @@ struct ContentView: View {
         .onChange(of: windowMode.presentationMode) { _, isPresentation in
             syncLayoutWithPresentationMode(isPresentation)
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            removeSpacePanMonitor()
+            model.stop()
+        }
     }
 
     private var dockedWorkspace: some View {
@@ -982,9 +1011,9 @@ struct ContentView: View {
 
     private var workspaceOverlayHandlesInput: Bool {
         switch model.settings.workspace?.activeTool {
-        case .artboard, .pan, .transform, .crop, .mask:
+        case .select, .artboard, .pan, .transform, .crop, .mask:
             return true
-        case .select, .draw, .pen, .wash, nil:
+        case .draw, .pen, .wash, nil:
             return false
         }
     }
@@ -1094,6 +1123,40 @@ struct ContentView: View {
         if bottomTabs.contains(panel) { return .bottom }
         if floatingTabs.contains(panel) { return .floating }
         return nil
+    }
+
+    private func hasWorkspaceFrame(family: String) -> Bool {
+        guard let workspace = model.settings.workspace,
+              let graph = model.settings.layerGraph else { return false }
+        return workspace.frames.contains { frame in
+            guard case .layer(let layerID) = frame.material,
+                  let layer = graph.layers.first(where: { $0.id == layerID }),
+                  let node = graph.node(layer.node) else { return false }
+            return node.kind.family == family
+        }
+    }
+
+    private func canAddPanelToDock(_ panel: ControlTab) -> Bool {
+        switch panel {
+        case .ink, .inkToolbar:
+            return hasWorkspaceFrame(family: "ink")
+        case .paper:
+            return hasWorkspaceFrame(family: "paper")
+        case .camera:
+            return hasWorkspaceFrame(family: "video")
+        case .movie:
+            return hasWorkspaceFrame(family: "movie")
+        case .web:
+            return hasWorkspaceFrame(family: "web")
+        default:
+            return true
+        }
+    }
+
+    private func dockMenuPanels(for destination: PanelDropDestination) -> [ControlTab] {
+        ControlTab.allCases.filter { panel in
+            panelLocation(panel) != destination && canAddPanelToDock(panel)
+        }
     }
 
     private func ensureInkToolbarPanelVisible() {
@@ -2070,11 +2133,31 @@ struct ContentView: View {
                     .padding(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .background(Color.clear)
+                .contentShape(Rectangle())
+                .contextMenu {
+                    emptyDockContextMenu(destination: destination)
+                }
             }
         }
         .dockDropHighlight(isTargeted: dropTargetBinding(for: destination).wrappedValue || panelDockTarget == destination)
         .onDrop(of: [UTType.plainText], isTargeted: dropTargetBinding(for: destination)) { providers in
             handlePanelDrop(providers, destination: destination)
+        }
+    }
+
+    @ViewBuilder private func emptyDockContextMenu(destination: PanelDropDestination) -> some View {
+        let panels = dockMenuPanels(for: destination)
+        if panels.isEmpty {
+            Text("No panels available")
+        } else {
+            ForEach(panels) { panel in
+                Button {
+                    movePanel(panel, to: destination)
+                } label: {
+                    Label(panel.rawValue, systemImage: panel.icon)
+                }
+            }
         }
     }
 
@@ -2136,7 +2219,7 @@ struct ContentView: View {
             if !isMinimized && !isInlineToolbar {
                 tabContent(activePanel)
                     .id(activePanel.id)
-                    .padding(.top, 10)
+                    .padding(.top, 4)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
                     .transaction { transaction in
@@ -2475,6 +2558,7 @@ struct ContentView: View {
         case .lineWalk: lineWalkTab
         case .ink: inkTab
         case .paper: paperTab
+        case .output: outputTab
         case .history: historyTab
         case .timeline: timelineTab
         case .web: webTab
@@ -2503,6 +2587,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
                 ForEach(workspaceToolbarTools) { tool in
+                    let disabled = tool == .draw && !selectedFrameSupportsDrawing
                     Button {
                         workspaceToolBinding.wrappedValue = tool
                     } label: {
@@ -2516,6 +2601,8 @@ struct ContentView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .disabled(disabled)
+                    .opacity(disabled ? 0.38 : 1)
                     .help(workspaceToolTitle(tool))
                 }
             }
@@ -2578,23 +2665,20 @@ struct ContentView: View {
             .help("Redo workspace edit")
 
             Button {
-                openWindow(id: "output")
+                toggleOutputWindow()
             } label: {
                 Image(systemName: "rectangle.inset.filled")
             }
             .buttonStyle(.borderless)
-            .help("Open secondary output window")
+            .help(outputWindow.isOpen ? "Close secondary output window" : "Open secondary output window")
         }
         .controlSize(.small)
         .onAppear { model.ensureWorkspace() }
     }
 
     private var workspaceToolbarTools: [WorkspaceTool] {
-        var tools: [WorkspaceTool] = [.select]
-        if selectedFrameSupportsDrawing {
-            tools.append(.draw)
-        }
-        tools += [.artboard, .pan, .transform, .crop, .mask]
+        var tools: [WorkspaceTool] = [.pan, .select, .draw]
+        tools += [.artboard, .crop, .mask]
         return tools
     }
 
@@ -2606,6 +2690,7 @@ struct ContentView: View {
             mode: inkModeBinding,
             inkKind: inkKindBinding,
             inkColor: inkColorRGBA,
+            washColor: inkWashColorRGBA,
             smooth: inkConfigFloatBinding(\.smoothing),
             size: inkSizeBinding,
             washSize: inkWashSizeBinding,
@@ -2621,6 +2706,9 @@ struct ContentView: View {
             removeControl: removeInkToolbarControl,
             resetControls: resetInkToolbarControls,
             fix: fixInk,
+            unfix: unfixInk,
+            wetCanvas: wetInkCanvas,
+            dryCanvas: dryInkCanvas,
             clear: clearInk,
             save: model.exportCurrentFrame
         )
@@ -2633,9 +2721,6 @@ struct ContentView: View {
     }
 
     private func toolbarControlDragProvider(_ control: ToolbarControlID) -> NSItemProvider {
-        guard NSEvent.modifierFlags.contains(.option) else {
-            return NSItemProvider(object: "toolbar-control-cancelled" as NSString)
-        }
         return NSItemProvider(object: "toolbar-control:\(control.id)" as NSString)
     }
 
@@ -2690,28 +2775,34 @@ struct ContentView: View {
     private var workspaceToolBinding: Binding<WorkspaceTool> {
         Binding {
             let tool = model.settings.workspace?.activeTool ?? .select
-            return (tool == .pen || tool == .wash) ? .draw : tool
+            if tool == .pen || tool == .wash { return .draw }
+            if tool == .transform { return .select }
+            return tool
         } set: { tool in
-            model.mutateWorkspace { workspace in
-                workspace.activeTool = tool
-            }
-            switch tool {
-            case .draw:
-                model.settings.landmarks.inkEnabled = true
-                inkTool = .draw
-            case .pen:
-                model.settings.landmarks.inkEnabled = true
-                mutateActiveInkConfig { $0.brushMode = .pen }
-                inkTool = .draw
-            case .wash:
-                model.settings.landmarks.inkEnabled = true
-                mutateActiveInkConfig { $0.brushMode = .brush }
-                inkTool = .draw
-            case .select, .transform, .crop, .mask:
-                inkTool = .select
-            case .artboard, .pan:
-                break
-            }
+            setWorkspaceTool(tool)
+        }
+    }
+
+    private func setWorkspaceTool(_ tool: WorkspaceTool) {
+        model.mutateWorkspace { workspace in
+            workspace.activeTool = tool
+        }
+        switch tool {
+        case .draw:
+            model.settings.landmarks.inkEnabled = true
+            inkTool = .draw
+        case .pen:
+            model.settings.landmarks.inkEnabled = true
+            mutateActiveInkConfig { $0.brushMode = .pen }
+            inkTool = .draw
+        case .wash:
+            model.settings.landmarks.inkEnabled = true
+            mutateActiveInkConfig { $0.brushMode = .brush }
+            inkTool = .draw
+        case .select, .transform, .crop, .mask:
+            inkTool = .select
+        case .artboard, .pan:
+            break
         }
     }
 
@@ -2764,6 +2855,13 @@ struct ContentView: View {
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
+        SourcePreviewImage(
+            previews: model.sourcePreviews,
+            source: .camera,
+            active: model.cameraPermissionState == .authorized && !model.settings.testPatternMode
+        )
+        .onAppear { model.setSourcePreviewActive(.camera, active: true) }
+        .onDisappear { model.setSourcePreviewActive(.camera, active: false) }
         HStack {
             Button {
                 model.toggleFreezeOrPause()
@@ -2806,6 +2904,13 @@ struct ContentView: View {
 
     @ViewBuilder private var movieTab: some View {
         SectionHeader("Movie")
+        SourcePreviewImage(
+            previews: model.sourcePreviews,
+            source: .movie,
+            active: model.movieURL != nil
+        )
+        .onAppear { model.setSourcePreviewActive(.movie, active: true) }
+        .onDisappear { model.setSourcePreviewActive(.movie, active: false) }
         HStack {
             Button {
                 model.toggleFreezeOrPause()
@@ -2821,9 +2926,9 @@ struct ContentView: View {
         }
         .controlSize(.small)
         HStack {
-            Button("Open Movie…") { model.frameSource = .movie; model.openMoviePanel() }
+            Button("Open Movie…") { model.openMoviePanel() }
                 .panelButton()
-            Button("Demo clip") { model.frameSource = .movie; model.loadDemoClip() }
+            Button("Demo clip") { model.loadDemoClip() }
                 .panelButton()
             Text(model.movieURL?.lastPathComponent ?? "No movie selected")
                 .font(.caption)
@@ -2834,7 +2939,7 @@ struct ContentView: View {
         HStack {
             TextField("https://… (stream URL)", text: $movieURLField)
                 .textFieldStyle(.roundedBorder)
-            Button("Load") { model.frameSource = .movie; model.openMovieURL(movieURLField) }
+            Button("Load") { model.openMovieURL(movieURLField) }
                 .panelButton()
                 .disabled(movieURLField.isEmpty)
         }
@@ -2879,6 +2984,8 @@ struct ContentView: View {
         ), range: 0...60, precision: 0, defaultValue: 0, hint: "0 = full-tilt (every published frame)")
         Toggle("Two-finger drag moves artboard", isOn: artboardDragCanvasWithScrollBinding)
             .help("On: two-finger drag moves the visible artboard with your fingers. Off: the viewport moves opposite the gesture.")
+        Toggle("Show frame labels", isOn: $model.settings.showArtboardFrameLabels)
+            .help("Show frame names directly on the artboard overlay.")
 
         SectionHeader("Window")
         HStack {
@@ -2927,6 +3034,7 @@ struct ContentView: View {
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
                 .frame(width: 72)
+                .numericScrub(value: inkUndoGPUStateCountBinding, defaultValue: InkUndoPreferences.defaultGPUStateCount)
                 .help("Click or double-click to type an exact state count.")
             Stepper("", value: inkUndoGPUStateCountBinding, in: 0...inkUndoMaximumStateCount)
                 .labelsHidden()
@@ -2945,6 +3053,124 @@ struct ContentView: View {
         Text(model.activationManager.statusText)
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private var outputTab: some View {
+        SectionHeader("Window")
+        HStack {
+            Label(outputWindow.selectedWindowName, systemImage: "rectangle.inset.filled")
+                .font(.callout.weight(.medium))
+            Spacer()
+            Button {
+                toggleOutputWindow()
+            } label: {
+                Label(outputWindow.isOpen ? "Close" : "Open", systemImage: outputWindow.isOpen ? "xmark.rectangle" : "macwindow")
+            }
+            .help(outputWindow.isOpen ? "Close the selected output window" : "Open or focus the selected output window")
+        }
+        .controlSize(.small)
+
+        if !outputWindow.isOpen {
+            Text("Open the output window to edit live placement.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        HStack {
+            Toggle("Borderless", isOn: $outputWindow.borderless)
+            Toggle("Transparent", isOn: $outputWindow.transparent)
+        }
+        .toggleStyle(.checkbox)
+
+        HStack {
+            Toggle("On top", isOn: $outputWindow.alwaysOnTop)
+            Toggle("Click through", isOn: $outputWindow.clickThrough)
+        }
+        .toggleStyle(.checkbox)
+
+        HStack {
+            Toggle("Fullscreen", isOn: $outputWindow.fullscreen)
+        }
+        .toggleStyle(.checkbox)
+
+        SliderRow(
+            title: "Opacity",
+            value: $outputWindow.opacity,
+            range: 0.05...1,
+            precision: 2,
+            defaultValue: 1,
+            hint: "Window opacity for projector and overlay placement."
+        )
+        SliderRow(
+            title: "Scale",
+            value: Binding(
+                get: { outputWindow.scale },
+                set: { newValue in
+                    outputWindow.scale = newValue
+                    outputWindow.applyScale(outputSize: model.outputFormat.size)
+                }
+            ),
+            range: 0.1...2,
+            precision: 2,
+            defaultValue: 0.5,
+            hint: "Scale relative to the current output format."
+        )
+
+        SectionHeader("Position")
+        HStack(spacing: 8) {
+            outputWindowNumberField("X", value: $outputWindow.x)
+            outputWindowNumberField("Y", value: $outputWindow.y)
+        }
+        HStack(spacing: 8) {
+            outputWindowNumberField("W", value: $outputWindow.width)
+            outputWindowNumberField("H", value: $outputWindow.height)
+        }
+        HStack {
+            Button("Center") {
+                outputWindow.centerOnScreen()
+            }
+            Button("Refresh") {
+                outputWindow.updateGeometryFromWindow()
+            }
+        }
+        .controlSize(.small)
+
+        SectionHeader("Source")
+        HStack {
+            Text("Source")
+            Spacer()
+            Menu(outputWindowSourceTitle) {
+                Button("Active viewport") {
+                    outputWindow.source = .activeViewport
+                }
+                Button("Camera") {
+                    outputWindow.source = .camera
+                }
+                Button("Movie") {
+                    outputWindow.source = .movie
+                }
+                let sources = outputTextureSources()
+                if !sources.isEmpty {
+                    Divider()
+                    ForEach(sources, id: \.id) { source in
+                        Button(source.name) {
+                            outputWindow.source = .texture(nodeID: source.id, name: source.name)
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .help("Texture source displayed by the selected output window")
+        }
+        .font(.caption)
+        HStack {
+            Text("Format")
+            Spacer()
+            Text(model.outputFormat.displayName)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
     }
 
     private var inkUndoStateBytes: Double {
@@ -2986,6 +3212,72 @@ struct ContentView: View {
         let totalGB = inkUndoStateBytes * Double(inkUndoGPUStateCount) / 1_000_000_000
         let warning = inkUndoUsesLargeMemoryShare ? " · Warning: large shared-memory allocation" : ""
         return String(format: "About %.0f MB per state · %.2f GB maximum%@", eachMB, totalGB, warning)
+    }
+
+    private func outputWindowNumberField(_ title: String, value: Binding<Double>) -> some View {
+        let defaultValue: Double? = {
+            switch title {
+            case "X", "Y": return 0
+            case "W": return 960
+            case "H": return 540
+            default: return nil
+            }
+        }()
+        return HStack(spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .leading)
+                .numericScrub(value: value, precision: 0, defaultValue: defaultValue)
+            BufferedNumberField(value: value, precision: 0, font: .caption, width: 58, roundedBorder: true, defaultValue: defaultValue)
+        }
+        .help("\(title) for the selected output window")
+    }
+
+    private func toggleOutputWindow() {
+        if outputWindow.isOpen {
+            outputWindow.close()
+        } else {
+            openWindow(id: "output")
+            outputWindow.recoverWindowReferenceAfterOpen()
+        }
+    }
+
+    private func outputTextureSources() -> [(id: UUID, name: String)] {
+        let graph = (model.settings.layerGraph ?? LayerGraph.defaultGraph(from: model.settings)).reconciled(with: model.settings)
+        var seen = Set<UUID>()
+        var sources: [(id: UUID, name: String)] = []
+
+        if let workspace = model.settings.workspace {
+            for frame in workspace.frames {
+                guard case .layer(let layerID) = frame.material,
+                      let layer = graph.layers.first(where: { $0.id == layerID }),
+                      let node = graph.node(layer.node),
+                      node.kind.output == .pixel,
+                      !seen.contains(node.id) else { continue }
+                seen.insert(node.id)
+                sources.append((id: node.id, name: frame.name))
+            }
+        }
+
+        for layer in graph.layers {
+            guard let node = graph.node(layer.node),
+                  node.kind.output == .pixel,
+                  !seen.contains(node.id) else { continue }
+            seen.insert(node.id)
+            sources.append((id: node.id, name: node.name))
+        }
+
+        return sources
+    }
+
+    private var outputWindowSourceTitle: String {
+        switch outputWindow.source {
+        case .texture(let nodeID, let storedName):
+            return outputTextureSources().first(where: { $0.id == nodeID })?.name ?? storedName
+        case .activeViewport, .camera, .movie:
+            return outputWindow.source.title
+        }
     }
 
     // MARK: - Layers tab
@@ -3223,134 +3515,154 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var inkTab: some View {
-        Group {
-            SectionHeader("Inputs")
-            inkInputMenu(
-                title: "Surface input",
-                label: inkSurfaceInputLabel,
-                help: "Layer used as the ink surface/substrate. None means the ink sim has no routed surface texture.",
-                binding: inkSurfaceInputMenuBinding
-            )
-            inkInputMenu(
-                title: "Dynamic input",
-                label: inkDynamicInputLabel,
-                help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
-                binding: inkDynamicInputMenuBinding
-            )
-            DisclosureGroup("Material map", isExpanded: $inkMaterialMapExpanded) {
-                PaperMaterialMapControls(config: inkSurfacePaperConfigBinding)
-                    .padding(.top, 4)
-            }
-            .disabled(inkSurfacePaperNodeID == nil)
+        VStack(alignment: .leading, spacing: 2) {
+            DisclosureGroup("Brush properties", isExpanded: $inkBrushPropertiesExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Picker("Mode", selection: inkModeBinding) {
+                            ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        .pickerStyle(.segmented)
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.mode) }
+                        .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
 
-            DisclosureGroup("Ink response") {
-                SliderRow(title: "Surface influence", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
-                SliderRow(title: "Dynamic influence", value: optionalInkConfigFloatBinding(\.dynamicInfluence, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
-                SliderRow(title: "Motion force", value: optionalInkConfigFloatBinding(\.motionForce, defaultValue: 0), range: 0...2, defaultValue: 0,
-                          hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
-                SliderRow(title: "Motion wetness", value: optionalInkConfigFloatBinding(\.motionWetness, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
-                SliderRow(title: "Dynamic absorbency", value: optionalInkConfigFloatBinding(\.dynamicAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0,
-                          hint: "How strongly the dynamic input accelerates wetting and drying locally.")
-                SliderRow(title: "Dynamic drag", value: optionalInkConfigFloatBinding(\.dynamicDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5,
-                          hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
-                SliderRow(title: "Dynamic resist", value: optionalInkConfigFloatBinding(\.dynamicResist, defaultValue: 1), range: 0...1, defaultValue: 1,
-                          hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
+                        Picker("Ink", selection: inkKindBinding) {
+                            ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
+                        }
+                        .pickerStyle(.segmented)
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.inkKind) }
+                        .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
+                    }
+                    HStack(spacing: 8) {
+                        HStack(spacing: 5) {
+                            RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
+                                .toolbarControlDragHandle { toolbarControlDragProvider(.hue) }
+                            colorResetButton("Reset ink color") { mutateActiveInkConfig { $0.inkColor = .ink } }
+                            Toggle("", isOn: savePenStrokeBinding)
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                                .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
+                        }
+                        Spacer(minLength: 6)
+                        HStack(spacing: 5) {
+                            RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
+                                .toolbarControlDragHandle { toolbarControlDragProvider(.washHue) }
+                            colorResetButton("Reset wash color") { mutateActiveInkConfig { $0.washColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) } }
+                            Toggle("", isOn: saveWashStrokeBinding)
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                                .help("Save wash stroke as an editable path. Off = immediate.")
+                        }
+                    }
+                    SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5, compact: true,
+                              hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.penSize) })
+                    SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5, compact: true,
+                              hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.washSize) })
+                    SliderRow(title: "Smear", value: inkConfigFloatBinding(\.smearStrength), defaultValue: 0.5, compact: true,
+                              hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.smear) })
+                    SliderRow(title: "Flow", value: inkConfigFloatBinding(\.flow), defaultValue: 0.9, compact: true,
+                              hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.flow) })
+                    SliderRow(title: "Bleed", value: inkConfigFloatBinding(\.bleed), defaultValue: 0.8, compact: true,
+                              hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)",
+                              toolbarDragProvider: { toolbarControlDragProvider(.bleed) })
+                    SliderRow(title: "Dry", value: inkConfigFloatBinding(\.dry), defaultValue: 0.25, compact: true,
+                              hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.dry) })
+                    SliderRow(title: "Wet decay", value: optionalInkConfigFloatBinding(\.wetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1, compact: true,
+                              hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.wetDecay) })
+                    SliderRow(title: "Fade", value: optionalInkConfigFloatBinding(\.fadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2, compact: true,
+                              hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.fade) })
+                    SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5, compact: true,
+                              hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.colorSeparation) })
+                    SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0, compact: true,
+                              hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).",
+                              toolbarDragProvider: { toolbarControlDragProvider(.brushInk) })
+                }
+            }
+            DisclosureGroup("Inputs", isExpanded: $inkInputsExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    inkInputMenu(
+                        title: "Surface input",
+                        label: inkSurfaceInputLabel,
+                        help: "Layer used as the ink surface/substrate. None means the ink sim has no routed surface texture.",
+                        binding: inkSurfaceInputMenuBinding
+                    )
+                    inkInputMenu(
+                        title: "Dynamic input",
+                        label: inkDynamicInputLabel,
+                        help: "Layer used for motion, wetness, and live-flow response. None disables routed dynamic input.",
+                        binding: inkDynamicInputMenuBinding
+                    )
+                }
+            }
+            DisclosureGroup("Response", isExpanded: $inkMaterialMapExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    PaperMaterialMapControls(config: inkSurfacePaperConfigBinding)
+                        .disabled(inkSurfacePaperNodeID == nil)
+                    Divider().opacity(0.35)
+                    SliderRow(title: "Surface fx", value: optionalInkConfigFloatBinding(\.surfaceInfluence, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Master coupling from the surface input's material map into the ink simulation. 0 = visual only; 1 = full absorbency, drag, and fresh-ink resistance.")
+                    SliderRow(title: "Dynamic fx", value: optionalInkConfigFloatBinding(\.dynamicInfluence, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Couples the dynamic input to absorbency, drag, and resistance. This is a changing scalar mask; it does not provide motion direction.")
+                    SliderRow(title: "Motion push", value: optionalInkConfigFloatBinding(\.motionForce, defaultValue: 0), range: 0...2, defaultValue: 0, compact: true,
+                              hint: "Strength of the dynamic input's optical-flow vector pushing wet ink. It can move only pixels that are wet.")
+                    SliderRow(title: "Motion wet", value: optionalInkConfigFloatBinding(\.motionWetness, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "Continuously wets pixels where dynamic-input optical flow is detected, allowing that motion to carry pigment.")
+                    SliderRow(title: "Dyn absorb", value: optionalInkConfigFloatBinding(\.dynamicAbsorbency, defaultValue: 0), range: 0...1, defaultValue: 0, compact: true,
+                              hint: "How strongly the dynamic input accelerates wetting and drying locally.")
+                    SliderRow(title: "Dyn drag", value: optionalInkConfigFloatBinding(\.dynamicDrag, defaultValue: 0.5), range: 0...2, defaultValue: 0.5, compact: true,
+                              hint: "How strongly the dynamic input brakes fluid and pigment movement locally.")
+                    SliderRow(title: "Dyn resist", value: optionalInkConfigFloatBinding(\.dynamicResist, defaultValue: 1), range: 0...1, defaultValue: 1, compact: true,
+                              hint: "How strongly the dynamic input rejects newly deposited pigment. It does not erase existing ink.")
+                }
                 HStack(spacing: 6) {
                     Button("Fix") { fixInk() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.fix) }
                         .help("Make all current pigment permanent and immune to wash. Shortcut: Control-Option-F.")
                     Button("Unfix") { unfixInk() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.unfix) }
                         .help("Return permanent pigment to the ordinary dried layer so wetting and wash can mobilize it. Shortcut: Shift-Option-F.")
                     Button("Wet canvas") { wetInkCanvas() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.wetCanvas) }
                         .help("Flood the persistent wetness field once. It then moves and dries normally. Shortcut: Control-Option-W.")
                     Button("Dry canvas") { dryInkCanvas() }
+                        .toolbarControlDragHandle { toolbarControlDragProvider(.dryCanvas) }
                         .help("Remove all wetness and fluid momentum immediately without moving or fixing pigment. Shortcut: Shift-Option-W.")
                 }
                 .controlSize(.small)
             }
-
-            Toggle("Show live cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
-                .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
-            SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5,
-                      hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.smooth) })
-
-            SectionHeader("Pen / Wash")
-            HStack(spacing: 12) {
-                Picker("Mode", selection: inkModeBinding) {
-                    ForEach(InkBrushMode.allCases) { mode in Text(mode.title).tag(mode) }
-                }
-                .pickerStyle(.segmented)
-                .help("Pen lays a stroke of ink; Wash uses a wet brush to push, smear and blend the ink in the velocity field.")
-
-                Picker("Ink", selection: inkKindBinding) {
-                    ForEach(InkKind.allCases) { kind in Text(kind.title).tag(kind) }
-                }
-                .pickerStyle(.segmented)
-                .help("Color = chromatic ink that uses the Ink colour. Dissolve = opaque white pigment that covers / erases (a Dissolve wash clears to paper).")
-            }
-            // Ink + Wash colours on one row; the checkbox next to each toggles
-            // "save stroke" for that tool (off = immediate: paints straight onto
-            // the canvas without recording an editable path).
-            HStack(spacing: 12) {
-                HStack(spacing: 6) {
-                    RGBAColorPicker("Ink", rgba: inkColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset ink color") { mutateActiveInkConfig { $0.inkColor = .ink } }
-                    Toggle("", isOn: savePenStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save pen stroke as an editable path. Off = immediate (paints straight onto the canvas, not recorded).")
-                }
-                Spacer(minLength: 6)
-                HStack(spacing: 6) {
-                    RGBAColorPicker("Wash", rgba: inkWashColorRGBA, supportsOpacity: true)
-                    colorResetButton("Reset wash color") { mutateActiveInkConfig { $0.washColor = RGBAColor(red: 0.84, green: 0.85, blue: 0.89) } }
-                    Toggle("", isOn: saveWashStrokeBinding)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                        .help("Save wash stroke as an editable path. Off = immediate.")
+            DisclosureGroup("Path", isExpanded: $inkPathExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Show cursor path", isOn: $model.settings.landmarks.inkShowLivePath)
+                        .help("Thin dashed guide tracking the cursor while the rendered ink catches up. Off by default.")
+                    SliderRow(title: "Smooth", value: inkConfigFloatBinding(\.smoothing), defaultValue: 0.5, compact: true,
+                              hint: "Rounds the stroke as you draw — higher = smoother/laggier. Hold Shift while drawing for extra smoothing.",
+                              toolbarDragProvider: { toolbarControlDragProvider(.smooth) })
+                    Picker("Curve", selection: inkCurveFitBinding) {
+                        ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
+                    HStack {
+                        Stepper(value: inkSeedBinding, in: 0...99_999) {
+                            Text("Seed \(activeInkConfig.seed)")
+                                .monospacedDigit()
+                                .numericScrub(value: inkSeedBinding, defaultValue: 0)
+                        }
+                        Button("Shuffle") { mutateActiveInkConfig { $0.seed = Int.random(in: 0..<100_000) } }
+                    }
                 }
             }
-            SliderRow(title: "Pen size", value: inkSizeBinding, defaultValue: 0.5,
-                      hint: "Pen tip size. Type a value past 1 in the field for a bigger brush.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.penSize) })
-            SliderRow(title: "Wash size", value: inkWashSizeBinding, defaultValue: 0.5,
-                      hint: "Wash brush size — independent of the pen. Type past 1 for a bigger brush.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.washSize) })
-            SliderRow(title: "Smear", value: inkConfigFloatBinding(\.smearStrength), defaultValue: 0.5,
-                      hint: "Wash smear dial, subtle → dramatic. Low = needs a deliberate move and pushes gently (fine control); high = the slightest motion smears hard. Also sets how strongly the wash re-mobilizes dried ink.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.smear) })
-            SliderRow(title: "Flow", value: inkConfigFloatBinding(\.flow), defaultValue: 0.9,
-                      hint: "Fluid energy — higher = livelier, longer-lived motion, more swirl and bleed; lower = calmer, stays where you put it.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.flow) })
-            SliderRow(title: "Bleed", value: inkConfigFloatBinding(\.bleed), defaultValue: 0.8,
-                      hint: "Diffusion into the paper. 0 = pigment is only pushed around, conserved (acrylic-like); high = watery, dissolves and spreads. (Editable below 0 for an anti-diffuse/sharpening experiment.)",
-                      toolbarDragProvider: { toolbarControlDragProvider(.bleed) })
-            SliderRow(title: "Dry", value: inkConfigFloatBinding(\.dry), defaultValue: 0.25,
-                      hint: "How quickly strokes dry and fix into the paper. 0 = stays wet and spreadable indefinitely; high = sets fast.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.dry) })
-            SliderRow(title: "Wet decay", value: optionalInkConfigFloatBinding(\.wetnessDecay, defaultValue: 1), range: 0...2, defaultValue: 1,
-                      hint: "Direct wetness evaporation multiplier. 0 = wetness does not decay; 1 = normal Dry/Fade behavior; above 1 evaporates faster.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.wetDecay) })
-            SliderRow(title: "Fade", value: optionalInkConfigFloatBinding(\.fadeDuration, defaultValue: 1.2), range: 0.2...5, precision: 1, defaultValue: 1.2,
-                      hint: "Seconds the ink takes to settle after you release a wash, and to fade out on Clear (C). Longer = the wash keeps softly drifting and settling, and Clear dissolves away gradually — nice for live performance.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.fade) })
-            SliderRow(title: "Color", value: inkColorSeparationBinding, defaultValue: 0.5,
-                      hint: "Chromatic separation — splits the ink into colour fringes as it bleeds.",
-                      toolbarDragProvider: { toolbarControlDragProvider(.colorSeparation) })
-            SliderRow(title: "Brush ink", value: inkBrushInkBinding, defaultValue: 0,
-                      hint: "How much fresh pigment the wash brush itself lays down as it moves (0 = pure water/smear, no new ink).",
-                      toolbarDragProvider: { toolbarControlDragProvider(.brushInk) })
-            Picker("Curve", selection: inkCurveFitBinding) {
-                ForEach(CurveFit.allCases) { fit in Text(fit.title).tag(fit) }
-            }
-            .pickerStyle(.segmented)
-            .help("How recorded paths are fitted between sampled points: Polyline (straight), Spline / Hobby (smooth curves), Bezier.")
-            inkSeedRow
 
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .disabled(!model.settings.landmarks.inkEnabled)
     }
 
@@ -3703,7 +4015,7 @@ struct ContentView: View {
     }
     private var inkDynamicInputMenuBinding: Binding<PortBinding?> {
         Binding(
-            get: { activeInkConfig.dynamicInput ?? .none },
+            get: { activeInkConfig.dynamicInput ?? PortBinding.none },
             set: { value in mutateActiveInkConfig { $0.dynamicInput = value } }
         )
     }
@@ -3734,7 +4046,7 @@ struct ContentView: View {
         portBindingLabel(inkTextureBinding.wrappedValue, noneLabel: "None", nilLabel: "None")
     }
     private var inkDynamicInputLabel: String {
-        portBindingLabel(activeInkConfig.dynamicInput ?? .none, noneLabel: "None", nilLabel: "None")
+        portBindingLabel(activeInkConfig.dynamicInput ?? PortBinding.none, noneLabel: "None", nilLabel: "None")
     }
 
     @ViewBuilder private func inkInputMenu(
@@ -3744,7 +4056,10 @@ struct ContentView: View {
         binding: Binding<PortBinding?>
     ) -> some View {
         HStack(spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 76, alignment: .leading)
             Menu(label) {
                 Button("None") { binding.wrappedValue = PortBinding.none }
                 Divider()
@@ -3927,7 +4242,12 @@ struct ContentView: View {
                 value: Binding(get: { model.settings[keyPath: keyPath] }, set: { model.settings[keyPath: keyPath] = $0 }),
                 in: 0...99_999
             ) {
-                Text("Seed \(model.settings[keyPath: keyPath])").monospacedDigit()
+                Text("Seed \(model.settings[keyPath: keyPath])")
+                    .monospacedDigit()
+                    .numericScrub(
+                        value: Binding(get: { model.settings[keyPath: keyPath] }, set: { model.settings[keyPath: keyPath] = $0 }),
+                        defaultValue: 0
+                    )
             }
             Button("Shuffle") { model.settings[keyPath: keyPath] = Int.random(in: 0..<100_000) }
         }
@@ -3937,7 +4257,9 @@ struct ContentView: View {
         SectionHeader("Seed")
         HStack {
             Stepper(value: inkSeedBinding, in: 0...99_999) {
-                Text("Seed \(activeInkConfig.seed)").monospacedDigit()
+                Text("Seed \(activeInkConfig.seed)")
+                    .monospacedDigit()
+                    .numericScrub(value: inkSeedBinding, defaultValue: 0)
             }
             Button("Shuffle") { mutateActiveInkConfig { $0.seed = Int.random(in: 0..<100_000) } }
         }
@@ -4241,8 +4563,20 @@ struct ContentView: View {
                    default: KeyBinding(key: "p", modifiers: [.control, .option])) {
             appUI.toggleDebugOverlay()
         }
-        r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
+        r.register(id: "workspace.tool.select", title: "Workspace: Select", category: "Workspace",
                    default: KeyBinding(key: "v", modifiers: [])) {
+            setWorkspaceTool(.select)
+        }
+        r.register(id: "workspace.tool.draw", title: "Workspace: Draw", category: "Workspace",
+                   default: KeyBinding(key: "p", modifiers: [])) {
+            setWorkspaceTool(.draw)
+        }
+        r.register(id: "workspace.tool.pan", title: "Workspace: Pan", category: "Workspace",
+                   default: KeyBinding(key: "h", modifiers: [])) {
+            setWorkspaceTool(.pan)
+        }
+        r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
+                   default: nil) {
             guard tab == .ink else { return }
             inkTool = .select
         }
@@ -4252,7 +4586,7 @@ struct ContentView: View {
             inkTool = .select
         }
         r.register(id: "ink.tool.draw", title: "Ink: Draw Tool", category: "Ink",
-                   default: KeyBinding(key: "p", modifiers: [])) {
+                   default: nil) {
             guard tab == .ink else { return }
             inkTool = .draw
         }
@@ -4372,6 +4706,41 @@ struct ContentView: View {
             guard tab == .ink else { return }
             adjustInkBrushInk(by: 0.05)
         }
+    }
+
+    private func installSpacePanMonitor() {
+        guard spacePanMonitor == nil else { return }
+        spacePanMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            guard event.keyCode == 49,
+                  event.modifierFlags.intersection(KeyBinding.relevantFlags).isEmpty,
+                  !(NSApp.keyWindow?.firstResponder is NSTextView) else {
+                return event
+            }
+            switch event.type {
+            case .keyDown:
+                guard !event.isARepeat, spacePanToolBeforeHold == nil else { return nil }
+                let current = model.settings.workspace?.activeTool ?? .select
+                spacePanToolBeforeHold = current
+                setWorkspaceTool(.pan)
+                return nil
+            case .keyUp:
+                if let previous = spacePanToolBeforeHold {
+                    setWorkspaceTool(previous == .transform ? .select : previous)
+                    spacePanToolBeforeHold = nil
+                }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeSpacePanMonitor() {
+        if let spacePanMonitor {
+            NSEvent.removeMonitor(spacePanMonitor)
+            self.spacePanMonitor = nil
+        }
+        spacePanToolBeforeHold = nil
     }
 
     // MARK: - Bindings
@@ -4859,10 +5228,14 @@ private struct EffectPanel: View {
             HStack {
                 Text(amountLabel).font(.caption2).frame(width: 56, alignment: .leading)
                     .contentShape(Rectangle())
+                    .numericScrub(value: $effect.amount, defaultValue: defaultAmount)
                     .onTapGesture(count: 2) { effect.amount = defaultAmount }
                     .help("Double-click to reset to \(String(format: "%.2f", defaultAmount))")
                 Slider(value: $effect.amount, in: amountRange).controlSize(.small)
-                Text(String(format: "%.2f", effect.amount)).font(.caption2).frame(width: 32)
+                Text(String(format: "%.2f", effect.amount))
+                    .font(.caption2)
+                    .frame(width: 32)
+                    .numericScrub(value: $effect.amount, defaultValue: defaultAmount)
             }
         }
         if effect.kind.usesColor {
@@ -4894,10 +5267,14 @@ private struct EffectPanel: View {
         HStack {
             Text(title).font(.caption2).frame(width: 56, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: value, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
                 .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).frame(width: 32)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption2)
+                .frame(width: 32)
+                .numericScrub(value: value, defaultValue: defaultValue)
         }
     }
 
@@ -5014,10 +5391,15 @@ private struct AcrylicNodeEditor: View {
         HStack {
             Text(title).font(.caption2).frame(width: 72, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: value, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
                 .help("Double-click to reset")
             Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.2f", value.wrappedValue)).font(.caption2).monospacedDigit().frame(width: 38)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.caption2)
+                .monospacedDigit()
+                .frame(width: 38)
+                .numericScrub(value: value, defaultValue: defaultValue)
         }
     }
 }
@@ -5038,12 +5420,13 @@ private struct FloatSliderRow: View {
         HStack(spacing: 6) {
             Text(title)
                 .font(.caption2)
-                .frame(width: 76, alignment: .leading)
                 .contentShape(Rectangle())
+                .numericScrub(value: doubleValue, precision: precision, defaultValue: Double(defaultValue))
                 .onTapGesture(count: 2) { value = defaultValue }
+                .frame(width: 76, alignment: .leading)
             Slider(value: $value, in: range)
                 .controlSize(.small)
-            BufferedNumberField(value: doubleValue, precision: precision, font: .caption2)
+            BufferedNumberField(value: doubleValue, precision: precision, font: .caption2, defaultValue: Double(defaultValue))
         }
         .contentShape(Rectangle())
         .help("\(hint) Double-click the label to restore the default; type an exact value in the number field and press Return.")
@@ -5056,6 +5439,7 @@ private struct BufferedNumberField: View {
     var font: Font = .caption
     var width: CGFloat = 42
     var roundedBorder = false
+    var defaultValue: Double?
 
     @State private var text = ""
     @FocusState private var editing: Bool
@@ -5097,6 +5481,7 @@ private struct BufferedNumberField: View {
                 text = formatted(value)
                 editing = false
             }
+            .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
     }
 
     private func commit() {
@@ -5120,6 +5505,170 @@ private struct BufferedNumberField: View {
         return formatted
             .replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\.$"#, with: "", options: .regularExpression)
+    }
+}
+
+private struct NumericScrubModifier: ViewModifier {
+    @Binding var value: Double
+    let precision: Int
+    let step: Double?
+    let defaultValue: Double?
+    var externalIsScrubbing: Binding<Bool>?
+    @State private var isScrubbing = false
+
+    func body(content: Content) -> some View {
+        let scrubbing = Binding<Bool>(
+            get: { externalIsScrubbing?.wrappedValue ?? isScrubbing },
+            set: { newValue in
+                if let externalIsScrubbing {
+                    externalIsScrubbing.wrappedValue = newValue
+                } else {
+                    isScrubbing = newValue
+                }
+            }
+        )
+        content
+            .padding(.vertical, 2)
+            .overlay(alignment: .bottom) {
+                if scrubbing.wrappedValue {
+                    Image(systemName: "arrow.left.and.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .offset(y: 7)
+                }
+            }
+            .contentShape(Rectangle())
+            .overlay {
+                NumericScrubCatcher(value: $value, precision: precision, step: step, defaultValue: defaultValue, isScrubbing: scrubbing)
+            }
+    }
+}
+
+private struct NumericScrubCatcher: NSViewRepresentable {
+    @Binding var value: Double
+    let precision: Int
+    let step: Double?
+    let defaultValue: Double?
+    @Binding var isScrubbing: Bool
+
+    func makeNSView(context: Context) -> ScrubView {
+        let view = ScrubView()
+        view.value = $value
+        view.isScrubbing = $isScrubbing
+        view.precision = precision
+        view.step = step
+        view.defaultValue = defaultValue
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrubView, context: Context) {
+        nsView.value = $value
+        nsView.isScrubbing = $isScrubbing
+        nsView.precision = precision
+        nsView.step = step
+        nsView.defaultValue = defaultValue
+    }
+
+    final class ScrubView: NSView {
+        var value: Binding<Double> = .constant(0)
+        var isScrubbing: Binding<Bool> = .constant(false)
+        var precision = 0
+        var step: Double?
+        var defaultValue: Double?
+
+        private var anchorScreenPoint: CGPoint?
+        private var cursorHidden = false
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard NSApp.currentEvent?.modifierFlags.contains(.command) == true else { return nil }
+            return self
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard event.modifierFlags.contains(.command) else { return }
+            if event.clickCount >= 2, let defaultValue {
+                value.wrappedValue = defaultValue
+                return
+            }
+            window?.makeFirstResponder(self)
+            anchorScreenPoint = CGEvent(source: nil)?.location
+            isScrubbing.wrappedValue = true
+            if !cursorHidden {
+                NSCursor.hide()
+                cursorHidden = true
+            }
+            resetCursor()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard isScrubbing.wrappedValue else { return }
+            let fine = event.modifierFlags.contains(.shift)
+            let baseStep = step ?? Self.defaultStep(precision: precision)
+            let step = fine ? baseStep * 0.1 : baseStep
+            let delta = Double(event.deltaX - event.deltaY)
+            value.wrappedValue += delta * step * 0.25
+            resetCursor()
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            endScrub()
+        }
+
+        override func viewDidMoveToWindow() {
+            if window == nil {
+                endScrub()
+            }
+        }
+
+        private func resetCursor() {
+            guard let anchorScreenPoint else { return }
+            CGWarpMouseCursorPosition(anchorScreenPoint)
+        }
+
+        private func endScrub() {
+            if cursorHidden {
+                NSCursor.unhide()
+                cursorHidden = false
+            }
+            isScrubbing.wrappedValue = false
+            anchorScreenPoint = nil
+        }
+
+        private static func defaultStep(precision: Int) -> Double {
+            precision <= 0 ? 10 : 0.1
+        }
+    }
+}
+
+private extension View {
+    func numericScrub(
+        value: Binding<Double>,
+        precision: Int,
+        step: Double? = nil,
+        defaultValue: Double? = nil,
+        isScrubbing: Binding<Bool>? = nil
+    ) -> some View {
+        modifier(NumericScrubModifier(value: value, precision: precision, step: step, defaultValue: defaultValue, externalIsScrubbing: isScrubbing))
+    }
+
+    func numericScrub(value: Binding<Int>, step: Double = 10, defaultValue: Int? = nil) -> some View {
+        let doubleValue = Binding<Double>(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = Int($0.rounded()) }
+        )
+        let resetValue = defaultValue.map { Double($0) }
+        return numericScrub(value: doubleValue, precision: 0, step: step, defaultValue: resetValue)
+    }
+
+    func numericScrub(value: Binding<Float>, precision: Int = 2, step: Double? = nil, defaultValue: Float? = nil) -> some View {
+        let doubleValue = Binding<Double>(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = Float($0) }
+        )
+        let resetValue = defaultValue.map { Double($0) }
+        return numericScrub(value: doubleValue, precision: precision, step: step, defaultValue: resetValue)
     }
 }
 
@@ -5167,8 +5716,11 @@ private struct PaperControls: View {
             paperSlider("Y scale", value: optional(\.grainScaleY, 0.12), range: 0.005...0.5, defaultValue: 0.12, precision: 3,
                         hint: "Fine-grain variation across Y. Unequal scales stretch the pattern and also change the hidden material map.")
             HStack {
-                Stepper("Seed \(config.seed ?? 0)", value: seedBinding, in: 0...99_999)
-                    .font(.caption2)
+                Stepper(value: seedBinding, in: 0...99_999) {
+                    Text("Seed \(config.seed ?? 0)")
+                        .font(.caption2)
+                        .numericScrub(value: seedBinding, defaultValue: 0)
+                }
                 Spacer()
                 Button("Shuffle") { config.seed = Int.random(in: 0..<100_000) }
                     .buttonStyle(.borderless)
@@ -5433,13 +5985,13 @@ private struct WorkspaceFrameStackEditor: View {
     @ViewBuilder private func frameDetails(_ frame: WorkspaceFrame) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                field("X", value: transformValue(frame.id, get: { $0.tx }, set: { $0.tx = $1 }))
-                field("Y", value: transformValue(frame.id, get: { $0.ty }, set: { $0.ty = $1 }))
-                field("W", value: boundsValue(frame.id, get: { $0.width }, set: { $0.size.width = max(1, $1) }))
-                field("H", value: boundsValue(frame.id, get: { $0.height }, set: { $0.size.height = max(1, $1) }))
+                field("X", value: transformValue(frame.id, get: { $0.tx }, set: { $0.tx = $1 }), defaultValue: 0)
+                field("Y", value: transformValue(frame.id, get: { $0.ty }, set: { $0.ty = $1 }), defaultValue: 0)
+                field("W", value: boundsValue(frame.id, get: { $0.width }, set: { $0.size.width = max(1, $1) }), defaultValue: model.outputFormat.size.width)
+                field("H", value: boundsValue(frame.id, get: { $0.height }, set: { $0.size.height = max(1, $1) }), defaultValue: model.outputFormat.size.height)
             }
             HStack {
-                field("Rot", value: rotation(frame.id))
+                field("Rot", value: rotation(frame.id), defaultValue: 0)
                 Picker("Fit", selection: contentFitBinding(frame.id)) {
                     ForEach(WorkspaceContentFit.allCases) { fit in
                         Text(fit.rawValue.capitalized).tag(fit)
@@ -5467,10 +6019,10 @@ private struct WorkspaceFrameStackEditor: View {
             .buttonStyle(.borderless)
             .controlSize(.small)
             HStack {
-                field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x))
-                field("Y", value: cropValue(frame.id, keyPath: \.origin.y))
-                field("W", value: cropValue(frame.id, keyPath: \.size.width))
-                field("H", value: cropValue(frame.id, keyPath: \.size.height))
+                field("Crop X", value: cropValue(frame.id, keyPath: \.origin.x), defaultValue: 0)
+                field("Y", value: cropValue(frame.id, keyPath: \.origin.y), defaultValue: 0)
+                field("W", value: cropValue(frame.id, keyPath: \.size.width), defaultValue: 1)
+                field("H", value: cropValue(frame.id, keyPath: \.size.height), defaultValue: 1)
             }
             MaskEditor(mask: frameMaskBinding(frame.id),
                        personMatteQuality: $model.settings.segmentation.quality,
@@ -5482,12 +6034,13 @@ private struct WorkspaceFrameStackEditor: View {
         }
     }
 
-    private func field(_ label: String, value: Binding<Double>) -> some View {
+    private func field(_ label: String, value: Binding<Double>, defaultValue: Double? = nil) -> some View {
         HStack(spacing: 3) {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true)
+                .numericScrub(value: value, precision: 1, defaultValue: defaultValue)
+            BufferedNumberField(value: value, precision: 1, font: .caption2, width: 54, roundedBorder: true, defaultValue: defaultValue)
         }
     }
 
@@ -6302,11 +6855,12 @@ private struct SliderRow: View {
     var range: ClosedRange<Double> = 0...1
     var precision: Int = 2
     let defaultValue: Double
+    var compact = false
     var hint: String?
     var toolbarDragProvider: (() -> NSItemProvider)?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: compact ? 5 : 6) {
             label
             Slider(value: $value, in: range)
                 .controlSize(.small)
@@ -6315,9 +6869,9 @@ private struct SliderRow: View {
             // experiment; the slider thumb just pins to its end. Enter or Escape
             // commits and releases focus so keyboard shortcuts ([, ], etc.) work
             // again (clicking the canvas also releases it).
-            BufferedNumberField(value: $value, precision: precision)
+            BufferedNumberField(value: $value, precision: precision, font: compact ? .caption2 : .caption, width: 42, defaultValue: defaultValue)
         }
-        .frame(minHeight: 22)
+        .frame(minHeight: compact ? 17 : 22)
         .contentShape(Rectangle())
         .help("\(hint ?? title) Double-click the label to restore the default; type an exact value in the number field and press Return.")
     }
@@ -6326,9 +6880,10 @@ private struct SliderRow: View {
         let text = Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
-            .frame(width: 70, alignment: .leading)
             .contentShape(Rectangle())
+            .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
             .onTapGesture(count: 2) { value = defaultValue }
+            .frame(width: compact ? 76 : 70, alignment: .leading)
         if let toolbarDragProvider {
             text
                 .onDrag { toolbarDragProvider() }
@@ -6398,9 +6953,11 @@ private struct OutputExportControls: View {
                 Text("Size")
                 TextField("W", value: width, format: .number)
                     .frame(width: 64)
+                    .numericScrub(value: width, defaultValue: ExportConfiguration().width)
                 Text("x")
                 TextField("H", value: height, format: .number)
                     .frame(width: 64)
+                    .numericScrub(value: height, defaultValue: ExportConfiguration().height)
             }
             .textFieldStyle(.roundedBorder)
 
@@ -6408,9 +6965,11 @@ private struct OutputExportControls: View {
                 Text("FPS")
                 TextField("Capture", value: captureFPS, format: .number.precision(.fractionLength(0)))
                     .frame(width: 72)
+                    .numericScrub(value: captureFPS, precision: 0, defaultValue: ExportConfiguration().captureFPS)
                 Text("->")
                 TextField("Playback", value: playbackFPS, format: .number.precision(.fractionLength(0)))
                     .frame(width: 72)
+                    .numericScrub(value: playbackFPS, precision: 0, defaultValue: ExportConfiguration().playbackFPS)
             }
             .textFieldStyle(.roundedBorder)
 
@@ -6585,6 +7144,7 @@ private struct InkToolbarStrip: View {
     @Binding var mode: InkBrushMode
     @Binding var inkKind: InkKind
     @Binding var inkColor: RGBAColor
+    @Binding var washColor: RGBAColor
     @Binding var smooth: Double
     @Binding var size: Double
     @Binding var washSize: Double
@@ -6600,24 +7160,25 @@ private struct InkToolbarStrip: View {
     let removeControl: (ToolbarControlID) -> Void
     let resetControls: () -> Void
     let fix: () -> Void
+    let unfix: () -> Void
+    let wetCanvas: () -> Void
+    let dryCanvas: () -> Void
     let clear: () -> Void
     let save: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .bottom, spacing: 22) {
+            HStack(alignment: .center, spacing: 12) {
                 ForEach(controls) { control in
                     toolbarControl(control)
-                        .onDrag { controlDragProvider(control) }
                         .contextMenu {
                             Button("Remove") { removeControl(control) }
                             Button("Reset Toolbar") { resetControls() }
                         }
-                        .help("Option-drag this control to place it in a toolbar container. Right-click to remove or reset the toolbar.")
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 2)
         }
         .controlSize(.small)
     }
@@ -6625,41 +7186,49 @@ private struct InkToolbarStrip: View {
     @ViewBuilder private func toolbarControl(_ control: ToolbarControlID) -> some View {
         switch control {
         case .mode:
-            buttonControl(control.compactTitle, value: mode.title) { mode = mode.toggled }
+            toggleControl(control.compactTitle.lowercased(), systemImage: control.icon, value: mode.title) { mode = mode.toggled }
         case .inkKind:
-            buttonControl(control.compactTitle, value: inkKind.title) { inkKind = inkKind.toggled }
+            toggleControl(control.compactTitle.lowercased(), systemImage: control.icon, value: inkKind.title) { inkKind = inkKind.toggled }
         case .hue:
-            VStack(spacing: 5) {
-                Text(control.compactTitle)
-                    .hudLabel()
-                RGBAColorPicker("", rgba: $inkColor, supportsOpacity: true)
-                    .labelsHidden()
-                    .frame(width: 26, height: 20)
-            }
+            RGBAColorPicker("", rgba: $inkColor, supportsOpacity: true)
+                .labelsHidden()
+                .frame(width: 30, height: 30)
+                .help("\(control.compactTitle.lowercased()): \(inkColorSummary)")
+        case .washHue:
+            RGBAColorPicker("", rgba: $washColor, supportsOpacity: true)
+                .labelsHidden()
+                .frame(width: 30, height: 30)
+                .help("\(control.compactTitle.lowercased()): \(washColorSummary)")
         case .smooth:
-            hudSlider(control.compactTitle, value: $smooth, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $smooth, defaultValue: 0.5)
         case .penSize:
-            hudSlider(control.compactTitle, value: $size, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $size, defaultValue: 0.5)
         case .washSize:
-            hudSlider(control.compactTitle, value: $washSize, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $washSize, defaultValue: 0.5)
         case .smear:
-            hudSlider(control.compactTitle, value: $smear, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $smear, defaultValue: 0.5)
         case .flow:
-            hudSlider(control.compactTitle, value: $flow, defaultValue: 0.9)
+            toolbarDial(control.compactTitle.lowercased(), value: $flow, defaultValue: 0.9)
         case .bleed:
-            hudSlider(control.compactTitle, value: $bleed, defaultValue: 0.8)
+            toolbarDial(control.compactTitle.lowercased(), value: $bleed, defaultValue: 0.8)
         case .dry:
-            hudSlider(control.compactTitle, value: $dry, defaultValue: 0.25)
+            toolbarDial(control.compactTitle.lowercased(), value: $dry, defaultValue: 0.25)
         case .wetDecay:
-            hudSlider(control.compactTitle, value: $wetDecay, defaultValue: 1)
+            toolbarDial(control.compactTitle.lowercased(), value: $wetDecay, defaultValue: 1)
         case .fade:
-            hudSlider(control.compactTitle, value: $fade, defaultValue: 1.2, range: 0.2...5)
+            toolbarDial(control.compactTitle.lowercased(), value: $fade, defaultValue: 1.2, range: 0.2...5)
         case .colorSeparation:
-            hudSlider(control.compactTitle, value: $colorSeparation, defaultValue: 0.5)
+            toolbarDial(control.compactTitle.lowercased(), value: $colorSeparation, defaultValue: 0.5)
         case .brushInk:
-            hudSlider(control.compactTitle, value: $brushInk, defaultValue: 0)
+            toolbarDial(control.compactTitle.lowercased(), value: $brushInk, defaultValue: 0)
         case .fix:
             command(control.compactTitle, systemImage: control.icon, action: fix)
+        case .unfix:
+            command(control.compactTitle, systemImage: control.icon, action: unfix)
+        case .wetCanvas:
+            command(control.compactTitle, systemImage: control.icon, action: wetCanvas)
+        case .dryCanvas:
+            command(control.compactTitle, systemImage: control.icon, action: dryCanvas)
         case .clear:
             command(control.compactTitle, systemImage: control.icon, action: clear)
         case .save:
@@ -6667,30 +7236,27 @@ private struct InkToolbarStrip: View {
         }
     }
 
-    private func buttonControl(_ label: String, value: String, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 5) {
-            Text(label)
-                .hudLabel()
-            Button(value, action: action)
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
-                .tracking(1.6)
-                .textCase(.uppercase)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 58)
-        }
+    private var inkColorSummary: String {
+        "\(Int(inkColor.red * 255)), \(Int(inkColor.green * 255)), \(Int(inkColor.blue * 255)), \(Int(inkColor.alpha * 100))%"
     }
 
-    private func hudSlider(_ label: String, value: Binding<Double>, defaultValue: Double, range: ClosedRange<Double> = 0...1) -> some View {
-        VStack(spacing: 5) {
-            Text(label)
-                .hudLabel()
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
-                .help("Double-click to reset")
-            Slider(value: value, in: range)
-                .frame(width: 86)
+    private var washColorSummary: String {
+        "\(Int(washColor.red * 255)), \(Int(washColor.green * 255)), \(Int(washColor.blue * 255)), \(Int(washColor.alpha * 100))%"
+    }
+
+    private func toggleControl(_ title: String, systemImage: String, value: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 30, height: 30)
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("\(title): \(value)")
+    }
+
+    private func toolbarDial(_ title: String, value: Binding<Double>, defaultValue: Double, range: ClosedRange<Double> = 0...1) -> some View {
+        AbletonDial(title: title, value: value, range: range, defaultValue: defaultValue)
     }
 
     private func command(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -6705,6 +7271,121 @@ private struct InkToolbarStrip: View {
     }
 }
 
+private struct AbletonDial: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let defaultValue: Double
+    @State private var isScrubbing = false
+    @State private var isHovering = false
+    @State private var scrubLinger = false
+    @State private var lingerToken = UUID()
+
+    private var clampedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { value = min(range.upperBound, max(range.lowerBound, $0)) }
+        )
+    }
+
+    private var normalizedValue: Double {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        return min(1, max(0, (value - range.lowerBound) / (range.upperBound - range.lowerBound)))
+    }
+
+    private var formattedValue: String {
+        String(format: "%.2f", value)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let dialSize: CGFloat = 26
+            let side = dialSize
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let radius = max(4, side * 0.36)
+            let start = Angle.degrees(135)
+            let sweep = 270 * normalizedValue
+            let indicatorAngle = (135 + sweep) * Double.pi / 180
+            let indicatorRadius = Double(radius) * 0.82
+            let indicatorEnd = CGPoint(
+                x: center.x + CGFloat(cos(indicatorAngle) * indicatorRadius),
+                y: center.y + CGFloat(sin(indicatorAngle) * indicatorRadius)
+            )
+
+            ZStack {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.22), lineWidth: 3)
+                    .frame(width: radius * 2, height: radius * 2)
+                    .position(center)
+                Path { path in
+                    path.addArc(
+                        center: center,
+                        radius: radius,
+                        startAngle: start,
+                        endAngle: .degrees(135 + sweep),
+                        clockwise: false
+                    )
+                }
+                .stroke(Color.secondary.opacity(0.82), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                Path { path in
+                    path.move(to: center)
+                    path.addLine(to: indicatorEnd)
+                }
+                .stroke(Color.secondary.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            }
+        }
+        .frame(width: 28, height: 30)
+        .contentShape(Rectangle())
+        .overlay(alignment: .leading) {
+            if isHovering || isScrubbing || scrubLinger {
+                Text("\(title): \(formattedValue)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.94), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.38)))
+                    .fixedSize()
+                    .offset(x: 32)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+            }
+        }
+        .numericScrub(value: clampedValue, precision: 2, defaultValue: defaultValue, isScrubbing: $isScrubbing)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .onChange(of: isScrubbing) { _, scrubbing in
+            if scrubbing {
+                scrubLinger = true
+                lingerToken = UUID()
+            } else {
+                let token = UUID()
+                lingerToken = token
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    guard lingerToken == token, !isScrubbing else { return }
+                    scrubLinger = false
+                }
+            }
+        }
+        .onTapGesture(count: 2) { value = defaultValue }
+    }
+}
+
+private struct ToolbarControlDragHandleModifier: ViewModifier {
+    let provider: () -> NSItemProvider
+
+    func body(content: Content) -> some View {
+        content.onDrag {
+            guard NSEvent.modifierFlags.contains(.option) else {
+                return NSItemProvider(object: "toolbar-control-cancelled" as NSString)
+            }
+            return provider()
+        }
+    }
+}
+
 private extension Text {
     func hudLabel() -> some View {
         self
@@ -6712,6 +7393,12 @@ private extension Text {
             .tracking(4)
             .textCase(.uppercase)
             .foregroundStyle(.secondary.opacity(0.75))
+    }
+}
+
+private extension View {
+    func toolbarControlDragHandle(_ provider: @escaping () -> NSItemProvider) -> some View {
+        modifier(ToolbarControlDragHandleModifier(provider: provider))
     }
 }
 
@@ -6927,6 +7614,9 @@ private struct FocusEscapeHandler: NSViewRepresentable {
 
         func install() {
             guard monitor == nil else { return }
+            DispatchQueue.main.async {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard event.keyCode == 53 else { return event }
                 guard let window = event.window ?? NSApp.keyWindow else { return event }
@@ -7326,14 +8016,22 @@ private struct ArtboardMagnifyEvent {
     var magnification: CGFloat
 }
 
+private struct ArtboardMouseEvent {
+    var location: CGPoint
+    var modifiers: NSEvent.ModifierFlags
+    var clickCount: Int
+}
+
 private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     var onScroll: (ArtboardNavigationEvent) -> Void
     var onMagnify: (ArtboardMagnifyEvent) -> Void
+    var onMouseDown: (ArtboardMouseEvent) -> Void
 
     func makeNSView(context: Context) -> EventView {
         let view = EventView()
         view.onScroll = onScroll
         view.onMagnify = onMagnify
+        view.onMouseDown = onMouseDown
         view.installMonitors()
         return view
     }
@@ -7341,6 +8039,7 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: EventView, context: Context) {
         nsView.onScroll = onScroll
         nsView.onMagnify = onMagnify
+        nsView.onMouseDown = onMouseDown
     }
 
     static func dismantleNSView(_ nsView: EventView, coordinator: ()) {
@@ -7350,19 +8049,25 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
     final class EventView: NSView {
         var onScroll: ((ArtboardNavigationEvent) -> Void)?
         var onMagnify: ((ArtboardMagnifyEvent) -> Void)?
+        var onMouseDown: ((ArtboardMouseEvent) -> Void)?
         private var scrollMonitor: Any?
         private var magnifyMonitor: Any?
+        private var mouseDownMonitor: Any?
 
         override var isFlipped: Bool { true }
 
         func installMonitors() {
-            guard scrollMonitor == nil, magnifyMonitor == nil else { return }
+            guard scrollMonitor == nil, magnifyMonitor == nil, mouseDownMonitor == nil else { return }
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 self?.handleScroll(event)
                 return event
             }
             magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
                 self?.handleMagnify(event)
+                return event
+            }
+            mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                self?.handleMouseDown(event)
                 return event
             }
         }
@@ -7375,6 +8080,10 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
             if let magnifyMonitor {
                 NSEvent.removeMonitor(magnifyMonitor)
                 self.magnifyMonitor = nil
+            }
+            if let mouseDownMonitor {
+                NSEvent.removeMonitor(mouseDownMonitor)
+                self.mouseDownMonitor = nil
             }
         }
 
@@ -7391,6 +8100,15 @@ private struct ArtboardNavigationEventMonitor: NSViewRepresentable {
         private func handleMagnify(_ event: NSEvent) {
             guard let point = localPoint(for: event) else { return }
             onMagnify?(ArtboardMagnifyEvent(location: point, magnification: event.magnification))
+        }
+
+        private func handleMouseDown(_ event: NSEvent) {
+            guard let point = localPoint(for: event) else { return }
+            onMouseDown?(ArtboardMouseEvent(
+                location: point,
+                modifiers: event.modifierFlags,
+                clickCount: event.clickCount
+            ))
         }
 
         private func localPoint(for event: NSEvent) -> CGPoint? {
@@ -7431,11 +8149,48 @@ private struct WorkspaceArtboardOverlay: View {
     @State private var dragStarted = false
     @State private var dragOperation: DragOperation?
     @State private var magnifyStartZoom: Double?
+    @State private var suppressDragUntilMouseUp = false
+
+    private enum CropHandle {
+        case minX
+        case maxX
+        case minY
+        case maxY
+        case minXMinY
+        case maxXMinY
+        case maxXMaxY
+        case minXMaxY
+
+        var movesMinX: Bool {
+            self == .minX || self == .minXMinY || self == .minXMaxY
+        }
+
+        var movesMaxX: Bool {
+            self == .maxX || self == .maxXMinY || self == .maxXMaxY
+        }
+
+        var movesMinY: Bool {
+            self == .minY || self == .minXMinY || self == .maxXMinY
+        }
+
+        var movesMaxY: Bool {
+            self == .maxY || self == .maxXMaxY || self == .minXMaxY
+        }
+
+        var movesX: Bool {
+            movesMinX || movesMaxX
+        }
+
+        var movesY: Bool {
+            movesMinY || movesMaxY
+        }
+    }
 
     private enum DragOperation {
         case pan(startView: CGPoint, startCenter: CGPoint)
         case move(frameID: UUID, startWorld: CGPoint, transform: WorkspaceAffineTransform)
-        case scale(frameID: UUID, centerWorld: CGPoint, startDistance: CGFloat, transform: WorkspaceAffineTransform)
+        case resize(frameID: UUID, handle: CropHandle, startBounds: CGRect, transform: WorkspaceAffineTransform)
+        case crop(frameID: UUID, handle: CropHandle, startCrop: CGRect, startUnit: CGPoint)
     }
 
     var body: some View {
@@ -7451,6 +8206,9 @@ private struct WorkspaceArtboardOverlay: View {
                     },
                     onMagnify: { event in
                         handleMagnifyEvent(event, outputRect: outputRect)
+                    },
+                    onMouseDown: { event in
+                        handleMouseDown(event, outputRect: outputRect)
                     }
                 )
                 Color.black.opacity(0.001)
@@ -7509,22 +8267,31 @@ private struct WorkspaceArtboardOverlay: View {
             )
 
             if selected {
-                for point in corners {
+                for point in cropHandlePoints(corners).map(\.point) {
                     let handle = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
                     context.fill(Path(ellipseIn: handle), with: .color(color.opacity(0.95)))
                 }
-                drawCrop(frame, context: &context, viewport: workspace.outputViewport.frame, outputRect: outputRect, color: color)
+                drawCrop(
+                    frame,
+                    context: &context,
+                    viewport: workspace.outputViewport.frame,
+                    outputRect: outputRect,
+                    color: color,
+                    showHandles: workspace.activeTool == .crop
+                )
             }
 
-            let labelPoint = corners.reduce(corners[0]) { best, point in
-                point.y < best.y || (point.y == best.y && point.x < best.x) ? point : best
+            if model.settings.showArtboardFrameLabels {
+                let labelPoint = corners.reduce(corners[0]) { best, point in
+                    point.y < best.y || (point.y == best.y && point.x < best.x) ? point : best
+                }
+                let label = context.resolve(
+                    Text(frame.name)
+                        .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                        .foregroundColor(color.opacity(selected ? 0.95 : 0.65))
+                )
+                context.draw(label, at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 12), anchor: .leading)
             }
-            let label = context.resolve(
-                Text(frame.name)
-                    .font(.system(size: 11, weight: selected ? .semibold : .medium))
-                    .foregroundColor(color.opacity(selected ? 0.95 : 0.65))
-            )
-            context.draw(label, at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 12), anchor: .leading)
         }
     }
 
@@ -7533,20 +8300,11 @@ private struct WorkspaceArtboardOverlay: View {
         context: inout GraphicsContext,
         viewport: CGRect,
         outputRect: CGRect,
-        color: Color
+        color: Color,
+        showHandles: Bool
     ) {
-        guard frame.cropRect != CGRect(x: 0, y: 0, width: 1, height: 1) else { return }
-        let crop = frame.cropRect.standardized
-        let bounds = frame.localBounds
-        let local = CGRect(
-            x: bounds.minX + crop.minX * bounds.width,
-            y: bounds.minY + crop.minY * bounds.height,
-            width: crop.width * bounds.width,
-            height: crop.height * bounds.height
-        )
-        let points = rectCorners(local)
-            .map { $0.applying(frame.transform.cgAffineTransform) }
-            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+        guard showHandles || frame.cropRect != CGRect(x: 0, y: 0, width: 1, height: 1) else { return }
+        let points = cropViewCorners(frame, viewport: viewport, outputRect: outputRect, handlesFollowRenderedContent: showHandles)
         guard points.count == 4 else { return }
         var path = Path()
         path.move(to: points[0])
@@ -7555,9 +8313,18 @@ private struct WorkspaceArtboardOverlay: View {
         }
         path.closeSubpath()
         context.stroke(path, with: .color(color.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+        if showHandles {
+            for point in cropHandlePoints(points).map(\.point) {
+                context.fill(
+                    Path(roundedRect: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8), cornerRadius: 2),
+                    with: .color(color.opacity(0.95))
+                )
+            }
+        }
     }
 
     private func handleDragChanged(_ value: DragGesture.Value, outputRect: CGRect) {
+        if suppressDragUntilMouseUp { return }
         guard outputRect.width > 0,
               outputRect.height > 0,
               let workspace = model.settings.workspace else { return }
@@ -7568,16 +8335,40 @@ private struct WorkspaceArtboardOverlay: View {
         let world = worldPoint(view: value.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
         if !dragStarted {
             dragStarted = true
+            if workspace.activeTool == .crop {
+                if let cropHit = hitCropHandle(at: value.location, workspace: workspace, outputRect: outputRect) {
+                    model.updateWorkspaceLiveEdit {
+                        $0.activeFrameID = cropHit.frame.id
+                        $0.selectedFrameIDs = [cropHit.frame.id]
+                    }
+                    model.beginWorkspaceLiveEdit()
+                    let startUnit = cropUnitPoint(world: world, frame: cropHit.frame) ?? .zero
+                    dragOperation = .crop(
+                        frameID: cropHit.frame.id,
+                        handle: cropHit.handle,
+                        startCrop: cropHit.frame.cropRect,
+                        startUnit: startUnit
+                    )
+                    return
+                }
+                if let hit = hitFrame(at: world, workspace: workspace, outputRect: outputRect) {
+                    model.updateWorkspaceLiveEdit {
+                        $0.activeFrameID = hit.id
+                        $0.selectedFrameIDs = [hit.id]
+                    }
+                }
+                return
+            }
             if let handleHit = hitScaleHandle(at: value.location, workspace: workspace, outputRect: outputRect) {
                 model.updateWorkspaceLiveEdit {
                     $0.activeFrameID = handleHit.frame.id
                     $0.selectedFrameIDs = [handleHit.frame.id]
                 }
                 model.beginWorkspaceLiveEdit()
-                dragOperation = .scale(
+                dragOperation = .resize(
                     frameID: handleHit.frame.id,
-                    centerWorld: handleHit.centerWorld,
-                    startDistance: max(1, distance(world, handleHit.centerWorld)),
+                    handle: handleHit.handle,
+                    startBounds: handleHit.frame.localBounds,
                     transform: handleHit.frame.transform
                 )
             }
@@ -7618,12 +8409,30 @@ private struct WorkspaceArtboardOverlay: View {
                 workspace.frames[index].transform.tx = transform.tx + delta.x
                 workspace.frames[index].transform.ty = transform.ty + delta.y
             }
-        case .scale(let id, let center, let startDistance, let transform):
-            let scale = max(0.05, distance(world, center) / max(1, startDistance))
+        case .resize(let id, let handle, let startBounds, let transform):
+            let local = world.applying(transform.cgAffineTransform.inverted())
+            let modifiers = NSEvent.modifierFlags
             model.updateWorkspaceLiveEdit { workspace in
                 guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
                       !workspace.frames[index].locked else { return }
-                scaleFrame(&workspace.frames[index], from: transform, around: center, scale: scale)
+                workspace.frames[index].localBounds = resizedBounds(
+                    startBounds,
+                    handle: handle,
+                    localPoint: local,
+                    centerPivot: modifiers.contains(.option),
+                    preserveAspect: modifiers.contains(.shift)
+                )
+            }
+        case .crop(let id, let handle, let startCrop, let startUnit):
+            model.updateWorkspaceLiveEdit { workspace in
+                guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                      !workspace.frames[index].locked,
+                      let unit = cropUnitPoint(world: world, frame: workspace.frames[index]) else { return }
+                workspace.frames[index].cropRect = updatedCrop(
+                    startCrop,
+                    handle: handle,
+                    by: CGPoint(x: unit.x - startUnit.x, y: unit.y - startUnit.y)
+                )
             }
         case nil:
             break
@@ -7631,6 +8440,12 @@ private struct WorkspaceArtboardOverlay: View {
     }
 
     private func handleDragEnded() {
+        if suppressDragUntilMouseUp {
+            suppressDragUntilMouseUp = false
+            dragStarted = false
+            dragOperation = nil
+            return
+        }
         if case .pan = dragOperation {
             model.endWorkspaceLiveEdit(commit: false)
         } else {
@@ -7638,6 +8453,123 @@ private struct WorkspaceArtboardOverlay: View {
         }
         dragStarted = false
         dragOperation = nil
+    }
+
+    private func handleMouseDown(_ event: ArtboardMouseEvent, outputRect: CGRect) {
+        guard event.clickCount == 2,
+              let workspace = model.settings.workspace else { return }
+        let world = worldPoint(view: event.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
+
+        if event.modifiers.contains(.command), event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            fitFrame(frame.id, to: .viewport)
+            return
+        }
+
+        if event.modifiers.contains(.command), event.modifiers.contains(.shift) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            fitFrame(frame.id, to: .artboard)
+            return
+        }
+
+        if event.modifiers.contains(.control), event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            setFrame(frame.id, locked: true)
+            return
+        }
+
+        if event.modifiers.contains(.control), event.modifiers.contains(.shift) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect) else { return }
+            setFrame(frame.id, locked: false)
+            return
+        }
+
+        if event.modifiers.contains(.option) {
+            guard let frame = hitFrame(at: world, workspace: workspace, outputRect: outputRect),
+                  let aspect = sourceAspectRatio(for: frame, workspace: workspace) else { return }
+            restoreAspect(
+                frameID: frame.id,
+                handle: .maxXMaxY,
+                aspect: aspect,
+                centerPivot: true,
+                keepClickedHandleFixed: false
+            )
+            return
+        }
+
+        guard event.modifiers.contains(.shift),
+              let handleHit = hitScaleHandle(at: event.location, workspace: workspace, outputRect: outputRect),
+              let aspect = sourceAspectRatio(for: handleHit.frame, workspace: workspace) else { return }
+        restoreAspect(
+            frameID: handleHit.frame.id,
+            handle: handleHit.handle,
+            aspect: aspect,
+            centerPivot: false,
+            keepClickedHandleFixed: true
+        )
+    }
+
+    private enum FrameFitTarget {
+        case viewport
+        case artboard
+    }
+
+    private func fitFrame(_ id: UUID, to target: FrameFitTarget) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }),
+                  !workspace.frames[index].locked else { return }
+            let viewport = workspace.outputViewport.frame
+            let bounds: CGRect
+            switch target {
+            case .viewport:
+                bounds = viewport
+            case .artboard:
+                bounds = viewport.insetBy(dx: -viewport.width * 0.5, dy: -viewport.height * 0.5)
+            }
+            workspace.frames[index].localBounds = CGRect(origin: .zero, size: bounds.size)
+            workspace.frames[index].transform = .translation(x: bounds.minX, y: bounds.minY)
+            workspace.frames[index].cropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+            workspace.viewCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+            if target == .artboard {
+                workspace.zoom = min(workspace.zoom, 0.7)
+            }
+        }
+    }
+
+    private func setFrame(_ id: UUID, locked: Bool) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == id }) else { return }
+            workspace.frames[index].locked = locked
+            workspace.activeFrameID = id
+            workspace.selectedFrameIDs = [id]
+        }
+    }
+
+    private func restoreAspect(
+        frameID: UUID,
+        handle: CropHandle,
+        aspect: CGFloat,
+        centerPivot: Bool,
+        keepClickedHandleFixed: Bool
+    ) {
+        suppressDragUntilMouseUp = true
+        model.mutateWorkspace { workspace in
+            guard let index = workspace.frames.firstIndex(where: { $0.id == frameID }),
+                  !workspace.frames[index].locked else { return }
+            workspace.frames[index].localBounds = aspectRestoredBounds(
+                workspace.frames[index].localBounds,
+                handle: handle,
+                aspect: aspect,
+                centerPivot: centerPivot,
+                keepClickedHandleFixed: keepClickedHandleFixed
+            )
+            workspace.activeFrameID = frameID
+            workspace.selectedFrameIDs = [frameID]
+        }
     }
 
     private func handlePan(_ value: DragGesture.Value, outputRect: CGRect, workspace: CollageWorkspace) {
@@ -7734,35 +8666,235 @@ private struct WorkspaceArtboardOverlay: View {
         }
     }
 
-    private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, centerWorld: CGPoint)? {
+    private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, handle: CropHandle)? {
         for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
             let corners = frameCorners(frame, viewport: workspace.outputViewport.frame, outputRect: outputRect)
-            if corners.contains(where: { distance($0, view) <= 12 }) {
-                return (frame, centerWorld(frame))
+            let hits = cropHandlePoints(corners)
+                .map { item in (handle: item.handle, distance: distance(item.point, view)) }
+                .filter { $0.distance <= 12 }
+                .sorted { $0.distance < $1.distance }
+            if let hit = hits.first {
+                return (frame, hit.handle)
             }
         }
         return nil
     }
 
-    private func centerWorld(_ frame: WorkspaceFrame) -> CGPoint {
-        CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
-            .applying(frame.transform.cgAffineTransform)
+    private func hitCropHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, handle: CropHandle)? {
+        for frame in workspace.frames.reversed() where workspace.selectedFrameIDs.contains(frame.id) && frame.visible && !frame.locked {
+            let points = cropViewCorners(
+                frame,
+                viewport: workspace.outputViewport.frame,
+                outputRect: outputRect,
+                handlesFollowRenderedContent: true
+            )
+            let hits = cropHandlePoints(points)
+                .map { item in (handle: item.handle, distance: distance(item.point, view)) }
+                .filter { $0.distance <= 12 }
+                .sorted { $0.distance < $1.distance }
+            if let hit = hits.first {
+                return (frame, hit.handle)
+            }
+        }
+        return nil
     }
 
-    private func scaleFrame(
-        _ frame: inout WorkspaceFrame,
-        from transform: WorkspaceAffineTransform,
-        around centerWorld: CGPoint,
-        scale: CGFloat
-    ) {
-        let centerLocal = CGPoint(x: frame.localBounds.midX, y: frame.localBounds.midY)
-        let factor = Double(scale)
-        frame.transform.a = transform.a * factor
-        frame.transform.b = transform.b * factor
-        frame.transform.c = transform.c * factor
-        frame.transform.d = transform.d * factor
-        frame.transform.tx = Double(centerWorld.x) - (Double(centerLocal.x) * frame.transform.a + Double(centerLocal.y) * frame.transform.c)
-        frame.transform.ty = Double(centerWorld.y) - (Double(centerLocal.x) * frame.transform.b + Double(centerLocal.y) * frame.transform.d)
+    private func resizedBounds(
+        _ start: CGRect,
+        handle: CropHandle,
+        localPoint: CGPoint,
+        centerPivot: Bool,
+        preserveAspect: Bool
+    ) -> CGRect {
+        let minimumSize: CGFloat = 8
+        var minX = start.minX
+        var maxX = start.maxX
+        var minY = start.minY
+        var maxY = start.maxY
+
+        if centerPivot {
+            let center = CGPoint(x: start.midX, y: start.midY)
+            if handle.movesX {
+                let halfWidth = max(minimumSize * 0.5, abs(localPoint.x - center.x))
+                minX = center.x - halfWidth
+                maxX = center.x + halfWidth
+            }
+            if handle.movesY {
+                let halfHeight = max(minimumSize * 0.5, abs(localPoint.y - center.y))
+                minY = center.y - halfHeight
+                maxY = center.y + halfHeight
+            }
+        } else {
+            switch handle {
+            case .minX, .minXMinY, .minXMaxY:
+                minX = min(localPoint.x, maxX - minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .maxX, .maxXMinY, .maxXMaxY:
+                maxX = max(localPoint.x, minX + minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .minY, .minXMinY, .maxXMinY:
+                minY = min(localPoint.y, maxY - minimumSize)
+            default:
+                break
+            }
+            switch handle {
+            case .maxY, .maxXMaxY, .minXMaxY:
+                maxY = max(localPoint.y, minY + minimumSize)
+            default:
+                break
+            }
+        }
+
+        if preserveAspect, start.width > 0, start.height > 0 {
+            let aspect = start.width / start.height
+            var width = max(minimumSize, maxX - minX)
+            var height = max(minimumSize, maxY - minY)
+            if handle.movesX && handle.movesY {
+                if width / height > aspect {
+                    height = width / aspect
+                } else {
+                    width = height * aspect
+                }
+            } else if handle.movesX {
+                height = width / aspect
+            } else if handle.movesY {
+                width = height * aspect
+            }
+            (minX, maxX) = adjustedAxis(
+                originalMin: start.minX,
+                originalMax: start.maxX,
+                currentMin: minX,
+                currentMax: maxX,
+                length: width,
+                movesMin: handle.movesMinX,
+                movesMax: handle.movesMaxX,
+                centerPivot: centerPivot
+            )
+            (minY, maxY) = adjustedAxis(
+                originalMin: start.minY,
+                originalMax: start.maxY,
+                currentMin: minY,
+                currentMax: maxY,
+                length: height,
+                movesMin: handle.movesMinY,
+                movesMax: handle.movesMaxY,
+                centerPivot: centerPivot
+            )
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func adjustedAxis(
+        originalMin: CGFloat,
+        originalMax: CGFloat,
+        currentMin: CGFloat,
+        currentMax: CGFloat,
+        length: CGFloat,
+        movesMin: Bool,
+        movesMax: Bool,
+        centerPivot: Bool,
+        anchorMovedSide: Bool = false
+    ) -> (CGFloat, CGFloat) {
+        if centerPivot || (movesMin && movesMax) || (!movesMin && !movesMax) {
+            let center = (currentMin + currentMax) * 0.5
+            return (center - length * 0.5, center + length * 0.5)
+        }
+        if anchorMovedSide {
+            if movesMin {
+                return (originalMin, originalMin + length)
+            }
+            if movesMax {
+                return (originalMax - length, originalMax)
+            }
+        }
+        if movesMin {
+            return (originalMax - length, originalMax)
+        }
+        if movesMax {
+            return (originalMin, originalMin + length)
+        }
+        let center = (originalMin + originalMax) * 0.5
+        return (center - length * 0.5, center + length * 0.5)
+    }
+
+    private func aspectRestoredBounds(
+        _ bounds: CGRect,
+        handle: CropHandle,
+        aspect: CGFloat,
+        centerPivot: Bool,
+        keepClickedHandleFixed: Bool
+    ) -> CGRect {
+        guard bounds.width > 0, bounds.height > 0, aspect > 0 else { return bounds }
+        let currentAspect = bounds.width / bounds.height
+        let targetWidth: CGFloat
+        let targetHeight: CGFloat
+        if currentAspect > aspect {
+            targetWidth = bounds.height * aspect
+            targetHeight = bounds.height
+        } else {
+            targetWidth = bounds.width
+            targetHeight = bounds.width / aspect
+        }
+
+        let (minX, maxX) = adjustedAxis(
+            originalMin: bounds.minX,
+            originalMax: bounds.maxX,
+            currentMin: bounds.minX,
+            currentMax: bounds.maxX,
+            length: max(8, targetWidth),
+            movesMin: handle.movesMinX,
+            movesMax: handle.movesMaxX,
+            centerPivot: centerPivot,
+            anchorMovedSide: keepClickedHandleFixed
+        )
+        let (minY, maxY) = adjustedAxis(
+            originalMin: bounds.minY,
+            originalMax: bounds.maxY,
+            currentMin: bounds.minY,
+            currentMax: bounds.maxY,
+            length: max(8, targetHeight),
+            movesMin: handle.movesMinY,
+            movesMax: handle.movesMaxY,
+            centerPivot: centerPivot,
+            anchorMovedSide: keepClickedHandleFixed
+        )
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func sourceAspectRatio(for frame: WorkspaceFrame, workspace: CollageWorkspace) -> CGFloat? {
+        var aspect: CGFloat?
+        if let graph = model.settings.layerGraph,
+           case .layer(let layerID) = frame.material,
+           let layer = graph.layers.first(where: { $0.id == layerID }),
+           let node = graph.node(layer.node) {
+            switch node.kind {
+            case .movie:
+                aspect = aspectRatio(model.sourcePreviews.movieSize)
+            case .video:
+                aspect = aspectRatio(model.sourcePreviews.cameraSize)
+            default:
+                break
+            }
+        }
+        if aspect == nil {
+            aspect = aspectRatio(workspace.outputViewport.frame.size)
+        }
+        guard let baseAspect = aspect else { return nil }
+        let crop = WorkspaceFrame.clampedCropRect(frame.cropRect)
+        guard crop.width > 0, crop.height > 0 else { return baseAspect }
+        return baseAspect * crop.width / crop.height
+    }
+
+    private func aspectRatio(_ size: CGSize) -> CGFloat? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        return size.width / size.height
     }
 
     private func hitFrame(
@@ -7804,6 +8936,96 @@ private struct WorkspaceArtboardOverlay: View {
             .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
     }
 
+    private func cropViewCorners(
+        _ frame: WorkspaceFrame,
+        viewport: CGRect,
+        outputRect: CGRect,
+        handlesFollowRenderedContent: Bool = false
+    ) -> [CGPoint] {
+        if handlesFollowRenderedContent, frame.contentFit != .none {
+            return frameCorners(frame, viewport: viewport, outputRect: outputRect)
+        }
+        let crop = WorkspaceFrame.clampedCropRect(frame.cropRect).standardized
+        let bounds = frame.localBounds
+        let cropSize = CGSize(width: crop.width * bounds.width, height: crop.height * bounds.height)
+        let local: CGRect
+        if handlesFollowRenderedContent, frame.contentFit == .none {
+            local = CGRect(
+                x: bounds.minX,
+                y: bounds.maxY - cropSize.height,
+                width: cropSize.width,
+                height: cropSize.height
+            )
+        } else {
+            local = CGRect(
+                x: bounds.minX + crop.minX * bounds.width,
+                y: bounds.minY + crop.minY * bounds.height,
+                width: cropSize.width,
+                height: cropSize.height
+            )
+        }
+        return rectCorners(local)
+            .map { $0.applying(frame.transform.cgAffineTransform) }
+            .map { viewPoint(world: $0, viewport: viewport, outputRect: outputRect) }
+    }
+
+    private func cropHandlePoints(_ corners: [CGPoint]) -> [(handle: CropHandle, point: CGPoint)] {
+        guard corners.count == 4 else { return [] }
+        let top = midpoint(corners[0], corners[1])
+        let right = midpoint(corners[1], corners[2])
+        let bottom = midpoint(corners[2], corners[3])
+        let left = midpoint(corners[3], corners[0])
+        return [
+            (.minXMinY, corners[0]),
+            (.maxXMinY, corners[1]),
+            (.maxXMaxY, corners[2]),
+            (.minXMaxY, corners[3]),
+            (.minY, top),
+            (.maxX, right),
+            (.maxY, bottom),
+            (.minX, left)
+        ]
+    }
+
+    private func cropUnitPoint(world: CGPoint, frame: WorkspaceFrame) -> CGPoint? {
+        let inverse = frame.transform.cgAffineTransform.inverted()
+        let local = world.applying(inverse)
+        let bounds = frame.localBounds
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        return CGPoint(
+            x: max(0, min(1, (local.x - bounds.minX) / bounds.width)),
+            y: max(0, min(1, (local.y - bounds.minY) / bounds.height))
+        )
+    }
+
+    private func updatedCrop(_ startCrop: CGRect, handle: CropHandle, by delta: CGPoint) -> CGRect {
+        var minX = startCrop.minX
+        var maxX = startCrop.maxX
+        var minY = startCrop.minY
+        var maxY = startCrop.maxY
+        switch handle {
+        case .minX:
+            minX += delta.x
+        case .maxX:
+            maxX += delta.x
+        case .minY:
+            minY += delta.y
+        case .maxY:
+            maxY += delta.y
+        case .minXMinY:
+            minX += delta.x; minY += delta.y
+        case .maxXMinY:
+            maxX += delta.x; minY += delta.y
+        case .maxXMaxY:
+            maxX += delta.x; maxY += delta.y
+        case .minXMaxY:
+            minX += delta.x; maxY += delta.y
+        }
+        return WorkspaceFrame.clampedCropRect(
+            CGRect(x: min(minX, maxX), y: min(minY, maxY), width: abs(maxX - minX), height: abs(maxY - minY))
+        )
+    }
+
     private func rectCorners(_ rect: CGRect) -> [CGPoint] {
         [
             CGPoint(x: rect.minX, y: rect.minY),
@@ -7815,6 +9037,10 @@ private struct WorkspaceArtboardOverlay: View {
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
         hypot(a.x - b.x, a.y - b.y)
+    }
+
+    private func midpoint(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+        CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
     }
 
     private func viewPoint(world: CGPoint, viewport: CGRect, outputRect: CGRect) -> CGPoint {
@@ -8377,6 +9603,75 @@ private struct LivePreviewImage: View {
         } else {
             ProgressView()
                 .controlSize(.large)
+        }
+    }
+}
+
+private struct SourcePreviewImage: View {
+    @ObservedObject var previews: SourcePreviewReadouts
+    let source: SketchCamViewModel.FrameSource
+    let active: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(0.22))
+            if active, let image {
+                Image(image, scale: 1, label: Text("\(source.title) source preview"))
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text(sizeLabel)
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.78))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.42), in: Capsule())
+                    }
+                    .padding(5)
+                }
+            } else {
+                Text(placeholder)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(height: 118)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var image: CGImage? {
+        switch source {
+        case .camera: previews.cameraImage
+        case .movie: previews.movieImage
+        }
+    }
+
+    private var sourceSize: CGSize {
+        switch source {
+        case .camera: previews.cameraSize
+        case .movie: previews.movieSize
+        }
+    }
+
+    private var sizeLabel: String {
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return "raw" }
+        return "\(Int(sourceSize.width)) x \(Int(sourceSize.height))"
+    }
+
+    private var placeholder: String {
+        switch source {
+        case .camera: active ? "Waiting for camera" : "Camera preview unavailable"
+        case .movie: active ? "Waiting for movie" : "No movie selected"
         }
     }
 }

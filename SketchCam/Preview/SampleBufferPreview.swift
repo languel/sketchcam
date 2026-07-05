@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import CoreMedia
 import CoreVideo
 import SketchCamShared
@@ -14,6 +15,8 @@ final class SampleBufferDisplayController {
 
     init() {
         displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = NSColor.clear.cgColor
+        displayLayer.isOpaque = false
     }
 
     /// Enqueue a frame for display. Must be called on the main thread (CALayer).
@@ -51,6 +54,8 @@ struct SampleBufferDisplayView: NSViewRepresentable {
         let view = LayerHostingView()
         view.wantsLayer = true
         view.layer?.masksToBounds = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        view.layer?.isOpaque = false
         view.hostedLayer = controller.displayLayer
         return view
     }
@@ -65,6 +70,10 @@ private final class LayerHostingView: NSView {
             guard let hostedLayer else { return }
             layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
             layer?.masksToBounds = true
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.isOpaque = false
+            hostedLayer.backgroundColor = NSColor.clear.cgColor
+            hostedLayer.isOpaque = false
             hostedLayer.masksToBounds = true
             CATransaction.begin()
             CATransaction.setDisableActions(true)
