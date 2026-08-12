@@ -170,6 +170,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case camera = "Camera"
     case movie = "Movie"
     case marks = "Marks"
+    case inputMap = "Input Map"
     case yarn = "Yarn"
     case wrap = "Wrap"
     case lineWalk = "Line walk"
@@ -249,6 +250,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .movie: "film"
         case .layers: "square.3.layers.3d"
         case .marks: "point.3.connected.trianglepath.dotted"
+        case .inputMap: "hand.point.up.left"
         case .yarn: "scribble.variable"
         case .wrap: "figure.stand"
         case .lineWalk: "lasso"
@@ -1762,6 +1764,8 @@ struct ContentView: View {
             return CGSize(width: 430, height: 280)
         case .ink:
             return CGSize(width: 430, height: 560)
+        case .inputMap:
+            return CGSize(width: 430, height: 620)
         default:
             return CGSize(width: 360, height: 320)
         }
@@ -2553,6 +2557,7 @@ struct ContentView: View {
         case .movie: movieTab
         case .layers: layersTab
         case .marks: marksTab
+        case .inputMap: SystemInputMappingPanel(model: model)
         case .yarn: yarnTab
         case .wrap: wrapTab
         case .lineWalk: lineWalkTab

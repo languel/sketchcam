@@ -89,6 +89,7 @@ final class SketchCamViewModel: ObservableObject {
     let live = LiveReadouts()
     let sourcePreviews = SourcePreviewReadouts()
     let exporter = OutputStreamExporter()
+    let systemPointer = SystemPointerController()
     @Published var cameraPermissionState = CameraPermissionManager.state {
         didSet { store.permission = cameraPermissionState }
     }
@@ -112,6 +113,9 @@ final class SketchCamViewModel: ObservableObject {
     /// published pixel buffer as the main preview, never a second render.
     let secondaryOutputDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
+    /// Independent hand-only tracker for system pointer control. This keeps
+    /// arming an input map from changing the Marks/Drawing landmark source.
+    private let systemPointerLandmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
     private let inkCompositor = InkLayerCompositor()
     private let acrylicCompositor = AcrylicLayerCompositor()
@@ -825,6 +829,11 @@ final class SketchCamViewModel: ObservableObject {
                 )
                 let matte = (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
+                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+                let drawingInput = self.drawingAnalysisBinding(graph: graph)
+                // Landmark analysis remains shared infrastructure: routing the
+                // Drawing producer to Mouse must not starve control fields or
+                // other future landmark consumers.
                 let landmarkDrawingWanted = settings.landmarks.enabled
                 let detectionWanted = landmarkDrawingWanted
                 let drawingDetection: LandmarkDetection? = {
@@ -856,11 +865,66 @@ final class SketchCamViewModel: ObservableObject {
                     }
                     return detection
                 }()
+                let pointerArmed = self.systemPointer.isRuntimeArmed
+                var pointerSettings = settings
+                pointerSettings.landmarks.enabled = pointerArmed
+                pointerSettings.landmarks.sourceMode = .camera
+                pointerSettings.landmarks.trackJaw = false
+                pointerSettings.landmarks.trackNose = false
+                pointerSettings.landmarks.trackMouth = false
+                pointerSettings.landmarks.trackLeftBrow = false
+                pointerSettings.landmarks.trackRightBrow = false
+                pointerSettings.landmarks.trackLeftEye = false
+                pointerSettings.landmarks.trackRightEye = false
+                pointerSettings.landmarks.trackHead = false
+                pointerSettings.landmarks.trackTorso = false
+                pointerSettings.landmarks.trackLeftArm = false
+                pointerSettings.landmarks.trackRightArm = false
+                pointerSettings.landmarks.trackLeftLeg = false
+                pointerSettings.landmarks.trackRightLeg = false
+                pointerSettings.landmarks.trackHands = true
+                pointerSettings.landmarks.trackContour = false
+                pointerSettings.landmarks.trackBodyHull = false
+                let pointerDetection = self.systemPointerLandmarkService.currentDetection(
+                    pixelBuffer: originalPixelBuffer,
+                    settings: pointerSettings,
+                    frameIndex: frameIndex
+                )
+                self.systemPointer.update(
+                    detection: pointerDetection,
+                    mirrored: settings.mirror
+                )
                 let overlay: CIImage? = {
                     guard settings.landmarks.enabled else { return nil }
+                    let routedDetection: LandmarkDetection?
+                    var routedSettings = settings
+                    switch drawingInput {
+                    case .none, .source(.landmarks):
+                        routedDetection = drawingDetection
+                    case .source(.mouse):
+                        let snapshot = self.canvasActions.pathSnapshot()
+                        let liveSnapshot = self.inkLiveStroke.pathSnapshot()
+                        let livePath = liveSnapshot.points.isEmpty
+                            ? []
+                            : [InkEditorPath(points: liveSnapshot.points)]
+                        routedDetection = RoutedPathSignalResolver.mouseDetection(
+                            paths: snapshot.paths + livePath,
+                            revision: snapshot.revision &* 0x100000001b3 ^ liveSnapshot.revision,
+                            sourceSize: outputFormat.size
+                        )
+                        // Mouse paths are authored in canvas space, independent
+                        // of camera mirroring.
+                        routedSettings.mirror = false
+                    case .source:
+                        routedDetection = nil
+                    case .node:
+                        // No path-output node kinds exist yet. Validation keeps
+                        // this unreachable until one is introduced.
+                        routedDetection = nil
+                    }
                     return self.overlayCompositor.overlay(
-                        detection: drawingDetection,
-                        settings: settings,
+                        detection: routedDetection,
+                        settings: routedSettings,
                         outputSize: outputFormat.size
                     )
                 }()
@@ -868,7 +932,6 @@ final class SketchCamViewModel: ObservableObject {
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
                 // up buried in "Frame total".
-                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 let liveInk = self.inkLiveStroke.consume()
                 let inkEntries = self.inkLayerEntries(graph: graph)
                 let activeInkFrameID = self.activeInkFrameID(graph: graph, settings: settings)
@@ -1011,6 +1074,24 @@ final class SketchCamViewModel: ObservableObject {
             guard let node = graph.node(layer.node), node.kind.family == "ink" else { return nil }
             return (layer, node)
         }
+    }
+
+    /// The current merged Drawing producer has one path input. `.none` keeps
+    /// its built-in landmark default. This becomes a per-node resolver when
+    /// drawing is split into independent producers.
+    private func drawingAnalysisBinding(graph: LayerGraph) -> PortBinding {
+        for layer in graph.layers.reversed() where layer.visible {
+            guard let node = graph.node(layer.node) else { continue }
+            switch node.kind {
+            case .overlay, .marks, .drawing:
+                guard let index = node.kind.ports.firstIndex(where: { $0.name == "analysis" }),
+                      node.inputs.indices.contains(index) else { return .none }
+                return node.inputs[index]
+            default:
+                continue
+            }
+        }
+        return .none
     }
 
     private func activeInkFrameID(graph: LayerGraph, settings: ProcessingSettings) -> UUID? {

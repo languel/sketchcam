@@ -45,6 +45,9 @@ done
 shopt -u nullglob
 "$LSREGISTER" -f -R -trusted "$INSTALLED_APP"
 
+echo "Installed $INSTALLED_APP"
+echo "Note: rebuilding changes the development code signature. If Input Map was already approved, toggle SketchCam off/on in Privacy & Security > Accessibility after this build."
+
 open_app() {
   /usr/bin/open -n "$INSTALLED_APP"
 }
