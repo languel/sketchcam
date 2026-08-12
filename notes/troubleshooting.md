@@ -77,6 +77,32 @@ Check:
 - Output preset in SketchCam.
 - Whether another app is already holding exclusive camera access.
 
+## Input Map Will Not Arm After Accessibility Approval
+
+Input Map requires the installed `/Applications/SketchCam.app` to be approved in
+**System Settings → Privacy & Security → Accessibility**. Development rebuilds
+change the app's code hash. macOS can leave the old SketchCam row visibly enabled
+while rejecting the newly built executable; the TCC log then reports `Failed to
+match existing code requirement` for `kTCCServiceAccessibility`.
+
+Approve only after the final rebuild:
+
+1. Build and install with `./script/build_and_run.sh`.
+2. Toggle SketchCam off/on in Accessibility.
+3. If Input Map still says `Accessibility unavailable`, select SketchCam, remove
+   it with `−`, add `/Applications/SketchCam.app` again with `+`, and enable it.
+4. Quit and reopen SketchCam. Input Map should say `Ready to arm`.
+
+The scoped Terminal reset is an alternative to steps 2–3:
+
+```sh
+tccutil reset Accessibility io.github.languel.sketchcam
+```
+
+Then reopen SketchCam, click **Request access**, approve the current installed
+build, reopen once more, and Arm. `Request access` opens the Accessibility pane
+when macOS suppresses a repeated prompt for a stale entry.
+
 ## Remove The Extension
 
 Deactivate from SketchCam, then remove `/Applications/SketchCam.app`. macOS should also remove the bundled system extension. If it remains pending, reboot and check `systemextensionsctl list` again.

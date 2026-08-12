@@ -285,9 +285,15 @@ Latest since the first checkpoint:
 1. **Live G4 smoke pass:** run the app with both Camera and Movie layers visible, load a
    clip, switch the processing/output clock both ways, and confirm the two layers remain
    independent on screen. Also smoke `ink.texture ← Web/Paper/Camera`.
-2. **Routing follow-up:** path producer inputs are still mostly declarative. Drawing still
-   uses the VM's landmark pipeline; a future pass should make drawing/brush producers
-   consume routed path inputs for landmarks/mouse/OSC.
+2. **Routing follow-up (in progress):** the merged Drawing producer's `analysis` port now
+   resolves Landmarks vs the shared Mouse/canvas path stream at runtime. The first
+   reverse/system-output slice is also in place: Input Map selects a semantic left/right
+   hand landmark on a homunculus-style map, maps it to the macOS pointer, and maps
+   thumb-index pinch to primary-button down/up with hysteresis. It uses an independent
+   hand-only tracker, requires an explicit non-persistent Arm action, and is gated by
+   Accessibility trust. Remaining: split drawing into independent producers, generalize
+   the single pointer mapping into a multi-route event graph, add path-output nodes, and
+   route OSC/multitouch.
 3. **Blend modes follow-up:** HSL-family modes (Hue/Saturation/Color/Luminosity) are
    still not exposed in the UI; add full HSL math before surfacing them.
 4. **GPU-native producers:** overlay/ink/web are still CoreImage images rasterized into

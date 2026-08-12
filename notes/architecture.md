@@ -67,6 +67,34 @@ The inkwash layer deliberately keeps feedback state inside Metal textures. The C
 
 The editor uses normalized top-left canvas coordinates. Metal replay uses the same coordinate system so the vector guide path and the simulated shader stroke stay aligned on the preview.
 
+## Path And System-Event Routing
+
+The current Drawing producer has one typed `analysis` path input. Its runtime
+resolver preserves Landmarks as the default and can instead adapt the shared
+Mouse/canvas stroke log into `LandmarkDetection`: each authored stroke remains a
+separate connected group, and top-left canvas Y is flipped into Vision's
+bottom-left normalized coordinates. The active stroke snapshot is non-consuming,
+so routing it to Drawing does not starve the Ink engine.
+
+Input Map is the first route in the opposite direction—from analyzed camera
+features to an external event sink:
+
+```text
+camera frame
+  -> independent Vision hand tracker
+  -> semantic MediaPipe-style feature (L0...L20 / R0...R20)
+  -> pointer mapping + smoothing + pinch hysteresis
+  -> CGEvent mouse move/down/drag/up
+  -> macOS session
+```
+
+The pure mapping engine owns coordinate conversion and button lifecycle. A narrow
+AppKit/ApplicationServices controller owns Accessibility trust and Quartz event
+posting. SwiftUI owns the Codable mapping editor. The independent hand-only
+tracker prevents arming Input Map from changing the Marks/Drawing detector's
+source or enabled regions. See `notes/input-mapping.md` for current behavior,
+safety rules, and limitations.
+
 Immediate ink is also represented by a private timestamped action log even
 when it is not exposed as an editable path. A bounded GPU checkpoint ring stores
 the complete physical simulation at action boundaries, allowing exact undo and
@@ -87,4 +115,6 @@ The stable long-term shape is:
 frame input -> processing/runtime -> semantic state -> rendered frame -> platform outputs
 ```
 
-Phase 2 can add inference, OSC/WebSocket state output, zones, and sketch hosting without moving virtual-camera mechanics into the product layer.
+Future routing can generalize the single Input Map into multiple feature → event
+bindings and add OSC/WebSocket, multitouch, zones, path-output nodes, and sketch
+hosting without moving virtual-camera mechanics into the product layer.

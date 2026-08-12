@@ -88,6 +88,41 @@ struct LandmarkDetection {
 
 import SketchCamCore
 
+enum RoutedPathSignalResolver {
+    /// Convert the shared canvas/mouse stream into the same normalized path
+    /// carrier used by landmark-driven drawing algorithms. Canvas points use a
+    /// top-left origin; landmark points use a bottom-left origin, hence the Y
+    /// flip. Each authored stroke remains a separate connected group.
+    static func mouseDetection(
+        paths: [InkEditorPath],
+        revision: UInt64,
+        sourceSize: CGSize
+    ) -> LandmarkDetection? {
+        let groups = paths.compactMap { path -> LandmarkGroup? in
+            guard !path.points.isEmpty else { return nil }
+            let points = path.points.enumerated().map { index, point in
+                LandmarkPoint(
+                    point: CGPoint(x: point.x, y: 1 - point.y),
+                    confidence: 1,
+                    label: "m\(index)"
+                )
+            }
+            let edges = points.count > 1
+                ? (0..<(points.count - 1)).map { ($0, $0 + 1) }
+                : []
+            return LandmarkGroup(region: .bodyHull, points: points, edges: edges)
+        }
+        guard !groups.isEmpty else { return nil }
+        // Keep mouse revisions in a separate cache-key namespace from Vision's
+        // monotonically increasing detection ids.
+        return LandmarkDetection(
+            groups: groups,
+            detectionID: revision | (UInt64(1) << 63),
+            sourceSize: sourceSize
+        )
+    }
+}
+
 extension LandmarkSettings {
     func style(for region: LandmarkRegion) -> ElementStyle {
         switch region {

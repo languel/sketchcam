@@ -42,6 +42,8 @@ final class InkLiveStroke {
     private var activeID: UUID?
     private var pending: [InkLiveStrokePoint] = []
     private var endedID: UUID?
+    private var activePath: [CGPoint] = []
+    private var pathRevision: UInt64 = 0
 
     /// Called per mouse move while drawing.
     func update(_ s: InkLiveStrokeSample) {
@@ -49,9 +51,12 @@ final class InkLiveStroke {
         if activeID != s.id {
             activeID = s.id
             pending.removeAll(keepingCapacity: true)
+            activePath.removeAll(keepingCapacity: true)
         }
         latest = s
         pending.append(InkLiveStrokePoint(point: s.point, time: s.time))
+        activePath.append(s.point)
+        pathRevision &+= 1
         lock.unlock()
     }
 
@@ -62,6 +67,8 @@ final class InkLiveStroke {
         activeID = nil
         latest = nil
         pending.removeAll(keepingCapacity: true)
+        activePath.removeAll(keepingCapacity: true)
+        pathRevision &+= 1
         lock.unlock()
     }
 
@@ -72,7 +79,14 @@ final class InkLiveStroke {
         latest = nil
         pending.removeAll(keepingCapacity: true)
         endedID = nil
+        activePath.removeAll(keepingCapacity: true)
+        pathRevision &+= 1
         lock.unlock()
+    }
+
+    /// Non-consuming view of the active mouse path for routed drawing nodes.
+    func pathSnapshot() -> (points: [CGPoint], revision: UInt64) {
+        lock.withLock { (activePath, pathRevision) }
     }
 
     /// Engine reads the active sample (params), all points captured this frame
