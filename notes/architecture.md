@@ -59,6 +59,14 @@ morphs continuously instead of changing topology as nearest-neighbour choices
 shift. Its Fluid, Cubist, and Ornate styles deform the route before the same
 shared ribbon tessellation stage.
 
+When GPU drawing is enabled, ribbons remain on the Metal path even if raw Dots,
+Stick, or IDs are visible. Marks render into their cached CGContext layer and
+the Metal art layer composites above it, preserving the established order while
+avoiding CPU fills for long self-crossing portrait routes. Predictive redraws
+reuse a geometrically growing Metal vertex buffer; Portrait also ignores dense
+Contour/Hull fallback geometry when an articulated body route is already
+available and caps pathological route inputs without changing normal portraits.
+
 The Ink tab is a separate full-canvas drawing layer. It stores editable vector paths in `ProcessingSettings`, then replays them through a native Metal feedback simulation:
 
 ```text

@@ -22,6 +22,10 @@ final class MetalLineRenderer {
     // MSAA target cached per output size.
     private var msaaTexture: MTLTexture?
     private var msaaSize = (width: 0, height: 0)
+    // Predictive landmark tracking redraws at display cadence. Reuse a shared
+    // vertex buffer instead of allocating a new MTLBuffer for every frame.
+    private var vertexBuffer: MTLBuffer?
+    private var vertexBufferCapacity = 0
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -81,7 +85,7 @@ final class MetalLineRenderer {
 
         let verts = StrokeTessellator.tessellate(strokes, ribbon: ribbon)
         let vertexCount = verts.count / StrokeTessellator.floatsPerVertex
-        if vertexCount > 0, let vertexBuffer = device.makeBuffer(bytes: verts, length: verts.count * MemoryLayout<Float>.stride, options: .storageModeShared) {
+        if vertexCount > 0, let vertexBuffer = uploadVertices(verts) {
             var viewport = SIMD2<Float>(Float(width), Float(height))
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
@@ -96,6 +100,25 @@ final class MetalLineRenderer {
         // the cache from pinning IOSurfaces over a long session).
         CVMetalTextureCacheFlush(textureCache, 0)
         return true
+    }
+
+    private func uploadVertices(_ vertices: [Float]) -> MTLBuffer? {
+        let byteCount = vertices.count * MemoryLayout<Float>.stride
+        guard byteCount > 0 else { return nil }
+        if vertexBuffer == nil || vertexBufferCapacity < byteCount {
+            // Geometric growth avoids reallocating when an ornate route gains a
+            // few points as tracked features appear.
+            var capacity = max(64 * 1024, vertexBufferCapacity)
+            while capacity < byteCount { capacity *= 2 }
+            vertexBuffer = device.makeBuffer(length: capacity, options: .storageModeShared)
+            vertexBufferCapacity = vertexBuffer == nil ? 0 : capacity
+        }
+        guard let vertexBuffer else { return nil }
+        vertices.withUnsafeBytes { bytes in
+            guard let source = bytes.baseAddress else { return }
+            vertexBuffer.contents().copyMemory(from: source, byteCount: byteCount)
+        }
+        return vertexBuffer
     }
 
     // MARK: - Textures

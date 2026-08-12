@@ -33,7 +33,23 @@ struct PortraitDrawing: DrawingAlgorithm {
     /// Exposed internally for geometry tests. The first route is the face, the
     /// second is the body; either may be absent when its markers are unavailable.
     func semanticRoutes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [[CGPoint]] {
-        let components = groups.flatMap(PortraitPathBuilder.components)
+        // A segmentation contour can contain hundreds of points. It is only a
+        // fallback silhouette when no articulated body route exists, so do not
+        // build its connectivity graph just to discard it below. Prefer Hull
+        // over Contour to match the established body-order fallback.
+        let hasArticulatedBody = groups.contains {
+            PortraitPathBuilder.isArticulatedBodyRegion($0.region) && $0.points.count >= 2
+        }
+        let hasHull = groups.contains { $0.region == .bodyHull && $0.points.count >= 2 }
+        let routeGroups = groups.filter { group in
+            switch group.region {
+            case .bodyHull: return !hasArticulatedBody
+            case .contour: return !hasArticulatedBody && !hasHull
+            default: return true
+            }
+        }
+        let components = routeGroups.flatMap(PortraitPathBuilder.components)
+        let componentsByRegion = Dictionary(grouping: components, by: \.region)
         var routes: [[CGPoint]] = []
 
         let faceOrder: [LandmarkRegion] = [
@@ -41,7 +57,7 @@ struct PortraitDrawing: DrawingAlgorithm {
         ]
         var faceFeatures: [PortraitPathBuilder.Component] = []
         for region in faceOrder {
-            let candidates = components.filter { $0.region == region }.sorted { $0.points.count > $1.points.count }
+            let candidates = (componentsByRegion[region] ?? []).sorted { $0.points.count > $1.points.count }
             if region == .mouth {
                 faceFeatures.append(contentsOf: candidates.prefix(2))
             } else if let first = candidates.first {
@@ -63,7 +79,7 @@ struct PortraitDrawing: DrawingAlgorithm {
         ]
         var bodyFeatures: [PortraitPathBuilder.Component] = []
         for region in bodyOrder {
-            let candidates = components.filter { $0.region == region }.sorted { $0.points.count > $1.points.count }
+            let candidates = (componentsByRegion[region] ?? []).sorted { $0.points.count > $1.points.count }
             // A silhouette is an alternative body outline, not another pass
             // over an already complete skeleton.
             if region == .bodyHull || region == .contour {
@@ -93,14 +109,17 @@ struct PortraitDrawing: DrawingAlgorithm {
     ) -> [CGPoint]? {
         let usable = features.filter { $0.points.count >= 2 }
         guard !usable.isEmpty else { return nil }
-        let allPoints = usable.flatMap(\.points)
-        let bounds = allPoints.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+        let bounds = usable.reduce(CGRect.null) { partial, feature in
+            feature.points.reduce(partial) { $0.union(CGRect(origin: $1, size: .zero)) }
+        }
         let scale = max(8, max(bounds.width, bounds.height))
         var result: [CGPoint] = []
+        result.reserveCapacity(usable.reduce(0) { $0 + $1.points.count * 2 })
 
         for (index, feature) in usable.enumerated() {
+            let sourcePoints = PortraitPathBuilder.uniformlySample(feature.points, maximumCount: 160)
             let points = PortraitPathBuilder.stylize(
-                feature.points,
+                sourcePoints,
                 closed: feature.closed,
                 style: style,
                 follow: follow,
@@ -123,8 +142,13 @@ struct PortraitDrawing: DrawingAlgorithm {
         }
 
         guard result.count >= 2 else { return nil }
+        // Predictive tracking can rebuild the route at display cadence. Bound
+        // pathological contour/multi-person inputs while leaving ordinary
+        // face/body routes untouched. Uniform sampling preserves the semantic
+        // itinerary, endpoints, and incoming motion.
+        let bounded = PortraitPathBuilder.uniformlySample(result, maximumCount: 320)
         let fit: CurveFit = style == .cubist ? .polyline : .hobby
-        return DrawingSupport.curvePoints(result, fit: fit, samplesPerSegment: style == .ornate ? 5 : 3)
+        return DrawingSupport.curvePoints(bounded, fit: fit, samplesPerSegment: style == .ornate ? 4 : 3)
     }
 }
 
@@ -133,6 +157,13 @@ enum PortraitPathBuilder {
         var region: LandmarkRegion
         var points: [CGPoint]
         var closed: Bool
+    }
+
+    static func isArticulatedBodyRegion(_ region: LandmarkRegion) -> Bool {
+        switch region {
+        case .torso, .leftArm, .rightArm, .leftLeg, .rightLeg, .hands: return true
+        default: return false
+        }
     }
 
     /// Split compound landmark groups (outer/inner lips, eye/pupil, hands) into
@@ -271,6 +302,14 @@ enum PortraitPathBuilder {
                 CGPoint(x: midpoint.x - normal.x * amplitude * 0.8, y: midpoint.y - normal.y * amplitude * 0.8),
                 CGPoint(x: midpoint.x + normal.x * amplitude * 0.35, y: midpoint.y + normal.y * amplitude * 0.35)
             ]
+        }
+    }
+
+    static func uniformlySample(_ points: [CGPoint], maximumCount: Int) -> [CGPoint] {
+        guard maximumCount >= 2, points.count > maximumCount else { return points }
+        let last = points.count - 1
+        return (0..<maximumCount).map { index in
+            points[Int((Double(index) * Double(last) / Double(maximumCount - 1)).rounded())]
         }
     }
 

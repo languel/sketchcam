@@ -45,7 +45,11 @@ public enum StrokeTessellator {
     public static func tessellate(_ strokes: [Stroke], ribbon: Bool = true) -> [Float] {
         var out: [Float] = []
         let pointCount = strokes.reduce(0) { $0 + $1.points.count }
-        out.reserveCapacity(pointCount * (6 + discSegments * 3) * floatsPerVertex)
+        // Ribbons emit six vertices per segment. The old estimate reserved the
+        // bead path's segment + disc budget even for ribbons, transiently
+        // allocating about 6x the required memory on every predictive frame.
+        let verticesPerPoint = ribbon ? 6 : (6 + discSegments * 3)
+        out.reserveCapacity(pointCount * verticesPerPoint * floatsPerVertex)
         for stroke in strokes {
             if ribbon { appendRibbon(stroke, into: &out) } else { appendBeads(stroke, into: &out) }
         }

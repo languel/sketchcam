@@ -2,8 +2,74 @@ import CoreGraphics
 import XCTest
 @testable import SketchCam
 import SketchCamCore
+import SketchCamShared
 
 final class PortraitDrawingTests: XCTestCase {
+    func testPortraitStrokeGenerationPerformance() {
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitStyle = .ornate
+        settings.portraitFollow = 0.72
+        settings.portraitFlourish = 0.5
+        let groups = portraitGroups(offset: .zero)
+        let drawing = PortraitDrawing()
+
+        measure(metrics: [XCTClockMetric()]) {
+            for _ in 0..<100 {
+                _ = drawing.strokes(groups: groups, landmarks: settings)
+            }
+        }
+    }
+
+    func testPortraitCPURenderPerformance() throws {
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitStyle = .ornate
+        settings.portraitFollow = 0.72
+        settings.portraitFlourish = 0.5
+        let groups = portraitGroups(offset: .zero)
+        let drawing = PortraitDrawing()
+        let context = try XCTUnwrap(CGContext(
+            data: nil,
+            width: 1280,
+            height: 720,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ))
+
+        measure(metrics: [XCTClockMetric()]) {
+            for _ in 0..<20 {
+                context.clear(CGRect(x: 0, y: 0, width: 1280, height: 720))
+                drawing.render(groups: groups, landmarks: settings, into: context)
+            }
+        }
+    }
+
+    func testPortraitMetalRenderPerformance() throws {
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitStyle = .ornate
+        settings.portraitFollow = 0.72
+        settings.portraitFlourish = 0.5
+        let strokes = PortraitDrawing().strokes(groups: portraitGroups(offset: .zero), landmarks: settings)
+        guard let renderer = MetalLineRenderer() else {
+            throw XCTSkip("Metal drawing is unavailable on this test host")
+        }
+        let buffer = try PixelBufferUtils.makePixelBuffer(
+            format: FrameFormat(id: "portrait-performance", width: 1280, height: 720)
+        )
+
+        // Includes tessellation, reusable-buffer upload, MSAA render, and the
+        // synchronization needed before the compositor consumes the image.
+        measure(metrics: [XCTClockMetric()]) {
+            for _ in 0..<20 {
+                XCTAssertTrue(renderer.render(strokes: strokes, into: buffer))
+            }
+        }
+    }
+
     func testCompoundMouthSplitsIntoStableOuterAndInnerPaths() {
         let outer = loop(center: CGPoint(x: 100, y: 100), rx: 30, ry: 12, count: 8)
         let inner = loop(center: CGPoint(x: 100, y: 100), rx: 15, ry: 5, count: 6)
@@ -91,6 +157,39 @@ final class PortraitDrawingTests: XCTestCase {
         XCTAssertEqual(idealized.count, markers.count)
         XCTAssertEqual(closelyTracked.count, markers.count)
         XCTAssertLessThan(totalDistance(closelyTracked, from: markers), totalDistance(idealized, from: markers))
+    }
+
+    func testPathologicalInputIsBoundedWithoutLosingEndpoints() {
+        let points = (0..<2_000).map { index in
+            CGPoint(x: CGFloat(index), y: sin(CGFloat(index) * 0.03) * 40)
+        }
+
+        let sampled = PortraitPathBuilder.uniformlySample(points, maximumCount: 320)
+
+        XCTAssertEqual(sampled.count, 320)
+        XCTAssertEqual(sampled.first, points.first)
+        XCTAssertEqual(sampled.last, points.last)
+    }
+
+    func testDenseContourIsIgnoredWhenArticulatedBodyIsAvailable() {
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        let base = portraitGroups(offset: .zero)
+        let denseContourPoints = (0..<2_000).map { index -> CGPoint in
+            let angle = CGFloat(index) / 2_000 * .pi * 2
+            return CGPoint(x: 200 + cos(angle) * 180, y: 300 + sin(angle) * 260)
+        }
+        let denseContour = MappedGroup(
+            region: .contour,
+            points: denseContourPoints,
+            edges: (0..<2_000).map { ($0, ($0 + 1) % 2_000) }
+        )
+        let drawing = PortraitDrawing()
+
+        let withoutContour = drawing.semanticRoutes(groups: base, landmarks: settings)
+        let withContour = drawing.semanticRoutes(groups: base + [denseContour], landmarks: settings)
+
+        XCTAssertEqual(withContour, withoutContour)
     }
 
     private func portraitGroups(offset: CGPoint) -> [MappedGroup] {
