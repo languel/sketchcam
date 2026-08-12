@@ -109,8 +109,8 @@ final class SketchCamViewModel: ObservableObject {
     private let previewRenderer = PreviewRenderer(context: SketchCamViewModel.sharedCIContext)
     /// Zero-readback display path (the preview pane / presentation output).
     let previewDisplay = SampleBufferDisplayController()
-    /// Secondary monitor/projection window display. It receives the same
-    /// published pixel buffer as the main preview, never a second render.
+    /// Secondary monitor/projection window display. When the output window uses
+    /// its Presentation source, this receives a destination-specific composite.
     let secondaryOutputDisplay = SampleBufferDisplayController()
     private let landmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     /// Independent hand-only tracker for system pointer control. This keeps
@@ -150,6 +150,8 @@ final class SketchCamViewModel: ObservableObject {
     private let sourcePreviewLock = NSLock()
     private var sourcePreviewActive: Set<FrameSource> = []
     private var lastSourcePreviewTime: [FrameSource: CFAbsoluteTime] = [:]
+    private let presentationOutputLock = NSLock()
+    private var presentationOutputActive = false
     /// Keeps the OS from throttling us (App Nap / timer coalescing / QoS
     /// clamping) while live — the closest real lever to Apple's "Game Mode"
     /// for a non-fullscreen app. Held for the capture session's lifetime.
@@ -225,6 +227,12 @@ final class SketchCamViewModel: ObservableObject {
             } else {
                 sourcePreviewActive.remove(source)
             }
+        }
+    }
+
+    func setPresentationOutputActive(_ active: Bool) {
+        presentationOutputLock.withLock {
+            presentationOutputActive = active
         }
     }
 
@@ -1036,7 +1044,22 @@ final class SketchCamViewModel: ObservableObject {
                         webAboveDrawing: settings.web.placement == .aboveDrawing
                     )
                 }
-                self.publish(frame: processed.pixelBuffer, sampleBuffer: processed.sampleBuffer, originalPixelBuffer: originalPixelBuffer)
+                let presentationFrame: ProcessedFrame? = {
+                    guard self.presentationOutputLock.withLock({ self.presentationOutputActive }),
+                          let gpu = self.gpuCompositor else { return nil }
+                    return self.compositeOnGPU(
+                        gpu, pixelBuffer: pixelBuffer, settings: settings,
+                        outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
+                        overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
+                        clockSource: clockSource, destination: .presentation
+                    )
+                }()
+                self.publish(
+                    frame: processed.pixelBuffer,
+                    sampleBuffer: processed.sampleBuffer,
+                    originalPixelBuffer: originalPixelBuffer,
+                    presentationPixelBuffer: presentationFrame?.pixelBuffer
+                )
                 self.timings.record(.total, seconds: CFAbsoluteTimeGetCurrent() - frameStart)
             } catch {
                 self.publishError(error)
@@ -1207,7 +1230,8 @@ final class SketchCamViewModel: ObservableObject {
                                 frameIndex: Int, timestamp: CMTime,
                                 overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?,
                                 inkLayers: [UUID: CIImage],
-                                clockSource: FrameSource) -> ProcessedFrame? {
+                                clockSource: FrameSource,
+                                destination: MetalLayerCompositor.Destination = .program) -> ProcessedFrame? {
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
         let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
         let cameraImage: CIImage? = sourceFrames.camera.map {
@@ -1297,7 +1321,8 @@ final class SketchCamViewModel: ObservableObject {
             return resolved
         }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
-                             workspace: workspace, frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+                             workspace: workspace, destination: destination,
+                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
     }
 
     private func sourcePersonMatteImage(
@@ -1331,7 +1356,12 @@ final class SketchCamViewModel: ObservableObject {
         return image
     }
 
-    private func publish(frame pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, originalPixelBuffer: CVPixelBuffer) {
+    private func publish(
+        frame pixelBuffer: CVPixelBuffer,
+        sampleBuffer: CMSampleBuffer,
+        originalPixelBuffer: CVPixelBuffer,
+        presentationPixelBuffer: CVPixelBuffer? = nil
+    ) {
         let settings = store.settings
         let outputFormat = store.outputFormat
 
@@ -1381,7 +1411,7 @@ final class SketchCamViewModel: ObservableObject {
             lastStatsTime = now
         }
         DispatchQueue.main.async {
-            self.secondaryOutputDisplay.enqueue(pixelBuffer)
+            self.secondaryOutputDisplay.enqueue(presentationPixelBuffer ?? pixelBuffer)
         }
         guard image != nil || displayBuffer != nil || shouldUpdateStats else { return }
 

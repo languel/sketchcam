@@ -52,7 +52,7 @@ final class LandmarkOverlayCompositor {
     /// Independent drawing modules. Every enabled one renders per frame, layered
     /// back-to-front in this order. Register new algorithms here; nothing else
     /// needs to change.
-    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing()]
+    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing(), PortraitDrawing()]
 
     // GPU drawing path (opt-in via settings.landmarks.useMetalDrawing). Created
     // lazily on the render queue; double-buffered output so the hot path can
@@ -123,7 +123,7 @@ final class LandmarkOverlayCompositor {
         // in one pass. Only when no Marks renderers are on (dots/stick/labels
         // stay on the CPU path; Metal renders its own buffer).
         let l = settings.landmarks
-        if l.useMetalDrawing, l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled,
+        if l.useMetalDrawing, l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled || l.resolvedPortraitEnabled,
            !l.showDots, !l.showStick, !l.showIDs, let metal = metalRenderer {
             return renderMetalOverlay(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
         }

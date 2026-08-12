@@ -3,6 +3,7 @@ import AppKit
 
 enum OutputWindowSource: Equatable, Identifiable {
     case activeViewport
+    case presentation
     case camera
     case movie
     case texture(nodeID: UUID, name: String)
@@ -10,6 +11,7 @@ enum OutputWindowSource: Equatable, Identifiable {
     var id: String {
         switch self {
         case .activeViewport: return "activeViewport"
+        case .presentation: return "presentation"
         case .camera: return "camera"
         case .movie: return "movie"
         case .texture(let nodeID, _): return "texture.\(nodeID.uuidString)"
@@ -19,6 +21,7 @@ enum OutputWindowSource: Equatable, Identifiable {
     var title: String {
         switch self {
         case .activeViewport: return "Active viewport"
+        case .presentation: return "Presentation"
         case .camera: return "Camera"
         case .movie: return "Movie"
         case .texture(_, let name): return name
@@ -30,7 +33,7 @@ final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate
     private static let windowIdentifier = NSUserInterfaceItemIdentifier("SketchCam.OutputWindow")
 
     @Published var selectedWindowName = "Output 1"
-    @Published var source: OutputWindowSource = .activeViewport
+    @Published var source: OutputWindowSource = .presentation
     @Published private(set) var isOpen = false
     @Published var fullscreen = false { didSet { applyFullscreenIfNeeded(oldValue: oldValue) } }
     @Published var borderless = false { didSet { applyChrome() } }
@@ -310,7 +313,7 @@ struct SecondaryOutputWindow: View {
 
     @ViewBuilder private var outputContent: some View {
         switch outputWindow.source {
-        case .activeViewport, .texture:
+        case .activeViewport, .presentation, .texture:
             SampleBufferDisplayView(controller: model.secondaryOutputDisplay)
                 .aspectRatio(
                     CGFloat(model.outputFormat.width) / CGFloat(max(1, model.outputFormat.height)),
@@ -324,6 +327,8 @@ struct SecondaryOutputWindow: View {
     }
 
     private func updateSourcePreviewActivity(old: OutputWindowSource?, new: OutputWindowSource?) {
+        if case .presentation = old { model.setPresentationOutputActive(false) }
+        if case .presentation = new { model.setPresentationOutputActive(true) }
         if case .camera = old { model.setSourcePreviewActive(.camera, active: false) }
         if case .movie = old { model.setSourcePreviewActive(.movie, active: false) }
         if case .camera = new { model.setSourcePreviewActive(.camera, active: true) }

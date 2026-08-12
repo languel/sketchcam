@@ -52,6 +52,13 @@ Landmark-driven drawing can render through the CPU path or through the Metal rib
 semantic paths -> StrokeTessellator -> MetalLineRenderer -> IOSurface-backed overlay
 ```
 
+Yarn, Wrap, and Line Walk derive routes procedurally from the enabled landmark
+groups. Portrait instead keeps a fixed semantic ordering across face and body
+features. Incoming landmark motion deforms that existing route, so animation
+morphs continuously instead of changing topology as nearest-neighbour choices
+shift. Its Fluid, Cubist, and Ornate styles deform the route before the same
+shared ribbon tessellation stage.
+
 The Ink tab is a separate full-canvas drawing layer. It stores editable vector paths in `ProcessingSettings`, then replays them through a native Metal feedback simulation:
 
 ```text
@@ -66,6 +73,21 @@ InkEditorPath log
 The inkwash layer deliberately keeps feedback state inside Metal textures. The Core Image processor receives only the latest flat BGRA layer, which avoids building a persistent recursive CI graph while preserving the existing layer ordering with the other drawing/web overlays.
 
 The editor uses normalized top-left canvas coordinates. Metal replay uses the same coordinate system so the vector guide path and the simulated shader stroke stay aligned on the preview.
+
+## Program And Presentation Destinations
+
+Workspace visibility has two independent destination filters:
+
+- `includeInOutput` controls the normal program/virtual-camera composite.
+- `includeInPresentation` controls the secondary Output window when its source
+  is **Presentation**.
+
+Both destinations use the same layer graph, streams, transforms, crop, masks,
+effects, and output viewport. Only frame participation differs. Presentation is
+rendered on demand while that Output-window source is active; otherwise the
+secondary display reuses the normal program frame. Old workspace documents copy
+their program inclusion value into presentation inclusion when decoded, which
+preserves their previous appearance.
 
 ## Path And System-Event Routing
 

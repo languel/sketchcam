@@ -24,6 +24,31 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded.landmarks.inkDryCanvasRevision, 4)
     }
 
+    func testSettingsWithoutPortraitFieldsUsePortraitDefaults() throws {
+        let encoded = try JSONEncoder().encode(ProcessingSettings())
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var landmarks = try XCTUnwrap(root["landmarks"] as? [String: Any])
+        for key in [
+            "portraitEnabled", "portraitStyle", "portraitFollow", "portraitFlourish",
+            "portraitWidth", "portraitWidthVariation", "portraitHalo", "portraitColor",
+        ] {
+            landmarks.removeValue(forKey: key)
+        }
+        root["landmarks"] = landmarks
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root)
+        let decoded = try JSONDecoder().decode(ProcessingSettings.self, from: legacyData)
+
+        XCTAssertFalse(decoded.landmarks.resolvedPortraitEnabled)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitStyle, .fluid)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitFollow, 0.72)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitFlourish, 0.2)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitWidth, 2.8)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitWidthVariation, 0.45)
+        XCTAssertFalse(decoded.landmarks.resolvedPortraitHalo)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitColor, .ink)
+    }
+
     func testFreshSettingsStartWithCameraThresholdOnly() throws {
         let settings = ProcessingSettings()
         XCTAssertTrue(settings.thresholdEnabled)
@@ -60,7 +85,7 @@ final class LayerGraphTests: XCTestCase {
     func testEveryKindHasMatchingDefaultBindings() {
         let kinds: [NodeKind] = [.video, .movie, .solid(SolidConfig()), .paper(PaperConfig()), .personMatte,
                                  .effect, .marks,
-                                 .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk),
+                                 .drawing(.yarn), .drawing(.wrap), .drawing(.lineWalk), .drawing(.portrait),
                                  .ink, .web, .image(WorkspaceImageConfig(urlString: "/tmp/reference.png"))]
         for kind in kinds {
             XCTAssertEqual(kind.ports.count, kind.defaultBindings.count,

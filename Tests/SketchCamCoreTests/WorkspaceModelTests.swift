@@ -20,6 +20,7 @@ final class WorkspaceModelTests: XCTestCase {
                     mask: .person(invert: true),
                     visible: true,
                     includeInOutput: false,
+                    includeInPresentation: true,
                     previewPolicy: .boundsOnly,
                     contentFit: .fit,
                     opacity: 0.75,
@@ -52,6 +53,7 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(workspace.frames.count, graph.layers.count)
         XCTAssertEqual(workspace.frames.map(\.id), graph.layers.map(\.id))
         XCTAssertTrue(workspace.frames.allSatisfy { $0.includeInOutput })
+        XCTAssertTrue(workspace.frames.allSatisfy { $0.includeInPresentation })
         XCTAssertTrue(workspace.frames.contains { frame in
             guard case .layer(let id) = frame.material,
                   let layer = graph.layers.first(where: { $0.id == id }),
@@ -90,6 +92,47 @@ final class WorkspaceModelTests: XCTestCase {
         let workspace = CollageWorkspace(outputViewport: output, frames: [visible, offscreen, reference])
 
         XCTAssertEqual(workspace.visibleOutputFrames().map(\.id), [visible.id])
+    }
+
+    func testPresentationFrameSelectionIsIndependentFromProgramOutput() {
+        let output = WorkspaceOutputViewport(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let presenterOnly = WorkspaceFrame(
+            name: "Presenter",
+            role: .layer,
+            material: .node(UUID()),
+            localBounds: output.frame,
+            includeInOutput: false,
+            includeInPresentation: true
+        )
+        let programOnly = WorkspaceFrame(
+            name: "Program",
+            role: .layer,
+            material: .node(UUID()),
+            localBounds: output.frame,
+            includeInOutput: true,
+            includeInPresentation: false
+        )
+        let workspace = CollageWorkspace(outputViewport: output, frames: [presenterOnly, programOnly])
+
+        XCTAssertEqual(workspace.visibleOutputFrames().map(\.id), [programOnly.id])
+        XCTAssertEqual(workspace.visiblePresentationFrames().map(\.id), [presenterOnly.id])
+    }
+
+    func testLegacyFrameDefaultsPresentationToProgramInclusion() throws {
+        let frame = WorkspaceFrame(
+            name: "Legacy",
+            role: .layer,
+            material: .node(UUID()),
+            localBounds: CGRect(x: 0, y: 0, width: 10, height: 10),
+            includeInOutput: false
+        )
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(frame)) as? [String: Any])
+        object.removeValue(forKey: "includeInPresentation")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(WorkspaceFrame.self, from: legacyData)
+
+        XCTAssertFalse(decoded.includeInPresentation)
     }
 
     func testCropRectClampsToUnitBoundsAndMinimumSize() {

@@ -64,6 +64,25 @@ public enum CurveFit: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
+/// Artistic families for the live landmark-driven portrait route. The route's
+/// semantic topology stays fixed; styles deform that route rather than
+/// reconnecting landmarks, so live motion morphs instead of rewiring.
+public enum PortraitStyle: String, CaseIterable, Identifiable, Sendable, Codable {
+    case fluid
+    case cubist
+    case ornate
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .fluid: return "Fluid"
+        case .cubist: return "Cubist"
+        case .ornate: return "Ornate"
+        }
+    }
+}
+
 public enum InkBrushMode: String, CaseIterable, Identifiable, Sendable, Codable {
     case pen
     case brush
@@ -416,6 +435,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var yarnEnabled: Bool
     public var wrapEnabled: Bool
     public var lineWalkEnabled: Bool
+    /// Optional for preset compatibility. Nil predates the Portrait algorithm.
+    public var portraitEnabled: Bool?
     /// Inkwash-style editor and renderer. It can draw hand-authored editor
     /// paths as a full-canvas layer.
     public var inkEnabled: Bool
@@ -521,6 +542,15 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var lineWalkCurveFit: CurveFit
     /// Optional glow halo behind the ribbon.
     public var lineWalkHalo: Bool
+    // Portrait parameters. Optional fields let older persisted settings decode
+    // through synthesized Codable while resolved accessors provide defaults.
+    public var portraitStyle: PortraitStyle?
+    public var portraitFollow: Float?
+    public var portraitFlourish: Float?
+    public var portraitWidth: Float?
+    public var portraitWidthVariation: Float?
+    public var portraitHalo: Bool?
+    public var portraitColor: RGBAColor?
     public var inkPaths: [InkEditorPath]
     /// New stroke model: captured gesture data + active render recipe. Nil
     /// means this preset predates the split and should be migrated from
@@ -645,6 +675,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         yarnEnabled: Bool = true,
         wrapEnabled: Bool = false,
         lineWalkEnabled: Bool = false,
+        portraitEnabled: Bool? = false,
         inkEnabled: Bool = false,
         inkPlacement: WebLayerPlacement = .aboveDrawing,
         inkOpacity: Float = 1,
@@ -704,6 +735,13 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         lineWalkWidthVariation: Float = 0.3,
         lineWalkCurveFit: CurveFit = .hobby,
         lineWalkHalo: Bool = false,
+        portraitStyle: PortraitStyle? = .fluid,
+        portraitFollow: Float? = 0.72,
+        portraitFlourish: Float? = 0.2,
+        portraitWidth: Float? = 2.8,
+        portraitWidthVariation: Float? = 0.45,
+        portraitHalo: Bool? = false,
+        portraitColor: RGBAColor? = .ink,
         inkPaths: [InkEditorPath] = [],
         inkStrokeRecords: [InkStrokeRecord]? = nil,
         inkColor: RGBAColor = .ink,
@@ -778,6 +816,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.yarnEnabled = yarnEnabled
         self.wrapEnabled = wrapEnabled
         self.lineWalkEnabled = lineWalkEnabled
+        self.portraitEnabled = portraitEnabled
         self.inkEnabled = inkEnabled
         self.inkPlacement = inkPlacement
         self.inkOpacity = inkOpacity
@@ -837,6 +876,13 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.lineWalkWidthVariation = lineWalkWidthVariation
         self.lineWalkCurveFit = lineWalkCurveFit
         self.lineWalkHalo = lineWalkHalo
+        self.portraitStyle = portraitStyle
+        self.portraitFollow = portraitFollow
+        self.portraitFlourish = portraitFlourish
+        self.portraitWidth = portraitWidth
+        self.portraitWidthVariation = portraitWidthVariation
+        self.portraitHalo = portraitHalo
+        self.portraitColor = portraitColor
         self.inkPaths = inkPaths
         self.inkStrokeRecords = inkStrokeRecords
         self.inkColor = inkColor
@@ -912,6 +958,14 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedInkLiveAbsorbency: Float { inkLiveAbsorbency ?? 0 }
     public var resolvedInkLiveDrag: Float { inkLiveDrag ?? 0.5 }
     public var resolvedInkLiveResist: Float { inkLiveResist ?? 1 }
+    public var resolvedPortraitEnabled: Bool { portraitEnabled ?? false }
+    public var resolvedPortraitStyle: PortraitStyle { portraitStyle ?? .fluid }
+    public var resolvedPortraitFollow: Float { portraitFollow ?? 0.72 }
+    public var resolvedPortraitFlourish: Float { portraitFlourish ?? 0.2 }
+    public var resolvedPortraitWidth: Float { portraitWidth ?? 2.8 }
+    public var resolvedPortraitWidthVariation: Float { portraitWidthVariation ?? 0.45 }
+    public var resolvedPortraitHalo: Bool { portraitHalo ?? false }
+    public var resolvedPortraitColor: RGBAColor { portraitColor ?? .ink }
 }
 
 /// Plain-value color (no AppKit dependency in Core).
