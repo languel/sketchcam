@@ -107,7 +107,7 @@ public struct MaskBinding: Codable, Sendable, Equatable {
 
 /// The drawing algorithms — one per `drawing` node (max routing flexibility).
 public enum DrawingAlgorithm: String, Codable, Sendable, CaseIterable {
-    case yarn, wrap, lineWalk
+    case yarn, wrap, lineWalk, portrait
 }
 
 /// Per-node config payloads (the start of moving feature config into the graph).
@@ -862,7 +862,7 @@ public extension LayerGraph {
 
         // The marks/drawing "overlay" — one merged image today, so one layer.
         // (Phase 3b splits this into per-algorithm layers.)
-        if l.enabled, l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled {
+        if l.enabled, l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled || l.resolvedPortraitEnabled {
             emit(Node(name: "Drawing", kind: .overlay))
         }
 

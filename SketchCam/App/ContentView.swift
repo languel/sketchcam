@@ -174,6 +174,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case yarn = "Yarn"
     case wrap = "Wrap"
     case lineWalk = "Line walk"
+    case portrait = "Portrait"
     case ink = "Ink"
     case paper = "Paper"
     case output = "Output"
@@ -191,7 +192,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     static let defaultTopPanels: [ControlTab] = [.toolbar, .inkToolbar]
     static let defaultRightPanels: [ControlTab] = [.layers, .paper, .ink]
     static let defaultVisible: Set<ControlTab> = Set(defaultLeftPanels + defaultTopPanels + defaultRightPanels)
-    static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk]
+    static let yarnPathGroup: [ControlTab] = [.yarn, .wrap, .lineWalk, .portrait]
     static let emptyDockValue = "__empty__"
 
     static func visibleTabs(from rawValue: String) -> [ControlTab] {
@@ -254,6 +255,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .yarn: "scribble.variable"
         case .wrap: "figure.stand"
         case .lineWalk: "lasso"
+        case .portrait: "face.smiling"
         case .ink: "paintbrush.pointed"
         case .paper: "doc.text.image"
         case .output: "rectangle.inset.filled"
@@ -2561,6 +2563,7 @@ struct ContentView: View {
         case .yarn: yarnTab
         case .wrap: wrapTab
         case .lineWalk: lineWalkTab
+        case .portrait: portraitTab
         case .ink: inkTab
         case .paper: paperTab
         case .output: outputTab
@@ -3148,6 +3151,9 @@ struct ContentView: View {
                 Button("Active viewport") {
                     outputWindow.source = .activeViewport
                 }
+                Button("Presentation") {
+                    outputWindow.source = .presentation
+                }
                 Button("Camera") {
                     outputWindow.source = .camera
                 }
@@ -3280,7 +3286,7 @@ struct ContentView: View {
         switch outputWindow.source {
         case .texture(let nodeID, let storedName):
             return outputTextureSources().first(where: { $0.id == nodeID })?.name ?? storedName
-        case .activeViewport, .camera, .movie:
+        case .activeViewport, .presentation, .camera, .movie:
             return outputWindow.source.title
         }
     }
@@ -3373,7 +3379,7 @@ struct ContentView: View {
 
     // Each algorithm is its own tab with an enable checkbox and a fully
     // independent palette / match / seed. Enabled algorithms layer on the
-    // canvas (back-to-front: Wrap, Yarn, Line walk).
+    // canvas (back-to-front: Wrap, Yarn, Line walk, Portrait).
 
     @ViewBuilder private var yarnTab: some View {
         Toggle("Enable Yarn", isOn: $model.settings.landmarks.yarnEnabled)
@@ -3504,6 +3510,51 @@ struct ContentView: View {
                 .help("Add a wide dark underlay + white highlight around the ribbon.")
         }
         .disabled(!model.settings.landmarks.lineWalkEnabled)
+    }
+
+    @ViewBuilder private var portraitTab: some View {
+        Toggle("Enable Portrait", isOn: portraitEnabledBinding)
+            .font(.headline)
+            .help("Morph a stable semantic face-and-body route with the live landmarks.")
+        overlayOffHint
+        Group {
+            SectionHeader("Style")
+            Picker("Hand", selection: portraitStyleBinding) {
+                ForEach(PortraitStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            SliderRow(
+                title: "Follow markers",
+                value: optionalLandmarkFloatBinding(\.portraitFollow, defaultValue: 0.72),
+                defaultValue: 0.72,
+                hint: "Higher values hug tracked landmarks; lower values preserve stronger idealization. The semantic route stays stable while markers move."
+            )
+            SliderRow(
+                title: "Flourish",
+                value: optionalLandmarkFloatBinding(\.portraitFlourish, defaultValue: 0.2),
+                defaultValue: 0.2,
+                hint: "Adds intentional loops, bridges, and squiggles without changing which facial features connect."
+            )
+
+            SectionHeader("Stroke")
+            ColorPicker("Ink", selection: portraitColorBinding, supportsOpacity: true)
+            SliderRow(
+                title: "Width",
+                value: optionalLandmarkFloatBinding(\.portraitWidth, defaultValue: 2.8),
+                range: 0.4...12,
+                defaultValue: 2.8
+            )
+            SliderRow(
+                title: "Nib variation",
+                value: optionalLandmarkFloatBinding(\.portraitWidthVariation, defaultValue: 0.45),
+                defaultValue: 0.45,
+                hint: "Calligraphic taper and swell along the continuous route."
+            )
+            Toggle("Halo (glow)", isOn: portraitHaloBinding)
+        }
+        .disabled(!model.settings.landmarks.resolvedPortraitEnabled)
     }
 
     @ViewBuilder private var paperTab: some View {
@@ -4794,6 +4845,51 @@ struct ContentView: View {
         )
     }
 
+    private var portraitEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitEnabled },
+            set: { model.settings.landmarks.portraitEnabled = $0 }
+        )
+    }
+
+    private var portraitHaloBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitHalo },
+            set: { model.settings.landmarks.portraitHalo = $0 }
+        )
+    }
+
+    private var portraitStyleBinding: Binding<PortraitStyle> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitStyle },
+            set: { model.settings.landmarks.portraitStyle = $0 }
+        )
+    }
+
+    private var portraitColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                let color = model.settings.landmarks.resolvedPortraitColor
+                return Color(
+                    .sRGB,
+                    red: Double(color.red),
+                    green: Double(color.green),
+                    blue: Double(color.blue),
+                    opacity: Double(color.alpha)
+                )
+            },
+            set: { newValue in
+                guard let color = NSColor(newValue).usingColorSpace(.sRGB) else { return }
+                model.settings.landmarks.portraitColor = RGBAColor(
+                    red: Float(color.redComponent),
+                    green: Float(color.greenComponent),
+                    blue: Float(color.blueComponent),
+                    alpha: Float(color.alphaComponent)
+                )
+            }
+        )
+    }
+
     private func rgbaBinding(_ keyPath: WritableKeyPath<ProcessingSettings, RGBAColor>) -> Binding<Color> {
         Binding(
             get: {
@@ -5843,7 +5939,17 @@ private struct WorkspaceFrameStackEditor: View {
                                 .frame(width: 18, height: 18)
                         }
                         .buttonStyle(.borderless)
-                        .help(includeBinding(frame.id).wrappedValue ? "Exclude from output viewport render" : "Include in output viewport render")
+                        .help(includeBinding(frame.id).wrappedValue ? "Exclude from program output" : "Include in program output")
+
+                        Button {
+                            let current = presentationBinding(frame.id).wrappedValue
+                            presentationBinding(frame.id).wrappedValue = !current
+                        } label: {
+                            Image(systemName: presentationBinding(frame.id).wrappedValue ? "person.crop.rectangle.fill" : "person.crop.rectangle")
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(presentationBinding(frame.id).wrappedValue ? "Exclude from presentation output" : "Include in presentation output")
 
                         if editingNameID == frame.id {
                             TextField("", text: $editingNameText)
@@ -6052,7 +6158,7 @@ private struct WorkspaceFrameStackEditor: View {
     private var featureKey: String {
         let l = model.settings.landmarks
         return [l.enabled, l.inkEnabled, l.showDots, l.showStick,
-                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled, model.settings.web.enabled]
+                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled, l.resolvedPortraitEnabled, model.settings.web.enabled]
             .map { $0 ? "1" : "0" }.joined()
     }
 
@@ -6155,6 +6261,13 @@ private struct WorkspaceFrameStackEditor: View {
         )
     }
 
+    private func presentationBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { model.settings.workspace?.frame(id: id)?.includeInPresentation ?? true },
+            set: { value in mutateFrame(id) { $0.includeInPresentation = value } }
+        )
+    }
+
     private func opacity(_ id: UUID) -> Binding<Double> {
         Binding(
             get: { Double(model.settings.workspace?.frame(id: id)?.opacity ?? 1) },
@@ -6170,6 +6283,7 @@ private struct WorkspaceFrameStackEditor: View {
         mutateFrame(id) {
             $0.role = role
             $0.includeInOutput = role == .layer || role == .output
+            $0.includeInPresentation = role == .layer || role == .output
         }
     }
 
@@ -6285,6 +6399,7 @@ private struct WorkspaceFrameStackEditor: View {
                 localBounds: outputRect,
                 visible: true,
                 includeInOutput: role == .layer || role == .output,
+                includeInPresentation: role == .layer || role == .output,
                 blend: layer.blend
             )
             workspace.frames.append(frame)
@@ -6321,7 +6436,7 @@ private struct WorkspaceFrameStackEditor: View {
         switch stream {
         case .drawing:
             model.settings.landmarks.enabled = true
-            if !(model.settings.landmarks.showDots || model.settings.landmarks.showStick || model.settings.landmarks.yarnEnabled || model.settings.landmarks.wrapEnabled || model.settings.landmarks.lineWalkEnabled) {
+            if !(model.settings.landmarks.showDots || model.settings.landmarks.showStick || model.settings.landmarks.yarnEnabled || model.settings.landmarks.wrapEnabled || model.settings.landmarks.lineWalkEnabled || model.settings.landmarks.resolvedPortraitEnabled) {
                 model.settings.landmarks.showStick = true
             }
         case .ink:
@@ -6577,7 +6692,7 @@ private struct LayerStackEditor: View {
     private var featureKey: String {
         let l = model.settings.landmarks
         return [l.enabled, l.inkEnabled, l.showDots, l.showStick,
-                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled,
+                l.yarnEnabled, l.wrapEnabled, l.lineWalkEnabled, l.resolvedPortraitEnabled,
                 model.settings.web.enabled, model.settings.backgroundMode != .live]
             .map { $0 ? "1" : "0" }.joined()
             + l.inkPlacement.rawValue + model.settings.web.placement.rawValue
@@ -6716,7 +6831,7 @@ private struct LayerStackEditor: View {
         case .drawing:
             model.settings.landmarks.enabled = true
             let l = model.settings.landmarks
-            if !(l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled) {
+            if !(l.showDots || l.showStick || l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled || l.resolvedPortraitEnabled) {
                 model.settings.landmarks.showStick = true
             }
         case .ink:

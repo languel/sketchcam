@@ -14,6 +14,11 @@ import SketchCamShared
 /// This is the experimental path behind `ProcessingSettings.useGPUCompositor`;
 /// the CoreImage `process(...)` stays the default until this reaches parity.
 final class MetalLayerCompositor {
+    enum Destination {
+        case program
+        case presentation
+    }
+
     /// Resolves a graph node (or the built-in person-matte source) to its
     /// output-sized stream pixels. Returns nil for a node with no pixels yet.
     struct Streams {
@@ -46,6 +51,7 @@ final class MetalLayerCompositor {
     /// falls back to the CoreImage path).
     func composite(graph: LayerGraph, streams: Streams, outputFormat: FrameFormat,
                    workspace: CollageWorkspace? = nil,
+                   destination: Destination = .program,
                    frameIndex: Int, timestamp: CMTime, mirror: Bool) -> ProcessedFrame? {
         guard ensureBuffers(for: outputFormat) else { return nil }
         let rect = CGRect(origin: .zero, size: outputFormat.size)
@@ -55,7 +61,13 @@ final class MetalLayerCompositor {
         rasterize(CIImage(color: .clear).cropped(to: rect), into: accumA)
         var cur = accumA, other = accumB
 
-        let items = renderItems(graph: graph, streams: streams, workspace: workspace, outputFormat: outputFormat)
+        let items = renderItems(
+            graph: graph,
+            streams: streams,
+            workspace: workspace,
+            destination: destination,
+            outputFormat: outputFormat
+        )
         for item in items where item.opacity > 0.001 {
             guard let img = item.image else { continue }
             clear(content)
@@ -143,6 +155,7 @@ final class MetalLayerCompositor {
         graph: LayerGraph,
         streams: Streams,
         workspace: CollageWorkspace?,
+        destination: Destination,
         outputFormat: FrameFormat
     ) -> [RenderItem] {
         guard let workspace else {
@@ -161,7 +174,11 @@ final class MetalLayerCompositor {
         }
 
         let viewport = workspace.outputViewport.frame
-        return workspace.visibleOutputFrames().compactMap { frame in
+        let frames = switch destination {
+        case .program: workspace.visibleOutputFrames()
+        case .presentation: workspace.visiblePresentationFrames()
+        }
+        return frames.compactMap { frame in
             guard let resolved = resolveFrame(frame, graph: graph, streams: streams, viewport: viewport, outputFormat: outputFormat) else {
                 return nil
             }

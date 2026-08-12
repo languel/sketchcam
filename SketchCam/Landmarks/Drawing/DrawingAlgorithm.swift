@@ -133,6 +133,7 @@ enum DrawingSupport {
     private static func cardinal(_ pts: [CGPoint], tension: CGFloat, samples: Int) -> [CGPoint] {
         let n = pts.count
         var out: [CGPoint] = []
+        out.reserveCapacity((n - 1) * samples + 1)
         let scale = (1 - tension) * 0.5
         for i in 0..<(n - 1) {
             let p0 = pts[max(0, i - 1)]
@@ -163,6 +164,7 @@ enum DrawingSupport {
     private static func quadMidpoint(_ pts: [CGPoint], samples: Int) -> [CGPoint] {
         let n = pts.count
         var out: [CGPoint] = [pts[0]]
+        out.reserveCapacity((n - 2) * samples + 2)
         for i in 1..<(n - 1) {
             let start = i == 1 ? pts[0] : midpoint(pts[i - 1], pts[i])
             let end = midpoint(pts[i], pts[i + 1])

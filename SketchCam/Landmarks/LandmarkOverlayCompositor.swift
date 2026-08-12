@@ -52,7 +52,7 @@ final class LandmarkOverlayCompositor {
     /// Independent drawing modules. Every enabled one renders per frame, layered
     /// back-to-front in this order. Register new algorithms here; nothing else
     /// needs to change.
-    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing()]
+    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing(), PortraitDrawing()]
 
     // GPU drawing path (opt-in via settings.landmarks.useMetalDrawing). Created
     // lazily on the render queue; double-buffered output so the hot path can
@@ -119,14 +119,39 @@ final class LandmarkOverlayCompositor {
             height: (outputSize.height * scaleDown).rounded(.down)
         )
 
-        // GPU drawing path: render every enabled algorithm's strokes via Metal
-        // in one pass. Only when no Marks renderers are on (dots/stick/labels
-        // stay on the CPU path; Metal renders its own buffer).
-        let l = settings.landmarks
-        if l.useMetalDrawing, l.yarnEnabled || l.wrapEnabled || l.lineWalkEnabled,
-           !l.showDots, !l.showStick, !l.showIDs, let metal = metalRenderer {
-            return renderMetalOverlay(detection: detection, settings: settings, canvasSize: canvasSize, scaleDown: scaleDown, outputSize: outputSize, metal: metal)
+        let landmarks = settings.landmarks
+        let mappedGroups = detection.groups.map { group -> MappedGroup in
+            let points = group.points.map {
+                LandmarkCoordinateMapper.map(
+                    $0.point,
+                    sourceSize: detection.sourceSize,
+                    outputSize: canvasSize,
+                    mirrored: settings.mirror
+                )
+            }
+            return MappedGroup(region: group.region, points: points, edges: group.edges)
         }
+
+        // Raw Marks remain inexpensive CGContext primitives, but drawing
+        // ribbons should stay on Metal even when Marks are visible. Portrait's
+        // long, self-crossing route is particularly expensive as one CPU fill.
+        // Render it separately, then composite it over the CPU Marks layer to
+        // preserve the existing visual order (Marks first, art second).
+        let drawingEnabled = algorithms.contains { $0.isEnabled(landmarks) }
+        let metalDrawing: CIImage? = if landmarks.useMetalDrawing, drawingEnabled, let metal = metalRenderer {
+            renderMetalOverlay(
+                groups: mappedGroups,
+                landmarks: landmarks,
+                canvasSize: canvasSize,
+                scaleDown: scaleDown,
+                outputSize: outputSize,
+                metal: metal
+            )
+        } else {
+            nil
+        }
+        let marksEnabled = landmarks.showDots || landmarks.showStick || landmarks.showIDs
+        if let metalDrawing, !marksEnabled { return metalDrawing }
 
         contextIndex = (contextIndex + 1) % 2
         if contexts[contextIndex] == nil || contextSizes[contextIndex] != canvasSize {
@@ -146,21 +171,8 @@ final class LandmarkOverlayCompositor {
         cgContext.setAllowsAntialiasing(true)
         cgContext.setShouldAntialias(true)
 
-        let landmarks = settings.landmarks
-        // Map every region into canvas space once; reused by the Marks
-        // renderers below and handed whole to the active drawing algorithm.
-        var mappedGroups: [MappedGroup] = []
-        for group in detection.groups {
-            let mapped = group.points.map {
-                LandmarkCoordinateMapper.map(
-                    $0.point,
-                    sourceSize: detection.sourceSize,
-                    outputSize: canvasSize,
-                    mirrored: settings.mirror
-                )
-            }
-            mappedGroups.append(MappedGroup(region: group.region, points: mapped, edges: group.edges))
-
+        for (group, mappedGroup) in zip(detection.groups, mappedGroups) {
+            let mapped = mappedGroup.points
             // Marks renderers (raw sensor data) are independent of the drawing
             // style and can stack freely.
             if landmarks.showStick {
@@ -174,43 +186,43 @@ final class LandmarkOverlayCompositor {
             }
         }
 
-        // Every enabled art algorithm renders, layered in registration order.
-        for algorithm in algorithms where algorithm.isEnabled(landmarks) {
-            algorithm.render(groups: mappedGroups, landmarks: landmarks, into: cgContext)
+        // Metal failure retains the existing CPU fallback. Otherwise this
+        // context contains only raw Marks, avoiding the costly ribbon fill.
+        if metalDrawing == nil {
+            for algorithm in algorithms where algorithm.isEnabled(landmarks) {
+                algorithm.render(groups: mappedGroups, landmarks: landmarks, into: cgContext)
+            }
         }
 
         guard let cgImage = cgContext.makeImage() else { return nil }
         let upscale = 1 / scaleDown
-        return CIImage(cgImage: cgImage)
+        let cpuLayer = CIImage(cgImage: cgImage)
             .transformed(by: CGAffineTransform(scaleX: upscale, y: upscale))
             .cropped(to: CGRect(origin: .zero, size: outputSize))
+        return metalDrawing?
+            .composited(over: cpuLayer)
+            .cropped(to: CGRect(origin: .zero, size: outputSize)) ?? cpuLayer
     }
 
-    /// GPU drawing render: map groups → canvas space, gather tessellatable
-    /// strokes from every enabled algorithm (layered in registration order),
-    /// and rasterize with Metal into an IOSurface buffer wrapped as a CIImage.
+    /// GPU drawing render: gather tessellatable strokes from already-mapped
+    /// groups (shared with the Marks path), then rasterize all enabled
+    /// algorithms in one pass.
     private func renderMetalOverlay(
-        detection: LandmarkDetection,
-        settings: ProcessingSettings,
+        groups: [MappedGroup],
+        landmarks: LandmarkSettings,
         canvasSize: CGSize,
         scaleDown: CGFloat,
         outputSize: CGSize,
         metal: MetalLineRenderer
     ) -> CIImage? {
-        let mapped = detection.groups.map { group -> MappedGroup in
-            let points = group.points.map {
-                LandmarkCoordinateMapper.map($0.point, sourceSize: detection.sourceSize, outputSize: canvasSize, mirrored: settings.mirror)
-            }
-            return MappedGroup(region: group.region, points: points, edges: group.edges)
-        }
         var strokes: [StrokeTessellator.Stroke] = []
-        for algorithm in algorithms where algorithm.isEnabled(settings.landmarks) {
-            strokes += algorithm.strokes(groups: mapped, landmarks: settings.landmarks)
+        for algorithm in algorithms where algorithm.isEnabled(landmarks) {
+            strokes += algorithm.strokes(groups: groups, landmarks: landmarks)
         }
 
         let width = Int(canvasSize.width), height = Int(canvasSize.height)
         guard width > 0, height > 0, let buffer = overlayBuffer(width: width, height: height) else { return nil }
-        guard metal.render(strokes: strokes, ribbon: !settings.landmarks.beadStroke, into: buffer) else { return nil }
+        guard metal.render(strokes: strokes, ribbon: !landmarks.beadStroke, into: buffer) else { return nil }
 
         let upscale = 1 / scaleDown
         return CIImage(cvPixelBuffer: buffer)

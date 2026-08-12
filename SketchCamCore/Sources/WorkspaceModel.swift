@@ -127,6 +127,7 @@ public struct WorkspaceFrame: Identifiable, Equatable, Sendable, Codable {
     public var mask: MaskBinding?
     public var visible: Bool
     public var includeInOutput: Bool
+    public var includeInPresentation: Bool
     public var previewPolicy: WorkspacePreviewPolicy
     public var contentFit: WorkspaceContentFit
     public var opacity: Float
@@ -145,6 +146,7 @@ public struct WorkspaceFrame: Identifiable, Equatable, Sendable, Codable {
         mask: MaskBinding? = nil,
         visible: Bool = true,
         includeInOutput: Bool = true,
+        includeInPresentation: Bool = true,
         previewPolicy: WorkspacePreviewPolicy = .throttled,
         contentFit: WorkspaceContentFit = .stretch,
         opacity: Float = 1,
@@ -162,6 +164,7 @@ public struct WorkspaceFrame: Identifiable, Equatable, Sendable, Codable {
         self.mask = mask
         self.visible = visible
         self.includeInOutput = includeInOutput
+        self.includeInPresentation = includeInPresentation
         self.previewPolicy = previewPolicy
         self.contentFit = contentFit
         self.opacity = opacity
@@ -193,6 +196,57 @@ public struct WorkspaceFrame: Identifiable, Equatable, Sendable, Codable {
         crop.size.width = max(minSize, min(1 - crop.origin.x, crop.size.width))
         crop.size.height = max(minSize, min(1 - crop.origin.y, crop.size.height))
         return crop
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, role, material, localBounds, transform, cropRect, mask
+        case visible, includeInOutput, includeInPresentation, previewPolicy, contentFit
+        case opacity, blend, bleed, locked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let includeInOutput = try container.decodeIfPresent(Bool.self, forKey: .includeInOutput) ?? true
+        self.init(
+            id: try container.decode(UUID.self, forKey: .id),
+            name: try container.decode(String.self, forKey: .name),
+            role: try container.decode(WorkspaceFrameRole.self, forKey: .role),
+            material: try container.decode(WorkspaceMaterial.self, forKey: .material),
+            localBounds: try container.decode(CGRect.self, forKey: .localBounds),
+            transform: try container.decode(WorkspaceAffineTransform.self, forKey: .transform),
+            cropRect: try container.decode(CGRect.self, forKey: .cropRect),
+            mask: try container.decodeIfPresent(MaskBinding.self, forKey: .mask),
+            visible: try container.decodeIfPresent(Bool.self, forKey: .visible) ?? true,
+            includeInOutput: includeInOutput,
+            includeInPresentation: try container.decodeIfPresent(Bool.self, forKey: .includeInPresentation) ?? includeInOutput,
+            previewPolicy: try container.decodeIfPresent(WorkspacePreviewPolicy.self, forKey: .previewPolicy) ?? .throttled,
+            contentFit: try container.decodeIfPresent(WorkspaceContentFit.self, forKey: .contentFit) ?? .stretch,
+            opacity: try container.decodeIfPresent(Float.self, forKey: .opacity) ?? 1,
+            blend: try container.decodeIfPresent(BlendMode.self, forKey: .blend) ?? .normal,
+            bleed: try container.decodeIfPresent(CGFloat.self, forKey: .bleed) ?? 0,
+            locked: try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(role, forKey: .role)
+        try container.encode(material, forKey: .material)
+        try container.encode(localBounds, forKey: .localBounds)
+        try container.encode(transform, forKey: .transform)
+        try container.encode(cropRect, forKey: .cropRect)
+        try container.encodeIfPresent(mask, forKey: .mask)
+        try container.encode(visible, forKey: .visible)
+        try container.encode(includeInOutput, forKey: .includeInOutput)
+        try container.encode(includeInPresentation, forKey: .includeInPresentation)
+        try container.encode(previewPolicy, forKey: .previewPolicy)
+        try container.encode(contentFit, forKey: .contentFit)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(blend, forKey: .blend)
+        try container.encode(bleed, forKey: .bleed)
+        try container.encode(locked, forKey: .locked)
     }
 }
 
@@ -260,6 +314,16 @@ public struct CollageWorkspace: Equatable, Sendable, Codable {
         frames.filter {
             $0.visible &&
             $0.includeInOutput &&
+            $0.role != .reference &&
+            $0.role != .preview &&
+            $0.worldBounds.intersects(outputViewport.frame)
+        }
+    }
+
+    public func visiblePresentationFrames() -> [WorkspaceFrame] {
+        frames.filter {
+            $0.visible &&
+            $0.includeInPresentation &&
             $0.role != .reference &&
             $0.role != .preview &&
             $0.worldBounds.intersects(outputViewport.frame)
