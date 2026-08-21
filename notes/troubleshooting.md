@@ -77,6 +77,21 @@ Check:
 - Output preset in SketchCam.
 - Whether another app is already holding exclusive camera access.
 
+## Filter Stack Is Stuck Near 10 FPS
+
+First separate image effects from analysis work. In the Input tab, leave **GPU
+compositor (experimental)** enabled, set **Processing** to 720p or 540p, then
+open **Analysis** and turn off **Live feature analysis**. This bypasses
+MediaPipe/landmark and Vision person-matte requests while preserving the final
+Output resolution. Turn off **Segmentation / person matte** too unless the
+stack is intentionally testing Person Key or a matte-backed mask.
+
+Use the Performance panel to compare **Process** and **Frame total** after each
+change. Detect/Segment are last-run timings and can remain displayed briefly
+after a bypass; they are not proof that a new analysis request is still on the
+hot path. See [`notes/performance-plan.md`](performance-plan.md) for the
+filter-only workflow and the current compositor details.
+
 ## Session state and camera recovery
 
 SketchCam saves the live session as controls change. This includes the layer

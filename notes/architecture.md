@@ -97,6 +97,30 @@ or restricted camera falls back to the test pattern and exposes Settings and
 Refresh actions in the Camera panel. System-pointer arming remains transient
 and explicit for safety.
 
+## Analysis Bypass And GPU Processing Quality
+
+Filter-only stacks do not need to pay for landmark or segmentation analysis.
+The Settings/Input tab exposes two related controls:
+
+- **Live feature analysis** is the master switch. When disabled, the frame
+  loop does not request landmark detection, contour construction, or automatic
+  Vision person-matte work. Portrait, Marks, and other feature-driven overlays
+  therefore contribute no live geometry; a Person Key effect passes its source
+  through when no matte is available.
+- **Segmentation / person matte** controls the explicit Vision segmentation
+  request. Person Key and matte-backed masks can still request a matte
+  automatically while live analysis is enabled; the master switch is the
+  complete bypass for a filter-only experiment.
+
+The GPU compositor honors `ProcessingQuality` independently of the published
+output format. Full, balanced (720p), and fast (540p) processing formats keep
+the output aspect ratio, render the layer/effect graph once at that working
+size, and perform one final upscale into the requested output buffer. This
+keeps virtual-camera clients at their selected resolution while making print
+effects substantially cheaper to tune. Metal effect chains also share one
+command buffer per layer chain, and empty chains alias their input instead of
+running a copy kernel.
+
 ## Targets
 
 - `SketchCam`: SwiftUI utility app, camera picker, controls, preview, extension activation, frame publishing.
