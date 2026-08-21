@@ -24,7 +24,7 @@ final class SourcePreviewReadouts: ObservableObject {
 }
 
 final class SketchCamViewModel: ObservableObject {
-    enum FrameSource: String, CaseIterable, Identifiable {
+    enum FrameSource: String, CaseIterable, Identifiable, Codable {
         case camera
         case movie
 
@@ -38,22 +38,29 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     @Published var cameraDevices: [CameraDeviceOption] = []
-    @Published var selectedDeviceID: String?
+    @Published var selectedDeviceID: String? {
+        didSet { persistSession() }
+    }
     @Published var frameSource = FrameSource.camera {
         didSet {
             guard oldValue != frameSource else { return }
-            applyFrameSource()
+            if !isRestoringSession { applyFrameSource() }
+            persistSession()
         }
     }
     @Published var movieURL: URL? {
         didSet {
-            if frameSource == .movie {
+            if !isRestoringSession, frameSource == .movie {
                 applyFrameSource()
             }
+            persistSession()
         }
     }
     @Published var movieRate: Double = 1.0 {
-        didSet { movieSource.setRate(Float(movieRate)) }
+        didSet {
+            movieSource.setRate(Float(movieRate))
+            persistSession()
+        }
     }
     /// Freeze the input: the next incoming frame is copied and re-fed to the
     /// pipeline on every tick, so detection/effects keep running on one
@@ -66,12 +73,19 @@ final class SketchCamViewModel: ObservableObject {
     }
     @Published var inputResolution = CameraInputResolution.vga {
         didSet {
-            guard oldValue != inputResolution, cameraPermissionState == .authorized else { return }
-            captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+            if !isRestoringSession,
+               oldValue != inputResolution,
+               cameraPermissionState == .authorized {
+                captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+            }
+            persistSession()
         }
     }
     @Published var settings = ProcessingSettings() {
-        didSet { store.settings = settings }
+        didSet {
+            store.settings = settings
+            persistSession()
+        }
     }
     @Published var outputFormat = SketchCamFormats.defaultFormat {
         didSet {
@@ -79,6 +93,7 @@ final class SketchCamViewModel: ObservableObject {
             if settings.workspace != nil {
                 settings.workspace?.outputViewport.frame.size = outputFormat.size
             }
+            persistSession()
         }
     }
     /// High-frequency live readouts (preview image + per-stage stats) live on a
@@ -98,6 +113,7 @@ final class SketchCamViewModel: ObservableObject {
     let activationManager = ExtensionActivationManager()
 
     private let store = PipelineStateStore()
+    private var isRestoringSession = false
     private let captureService = CameraCaptureService()
     private let movieSource = MoviePlaybackSource()
     // One CIContext for the whole pipeline (processor + preview): separate
@@ -178,6 +194,12 @@ final class SketchCamViewModel: ObservableObject {
     private let sourcePreviewInterval: CFAbsoluteTime = 1.0 / 12.0
 
     init() {
+        isRestoringSession = true
+        restoreSession()
+        isRestoringSession = false
+        store.settings = settings
+        store.outputFormat = outputFormat
+
         captureService.onConfigurationChanged = { [weak self] size in
             DispatchQueue.main.async {
                 self?.live.stats.cameraResolution = size
@@ -201,6 +223,82 @@ final class SketchCamViewModel: ObservableObject {
             guard let self, self.frameSource == .movie else { return nil }
             return self.movieSource.currentTimeSeconds
         }
+        persistSession()
+    }
+
+    private func restoreSession() {
+        guard let snapshot = store.loadSession(), snapshot.version == 1 else { return }
+        settings = snapshot.settings
+        selectedDeviceID = snapshot.selectedDeviceID
+        frameSource = snapshot.frameSource
+        movieRate = snapshot.movieRate
+        inputResolution = snapshot.inputResolution
+        if let format = SketchCamFormats.all.first(where: { $0.id == snapshot.outputFormatID }) {
+            outputFormat = format
+        }
+        movieURL = Self.resolveMovieURL(string: snapshot.movieURLString, bookmark: snapshot.movieBookmark)
+        if let bookmark = snapshot.webBookmark,
+           let webURL = Self.resolveSecurityScopedURL(bookmark) {
+            _ = webURL.startAccessingSecurityScopedResource()
+            webPickedURLs.append(webURL)
+        }
+    }
+
+    private static func resolveSecurityScopedURL(_ bookmark: Data) -> URL? {
+        var stale = false
+        return try? URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope, .withoutMounting],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        )
+    }
+
+    private static func resolveMovieURL(string: String?, bookmark: Data?) -> URL? {
+        if let bookmark {
+            if let url = resolveSecurityScopedURL(bookmark) {
+                _ = url.startAccessingSecurityScopedResource()
+                return url
+            }
+        }
+        guard let string, !string.isEmpty else { return nil }
+        if let url = URL(string: string), url.scheme != nil { return url }
+        return URL(fileURLWithPath: string)
+    }
+
+    private func persistSession() {
+        guard !isRestoringSession else { return }
+        let bookmark: Data?
+        if let movieURL, movieURL.isFileURL {
+            bookmark = try? movieURL.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } else {
+            bookmark = nil
+        }
+        let webBookmark: Data?
+        if let webURL = URL(string: settings.web.urlString), webURL.isFileURL {
+            webBookmark = try? webURL.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } else {
+            webBookmark = nil
+        }
+        store.saveSession(SketchCamSessionSnapshot(
+            settings: settings,
+            outputFormatID: outputFormat.id,
+            selectedDeviceID: selectedDeviceID,
+            frameSource: frameSource,
+            movieURLString: movieURL?.absoluteString,
+            movieBookmark: bookmark,
+            webBookmark: webBookmark,
+            movieRate: movieRate,
+            inputResolution: inputResolution
+        ))
     }
 
     func openMoviePanel() {
@@ -209,6 +307,9 @@ final class SketchCamViewModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.message = "Choose a movie to use as the frame source"
         if panel.runModal() == .OK, let url = panel.url {
+            // Keep the user-selected file readable after a relaunch in the
+            // sandbox. The bookmark is persisted with the session snapshot.
+            _ = url.startAccessingSecurityScopedResource()
             movieURL = url
             frameSource = .movie
         }
@@ -617,22 +718,11 @@ final class SketchCamViewModel: ObservableObject {
             settings.landmarks.enabled = true
             settings.landmarks.sourceMode = mode == "synthetic" ? .synthetic : .camera
         }
-        Task {
-            let granted = await CameraPermissionManager.requestAccess()
-            DispatchQueue.main.async {
-                self.cameraPermissionState = CameraPermissionManager.state
-                if granted {
-                    self.settings.testPatternMode = false
-                    self.captureService.start(deviceID: self.selectedDeviceID, inputResolution: self.inputResolution)
-                } else {
-                    self.settings.testPatternMode = true
-                    self.errorText = "Camera permission denied; using test pattern."
-                }
-            }
-        }
+        refreshCameraAccess()
     }
 
     func stop() {
+        persistSession()
         captureService.stop()
         movieSource.stop()
         sourceFrameLock.withLock {
@@ -651,9 +741,51 @@ final class SketchCamViewModel: ObservableObject {
     func refreshDevices() {
         let devices = captureService.availableDevices()
         cameraDevices = devices
-        if selectedDeviceID == nil {
+        if selectedDeviceID == nil || (selectedDeviceID != nil && !devices.contains(where: { $0.id == selectedDeviceID })) {
             selectedDeviceID = devices.first?.id
         }
+    }
+
+    /// Re-checks the OS permission after a restart or when returning from
+    /// System Settings, then resumes the remembered camera input when possible.
+    func refreshCameraAccess() {
+        let state = CameraPermissionManager.state
+        cameraPermissionState = state
+        switch state {
+        case .authorized:
+            settings.testPatternMode = false
+            applyFrameSource()
+        case .unknown:
+            requestCameraAccess()
+        case .denied, .restricted:
+            if frameSource == .camera {
+                settings.testPatternMode = true
+                errorText = "Camera permission is unavailable; using the test pattern."
+            }
+        }
+    }
+
+    func requestCameraAccess() {
+        Task {
+            let granted = await CameraPermissionManager.requestAccess()
+            DispatchQueue.main.async {
+                self.cameraPermissionState = CameraPermissionManager.state
+                if granted || self.cameraPermissionState == .authorized {
+                    self.settings.testPatternMode = false
+                    self.errorText = nil
+                    self.refreshDevices()
+                    self.applyFrameSource()
+                } else if self.frameSource == .camera {
+                    self.settings.testPatternMode = true
+                    self.errorText = "Camera permission denied; open Camera Settings to reconnect the input."
+                }
+            }
+        }
+    }
+
+    func openCameraSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func selectCamera(_ id: String?) {
@@ -824,9 +956,14 @@ final class SketchCamViewModel: ObservableObject {
             let webLayer = settings.web.enabled ? self.webController.currentImage() : nil
             do {
                 let frameIndex = self.nextFrameIndex()
-                // Segmentation runs when keying OR the silhouette contour
-                // needs it; the processor only keys when keying is on.
-                let contourWanted = settings.landmarks.enabled && settings.landmarks.trackContour
+                // Segmentation runs when keying OR a silhouette contour is
+                // needed. Portrait's Body outline owns the request too, so
+                // enabling that one Portrait control produces a real line
+                // contour without requiring a separate Marks toggle.
+                let portraitOutlineWanted = settings.landmarks.resolvedPortraitEnabled
+                    && settings.landmarks.resolvedPortraitOutlineEnabled
+                let contourWanted = settings.landmarks.enabled
+                    && (settings.landmarks.trackContour || portraitOutlineWanted)
                 // v2: a Person Key effect anywhere in the layer stack needs the matte.
                 let personKeyWanted = settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
                 var segSettings = settings.segmentation

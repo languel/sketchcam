@@ -10,6 +10,16 @@ struct MappedGroup {
     let region: LandmarkRegion
     let points: [CGPoint]
     let edges: [(Int, Int)]
+    /// Stable detector labels are retained for algorithms whose semantic route
+    /// needs more identity than the coarse region enum (notably L/R hands).
+    let labels: [String?]
+
+    init(region: LandmarkRegion, points: [CGPoint], edges: [(Int, Int)] = [], labels: [String?] = []) {
+        self.region = region
+        self.points = points
+        self.edges = edges
+        self.labels = labels
+    }
 }
 
 /// A self-contained art algorithm for the Drawing tab. Each algorithm is an

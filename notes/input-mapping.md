@@ -51,16 +51,23 @@ which face/body/hand regions Drawing tracks.
 
 ## Local Test Sequence
 
-1. Run `./script/build_and_run.sh`.
-2. Approve the freshly installed `/Applications/SketchCam.app` under
-   **Privacy & Security → Accessibility**. Reapprove after a development rebuild;
-   see `notes/troubleshooting.md` if the visible permission is stale.
+1. Run `./script/build_and_run.sh` once. It installs and launches the stable
+   `/Applications/SketchCam.app` bundle.
+2. Approve `/Applications/SketchCam.app` under **Privacy & Security →
+   Accessibility**. Normal source rebuilds keep the same signed identity, so
+   the grant should persist. Use `./script/run.sh --permissions` to reopen the
+   correct pane without rebuilding.
 3. Open **View → Show Tabs → Input Map**.
 4. Start with right index tip, **While pinching**, and the default thresholds.
 5. Arm. Confirm open-hand movement leaves the physical mouse alone, a short pinch
    clicks, holding and moving drags, loss of the hand releases, and Disarm stops
    all mapped input.
 6. Test **Always** only when continuous takeover is intended.
+
+For later iterations, use `./script/build_and_run.sh` after code changes and
+`./script/run.sh` when you only need to relaunch. The Arm button does not reopen
+System Settings automatically; use Request access explicitly, then Refresh
+after approving.
 
 ## Known First-Slice Limits
 

@@ -5,7 +5,7 @@ import Foundation
 /// Camera capture resolution. Capturing more pixels than the pipeline needs
 /// costs ISP bandwidth, memory traffic, and per-frame conversion — VGA is the
 /// default for the doodle pipeline; effects upscale fine.
-enum CameraInputResolution: String, CaseIterable, Identifiable {
+enum CameraInputResolution: String, CaseIterable, Identifiable, Codable {
     case low
     case vga
     case hd

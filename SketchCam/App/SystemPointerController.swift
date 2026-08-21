@@ -279,8 +279,10 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     func arm() -> Bool {
         refreshTrust()
         guard isTrusted else {
-            live.status = "Reapprove Accessibility after rebuild"
-            requestAccessibility()
+            // Do not unexpectedly reopen System Settings every time Arm is
+            // pressed. The panel exposes an explicit Request access action;
+            // once the user approves it, Refresh/activation updates trust.
+            live.status = "Accessibility permission required"
             return false
         }
         stateLock.withLock { runtimeArmed = true }
@@ -317,7 +319,7 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             live.status = "Ready to arm"
             return
         }
-        live.status = "Approve the current build in System Settings"
+        live.status = "Approve SketchCam in Accessibility, then click Refresh"
         // macOS does not present another AX prompt when a stale entry from a
         // previous development signature already exists. Opening the pane is
         // the only actionable fallback in that state.

@@ -18,7 +18,38 @@ final class MetalEffects {
     private struct MaskParams { var level: Float; var mode: UInt32; var invert: UInt32 }
     private struct SilhouetteParams { var color: SIMD4<Float>; var invert: UInt32 }
     private struct OpticalFlowParams { var gain: Float }
-    private struct LevelsParams { var blackPoint: Float; var whitePoint: Float; var gamma: Float }
+    private struct LevelsParams {
+        var blackPoint: Float
+        var whitePoint: Float
+        var gamma: Float
+        var gain: Float
+        var softClip: Float
+    }
+    private struct DuotoneParams {
+        var shadowTint: SIMD4<Float>
+        var highlightTint: SIMD4<Float>
+        var strength: Float
+        var blackPoint: Float
+        var whitePoint: Float
+        var gamma: Float
+        var invert: UInt32
+    }
+    private struct PatternParams {
+        var scale: Float
+        var thickness: Float
+        var strength: Float
+        var angle: Float
+        var softness: Float
+        var sampling: Float
+        var variationScale: Float
+        var dotResponse: Float
+        var stripeResponse: Float
+        var stripeBleed: Float
+        var invert: UInt32
+        var transparentBackground: UInt32
+        var foregroundTint: SIMD4<Float>
+        var backgroundTint: SIMD4<Float>
+    }
     private struct OpticalFlowState {
         var previous: CVPixelBuffer
         var cached: CVPixelBuffer
@@ -40,6 +71,11 @@ final class MetalEffects {
     private let silhouettePSO: MTLComputePipelineState
     private let opticalFlowPSO: MTLComputePipelineState
     private let levelsPSO: MTLComputePipelineState
+    private let duotonePSO: MTLComputePipelineState
+    private let blueNoiseStipplePSO: MTLComputePipelineState
+    private let stipplePSO: MTLComputePipelineState
+    private let stripesPSO: MTLComputePipelineState
+    private let pixelatePSO: MTLComputePipelineState
     private var opticalFlowStates: [UUID: OpticalFlowState] = [:]
 
     init?() {
@@ -55,7 +91,11 @@ final class MetalEffects {
               let c = pso("effect_composite"), let co = pso("effect_composite_op"),
               let mk = pso("effect_mask"), let iv = pso("effect_invert"),
               let mir = pso("effect_mirror"), let sil = pso("effect_silhouette"),
-              let flow = pso("effect_optical_flow"), let levels = pso("effect_levels") else { return nil }
+              let flow = pso("effect_optical_flow"), let levels = pso("effect_levels"),
+              let duotone = pso("effect_duotone"),
+              let blueNoiseStipple = pso("effect_blue_noise_stipple"),
+              let stipple = pso("effect_stipple"), let stripes = pso("effect_stripes"),
+              let pixelate = pso("effect_pixelate") else { return nil }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         self.device = device
@@ -66,6 +106,11 @@ final class MetalEffects {
         self.invertPSO = iv; self.mirrorPSO = mir; self.silhouettePSO = sil
         self.opticalFlowPSO = flow
         self.levelsPSO = levels
+        self.duotonePSO = duotone
+        self.blueNoiseStipplePSO = blueNoiseStipple
+        self.stipplePSO = stipple
+        self.stripesPSO = stripes
+        self.pixelatePSO = pixelate
     }
 
     // MARK: - Public ops (each runs on its own command buffer, synchronous)
@@ -110,6 +155,109 @@ final class MetalEffects {
     func mirror(input: CVPixelBuffer, output: CVPixelBuffer) -> Bool {
         guard let inTex = texture(input), let outTex = texture(output) else { return false }
         return run(mirrorPSO, textures: [inTex, outTex], bytes: nil, length: 0, grid: outTex)
+    }
+
+    func stipple(input: CVPixelBuffer, output: CVPixelBuffer, scale: Float,
+                 thickness: Float, strength: Float, softness: Float, sampling: Float,
+                 invert: Bool, transparentBackground: Bool,
+                 foregroundTint: SIMD4<Float>, backgroundTint: SIMD4<Float>,
+                 dotResponse: Float = 0) -> Bool {
+        runPattern(stipplePSO, input: input, output: output, scale: scale,
+                   thickness: thickness, strength: strength, angle: 0,
+                   softness: softness, sampling: sampling, variationScale: 1,
+                   dotResponse: dotResponse, stripeResponse: 0, stripeBleed: 0,
+                   invert: invert,
+                   transparentBackground: transparentBackground,
+                   foregroundTint: foregroundTint, backgroundTint: backgroundTint)
+    }
+
+    func blueNoiseStipple(input: CVPixelBuffer, output: CVPixelBuffer, scale: Float,
+                          thickness: Float, strength: Float, softness: Float, sampling: Float,
+                          invert: Bool, transparentBackground: Bool,
+                          foregroundTint: SIMD4<Float>, backgroundTint: SIMD4<Float>,
+                          dotResponse: Float = 0) -> Bool {
+        runPattern(blueNoiseStipplePSO, input: input, output: output, scale: scale,
+                   thickness: thickness, strength: strength, angle: 0,
+                   softness: softness, sampling: sampling, variationScale: 1,
+                   dotResponse: dotResponse, stripeResponse: 0, stripeBleed: 0,
+                   invert: invert,
+                   transparentBackground: transparentBackground,
+                   foregroundTint: foregroundTint, backgroundTint: backgroundTint)
+    }
+
+    func stripes(input: CVPixelBuffer, output: CVPixelBuffer, scale: Float,
+                 thickness: Float, strength: Float, angle: Float,
+                 softness: Float, sampling: Float, variationScale: Float,
+                 stripeResponse: Float, stripeBleed: Float, invert: Bool,
+                 transparentBackground: Bool,
+                 foregroundTint: SIMD4<Float>, backgroundTint: SIMD4<Float>) -> Bool {
+        runPattern(stripesPSO, input: input, output: output, scale: scale,
+                   thickness: thickness, strength: strength, angle: angle,
+                   softness: softness, sampling: sampling, variationScale: variationScale,
+                   dotResponse: 0, stripeResponse: stripeResponse, stripeBleed: stripeBleed,
+                   invert: invert,
+                   transparentBackground: transparentBackground,
+                   foregroundTint: foregroundTint, backgroundTint: backgroundTint)
+    }
+
+    func pixelate(input: CVPixelBuffer, output: CVPixelBuffer, scale: Float,
+                  thickness: Float, strength: Float, softness: Float, sampling: Float,
+                  invert: Bool, transparentBackground: Bool,
+                  foregroundTint: SIMD4<Float>, backgroundTint: SIMD4<Float>) -> Bool {
+        runPattern(pixelatePSO, input: input, output: output, scale: scale,
+                   thickness: thickness, strength: strength, angle: 0,
+                   softness: softness, sampling: sampling, variationScale: 1,
+                   dotResponse: 0, stripeResponse: 0, stripeBleed: 0,
+                   invert: invert,
+                   transparentBackground: transparentBackground,
+                   foregroundTint: foregroundTint, backgroundTint: backgroundTint)
+    }
+
+    func duotone(input: CVPixelBuffer, output: CVPixelBuffer,
+                 shadowTint: SIMD4<Float>, highlightTint: SIMD4<Float>,
+                 strength: Float, blackPoint: Float, whitePoint: Float,
+                 gamma: Float, invert: Bool) -> Bool {
+        guard let inTex = texture(input), let outTex = texture(output) else { return false }
+        var params = DuotoneParams(
+            shadowTint: shadowTint,
+            highlightTint: highlightTint,
+            strength: max(0, strength),
+            blackPoint: min(blackPoint, whitePoint - 0.001),
+            whitePoint: max(whitePoint, blackPoint + 0.001),
+            gamma: max(0.01, gamma),
+            invert: invert ? 1 : 0
+        )
+        return run(duotonePSO, textures: [inTex, outTex], bytes: &params,
+                   length: MemoryLayout<DuotoneParams>.stride, grid: outTex)
+    }
+
+    private func runPattern(_ pso: MTLComputePipelineState, input: CVPixelBuffer,
+                            output: CVPixelBuffer, scale: Float, thickness: Float,
+                            strength: Float, angle: Float, softness: Float,
+                            sampling: Float, variationScale: Float, dotResponse: Float = 0,
+                            stripeResponse: Float, stripeBleed: Float, invert: Bool,
+                            transparentBackground: Bool,
+                            foregroundTint: SIMD4<Float>, backgroundTint: SIMD4<Float>) -> Bool {
+        guard let inTex = texture(input), let outTex = texture(output) else { return false }
+        var params = PatternParams(
+            // Slider ranges are ergonomic defaults, not processing limits.
+            // Keep only the lower bounds needed to avoid invalid geometry so
+            // exact numeric experiments above the slider range reach Metal.
+            scale: max(0.5, scale), thickness: max(0, thickness),
+            strength: max(0, strength), angle: angle,
+            softness: max(0, softness), sampling: max(0, sampling),
+            // Keep the slider's 0.1...4 range useful, but do not clamp direct
+            // numeric entry so experiments can explore broader wavelengths.
+            variationScale: max(0.1, variationScale),
+            dotResponse: max(0, dotResponse),
+            stripeResponse: max(0, stripeResponse),
+            stripeBleed: max(0, stripeBleed),
+            invert: invert ? 1 : 0,
+            transparentBackground: transparentBackground ? 1 : 0,
+            foregroundTint: foregroundTint, backgroundTint: backgroundTint
+        )
+        return run(pso, textures: [inTex, outTex], bytes: &params,
+                   length: MemoryLayout<PatternParams>.stride, grid: outTex)
     }
 
     /// Fill the matte region with a flat colour (silhouette); ignores `output`'s
@@ -211,10 +359,58 @@ final class MetalEffects {
             var params = LevelsParams(
                 blackPoint: min(e.levelBlack, e.levelWhite - 0.001),
                 whitePoint: max(e.levelWhite, e.levelBlack + 0.001),
-                gamma: max(0.01, e.levelGamma)
+                gamma: max(0.01, e.levelGamma),
+                gain: max(0.01, e.levelGain),
+                softClip: max(0, min(1, e.levelSoftClip))
             )
             return run(levelsPSO, textures: [inTex, outTex], bytes: &params,
                        length: MemoryLayout<LevelsParams>.stride, grid: outTex)
+        case .duotone:
+            return duotone(input: input, output: output,
+                           shadowTint: SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha),
+                           highlightTint: SIMD4<Float>(e.backgroundColor.red, e.backgroundColor.green,
+                                                       e.backgroundColor.blue, e.backgroundColor.alpha),
+                           strength: e.amount, blackPoint: e.levelBlack,
+                           whitePoint: e.levelWhite, gamma: e.levelGamma,
+                           invert: e.invert)
+        case .blueNoiseStipple:
+            return blueNoiseStipple(input: input, output: output, scale: e.patternScale,
+                                    thickness: e.thickness, strength: e.amount,
+                                    softness: e.patternSoftness, sampling: e.patternSampling,
+                                    invert: e.invert, transparentBackground: e.transparentBackground,
+                                    foregroundTint: SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha),
+                                    backgroundTint: SIMD4<Float>(e.backgroundColor.red, e.backgroundColor.green,
+                                                                 e.backgroundColor.blue, e.backgroundColor.alpha),
+                                    dotResponse: e.patternDotResponse)
+        case .stipple:
+            return stipple(input: input, output: output, scale: e.patternScale,
+                           thickness: e.thickness, strength: e.amount,
+                           softness: e.patternSoftness, sampling: e.patternSampling,
+                           invert: e.invert, transparentBackground: e.transparentBackground,
+                           foregroundTint: SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha),
+                           backgroundTint: SIMD4<Float>(e.backgroundColor.red, e.backgroundColor.green,
+                                                        e.backgroundColor.blue, e.backgroundColor.alpha),
+                           dotResponse: e.patternDotResponse)
+        case .stripes:
+            return stripes(input: input, output: output, scale: e.patternScale,
+                           thickness: e.thickness, strength: e.amount,
+                           angle: e.patternAngle, softness: e.patternSoftness,
+                           sampling: e.patternSampling, variationScale: e.patternVariationScale,
+                           stripeResponse: e.patternStripeResponse,
+                           stripeBleed: e.patternStripeBleed,
+                           invert: e.invert,
+                           transparentBackground: e.transparentBackground,
+                           foregroundTint: SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha),
+                           backgroundTint: SIMD4<Float>(e.backgroundColor.red, e.backgroundColor.green,
+                                                        e.backgroundColor.blue, e.backgroundColor.alpha))
+        case .pixelate:
+            return pixelate(input: input, output: output, scale: e.patternScale,
+                            thickness: e.thickness, strength: e.amount,
+                            softness: e.patternSoftness, sampling: e.patternSampling,
+                            invert: e.invert, transparentBackground: e.transparentBackground,
+                            foregroundTint: SIMD4<Float>(e.color.red, e.color.green, e.color.blue, e.color.alpha),
+                            backgroundTint: SIMD4<Float>(e.backgroundColor.red, e.backgroundColor.green,
+                                                         e.backgroundColor.blue, e.backgroundColor.alpha))
         }
     }
 
@@ -321,6 +517,30 @@ extension MetalEffects {
                                    EffectConfig(kind: .blur, amount: 1)]) else { return "effects-selftest: chain run FAILED" }
         let edgeMid = read(output, 8, 8)
         let chainOK = edgeMid.r > 20 && edgeMid.r < 235      // softened, not pure B/W
+
+        let ink = SIMD4<Float>(0, 0, 0, 1)
+        let paper = SIMD4<Float>(1, 1, 1, 1)
+        guard blueNoiseStipple(input: input, output: output, scale: 5, thickness: 2,
+                      strength: 0.8, softness: 0.3, sampling: 0.6,
+                      invert: false, transparentBackground: true,
+                      foregroundTint: ink, backgroundTint: paper),
+              duotone(input: input, output: output, shadowTint: ink, highlightTint: paper,
+                      strength: 1, blackPoint: 0, whitePoint: 1, gamma: 1, invert: false),
+              stipple(input: input, output: output, scale: 5, thickness: 2,
+                      strength: 0.8, softness: 0.3, sampling: 0.6,
+                      invert: false, transparentBackground: true,
+                      foregroundTint: ink, backgroundTint: paper),
+              stripes(input: input, output: output, scale: 6, thickness: 2,
+                      strength: 0.8, angle: 0.3, softness: 0.2, sampling: 0.6,
+                      variationScale: 1,
+                      stripeResponse: 1, stripeBleed: 0.5,
+                      invert: false, transparentBackground: true,
+                      foregroundTint: ink, backgroundTint: paper),
+              pixelate(input: input, output: output, scale: 5, thickness: 2,
+                       strength: 0.8, softness: 0.2, sampling: 0.5,
+                       invert: false, transparentBackground: true,
+                       foregroundTint: ink, backgroundTint: paper)
+        else { return "effects-selftest: pattern run FAILED" }
 
         // Mask: a half-white/half-black matte keeps only the matte's white half.
         fill(input) { _, _ in (200, 100, 50, 255) }          // solid content

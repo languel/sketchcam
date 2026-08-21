@@ -64,9 +64,9 @@ public enum CurveFit: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
-/// Artistic families for the live landmark-driven portrait route. The route's
-/// semantic topology stays fixed; styles deform that route rather than
-/// reconnecting landmarks, so live motion morphs instead of rewiring.
+/// Artistic families for the live landmark-driven portrait route. The default
+/// route remains semantic and stable; the Portrait route-variation control can
+/// deliberately choose another seeded semantic itinerary for exploration.
 public enum PortraitStyle: String, CaseIterable, Identifiable, Sendable, Codable {
     case fluid
     case cubist
@@ -79,6 +79,23 @@ public enum PortraitStyle: String, CaseIterable, Identifiable, Sendable, Codable
         case .fluid: return "Fluid"
         case .cubist: return "Cubist"
         case .ornate: return "Ornate"
+        }
+    }
+}
+
+/// Optional extrapolated crown route for Portrait. This is deliberately
+/// separate from the body outline: it is generated only from face landmarks,
+/// so it cannot connect hands or limbs into the scalp.
+public enum PortraitHairStyle: String, CaseIterable, Identifiable, Sendable, Codable {
+    case clean
+    case wild
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .clean: return "Clean"
+        case .wild: return "Wild"
         }
     }
 }
@@ -551,6 +568,40 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var portraitWidthVariation: Float?
     public var portraitHalo: Bool?
     public var portraitColor: RGBAColor?
+    /// Deterministic artistic variation for the Portrait route. Optional for
+    /// presets written before the Portrait controls existed.
+    public var portraitSeed: Int?
+    public var portraitVariation: Float?
+    /// Seeded route topology: higher values sample fewer landmarks, reverse
+    /// some open chains, rotate closed features, and choose from semantic face
+    /// itineraries. Zero preserves the detector's original point order.
+    public var portraitRouteVariation: Float?
+    /// Number of semantic route segments. One keeps the face as a single
+    /// unicursal stroke; higher values allow seeded breaks at feature
+    /// boundaries while keeping compound features such as inner/outer lips
+    /// together where possible.
+    public var portraitSegments: Int?
+    /// Relative width of bridges between different semantic regions. A value
+    /// of one matches feature strokes; lower values make cross-feature jumps
+    /// read as lighter connective tissue.
+    public var portraitConnectorWidth: Float?
+    /// When enabled, Portrait adds a separate contour/hull silhouette route.
+    public var portraitOutlineEnabled: Bool?
+    public var portraitOutlineStrength: Float?
+    /// When enabled, face, body, and silhouette components share one seeded
+    /// route planner instead of rendering as separate routes.
+    public var portraitUnifiedRoute: Bool?
+    /// Bias used by the unified planner to keep eyes, nose, and mouth in the
+    /// high-value part of the itinerary. Zero preserves geometric ordering.
+    public var portraitDetailPriority: Float?
+    /// Fraction of source landmark points retained by Portrait's sampler.
+    /// Seeded, deterministic, and independent from live route topology.
+    public var portraitSubsample: Float?
+    /// Optional face-only extrapolation over the crown. It never uses body or
+    /// hand groups, unlike the separate outline route.
+    public var portraitHairEnabled: Bool?
+    public var portraitHairStyle: PortraitHairStyle?
+    public var portraitHairAmount: Float?
     public var inkPaths: [InkEditorPath]
     /// New stroke model: captured gesture data + active render recipe. Nil
     /// means this preset predates the split and should be migrated from
@@ -742,6 +793,19 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         portraitWidthVariation: Float? = 0.45,
         portraitHalo: Bool? = false,
         portraitColor: RGBAColor? = .ink,
+        portraitSeed: Int? = 7,
+        portraitVariation: Float? = 0.22,
+        portraitRouteVariation: Float? = 0.38,
+        portraitSegments: Int? = 1,
+        portraitConnectorWidth: Float? = 0.42,
+        portraitOutlineEnabled: Bool? = false,
+        portraitOutlineStrength: Float? = 0.68,
+        portraitUnifiedRoute: Bool? = false,
+        portraitDetailPriority: Float? = 0.65,
+        portraitSubsample: Float? = 1,
+        portraitHairEnabled: Bool? = false,
+        portraitHairStyle: PortraitHairStyle? = .clean,
+        portraitHairAmount: Float? = 0.45,
         inkPaths: [InkEditorPath] = [],
         inkStrokeRecords: [InkStrokeRecord]? = nil,
         inkColor: RGBAColor = .ink,
@@ -883,6 +947,19 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.portraitWidthVariation = portraitWidthVariation
         self.portraitHalo = portraitHalo
         self.portraitColor = portraitColor
+        self.portraitSeed = portraitSeed
+        self.portraitVariation = portraitVariation
+        self.portraitRouteVariation = portraitRouteVariation
+        self.portraitSegments = portraitSegments
+        self.portraitConnectorWidth = portraitConnectorWidth
+        self.portraitOutlineEnabled = portraitOutlineEnabled
+        self.portraitOutlineStrength = portraitOutlineStrength
+        self.portraitUnifiedRoute = portraitUnifiedRoute
+        self.portraitDetailPriority = portraitDetailPriority
+        self.portraitSubsample = portraitSubsample
+        self.portraitHairEnabled = portraitHairEnabled
+        self.portraitHairStyle = portraitHairStyle
+        self.portraitHairAmount = portraitHairAmount
         self.inkPaths = inkPaths
         self.inkStrokeRecords = inkStrokeRecords
         self.inkColor = inkColor
@@ -966,6 +1043,19 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedPortraitWidthVariation: Float { portraitWidthVariation ?? 0.45 }
     public var resolvedPortraitHalo: Bool { portraitHalo ?? false }
     public var resolvedPortraitColor: RGBAColor { portraitColor ?? .ink }
+    public var resolvedPortraitSeed: Int { portraitSeed ?? 7 }
+    public var resolvedPortraitVariation: Float { portraitVariation ?? 0.22 }
+    public var resolvedPortraitRouteVariation: Float { portraitRouteVariation ?? 0.38 }
+    public var resolvedPortraitSegments: Int { min(6, max(1, portraitSegments ?? 1)) }
+    public var resolvedPortraitConnectorWidth: Float { min(1, max(0.12, portraitConnectorWidth ?? 0.42)) }
+    public var resolvedPortraitOutlineEnabled: Bool { portraitOutlineEnabled ?? false }
+    public var resolvedPortraitOutlineStrength: Float { portraitOutlineStrength ?? 0.68 }
+    public var resolvedPortraitUnifiedRoute: Bool { portraitUnifiedRoute ?? false }
+    public var resolvedPortraitDetailPriority: Float { min(1, max(0, portraitDetailPriority ?? 0.65)) }
+    public var resolvedPortraitSubsample: Float { min(1, max(0.05, portraitSubsample ?? 1)) }
+    public var resolvedPortraitHairEnabled: Bool { portraitHairEnabled ?? false }
+    public var resolvedPortraitHairStyle: PortraitHairStyle { portraitHairStyle ?? .clean }
+    public var resolvedPortraitHairAmount: Float { portraitHairAmount ?? 0.45 }
 }
 
 /// Plain-value color (no AppKit dependency in Core).

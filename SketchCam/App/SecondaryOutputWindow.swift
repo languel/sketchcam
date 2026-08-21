@@ -32,20 +32,20 @@ enum OutputWindowSource: Equatable, Identifiable {
 final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate {
     private static let windowIdentifier = NSUserInterfaceItemIdentifier("SketchCam.OutputWindow")
 
-    @Published var selectedWindowName = "Output 1"
-    @Published var source: OutputWindowSource = .presentation
+    @Published var selectedWindowName = "Output 1" { didSet { persistState() } }
+    @Published var source: OutputWindowSource = .presentation { didSet { persistState() } }
     @Published private(set) var isOpen = false
     @Published var fullscreen = false { didSet { applyFullscreenIfNeeded(oldValue: oldValue) } }
-    @Published var borderless = false { didSet { applyChrome() } }
-    @Published var transparent = false { didSet { applyChrome() } }
-    @Published var alwaysOnTop = false { didSet { applyChrome() } }
-    @Published var clickThrough = false { didSet { applyChrome() } }
-    @Published var opacity: Double = 1 { didSet { applyChrome() } }
-    @Published var scale: Double = 0.5
-    @Published var x: Double = 0 { didSet { applyFrameFromControls() } }
-    @Published var y: Double = 0 { didSet { applyFrameFromControls() } }
-    @Published var width: Double = 960 { didSet { applyFrameFromControls() } }
-    @Published var height: Double = 540 { didSet { applyFrameFromControls() } }
+    @Published var borderless = false { didSet { applyChrome(); persistState() } }
+    @Published var transparent = false { didSet { applyChrome(); persistState() } }
+    @Published var alwaysOnTop = false { didSet { applyChrome(); persistState() } }
+    @Published var clickThrough = false { didSet { applyChrome(); persistState() } }
+    @Published var opacity: Double = 1 { didSet { applyChrome(); persistState() } }
+    @Published var scale: Double = 0.5 { didSet { persistState() } }
+    @Published var x: Double = 0 { didSet { applyFrameFromControls(); persistState() } }
+    @Published var y: Double = 0 { didSet { applyFrameFromControls(); persistState() } }
+    @Published var width: Double = 960 { didSet { applyFrameFromControls(); persistState() } }
+    @Published var height: Double = 540 { didSet { applyFrameFromControls(); persistState() } }
 
     weak var window: NSWindow? {
         didSet {
@@ -62,10 +62,12 @@ final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     private var syncingGeometry = false
+    private var restoringState = false
     private var closeShortcutMonitor: Any?
 
     override init() {
         super.init()
+        restoreState()
         closeShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
                   event.charactersIgnoringModifiers?.lowercased() == "w",
@@ -101,8 +103,77 @@ final class OutputWindowController: NSObject, ObservableObject, NSWindowDelegate
     func attachWindow(_ window: NSWindow) {
         window.identifier = Self.windowIdentifier
         window.title = "SketchCam Output"
+        let restoredFrame = hasPersistedGeometry
+            ? NSRect(x: x, y: y, width: width, height: height)
+            : nil
+        restoringState = true
         self.window = window
+        if let restoredFrame {
+            window.setFrame(restoredFrame, display: true)
+        }
+        restoringState = false
+        if restoredFrame != nil { updateGeometryFromWindow() }
         isOpen = !window.isMiniaturized
+    }
+
+    private var hasPersistedGeometry: Bool {
+        UserDefaults.standard.object(forKey: Self.key("geometry")) != nil
+    }
+
+    private static func key(_ suffix: String) -> String { "sketchcam.output.\(suffix)" }
+
+    private func restoreState() {
+        let defaults = UserDefaults.standard
+        restoringState = true
+        selectedWindowName = defaults.string(forKey: Self.key("windowName")) ?? selectedWindowName
+        if let sourceID = defaults.string(forKey: Self.key("source")) {
+            switch sourceID {
+            case OutputWindowSource.activeViewport.id: source = .activeViewport
+            case OutputWindowSource.camera.id: source = .camera
+            case OutputWindowSource.movie.id: source = .movie
+            case OutputWindowSource.presentation.id: source = .presentation
+            default:
+                let prefix = "texture."
+                if sourceID.hasPrefix(prefix),
+                   let nodeID = UUID(uuidString: String(sourceID.dropFirst(prefix.count))) {
+                    // The layer graph supplies the friendly name later; keep
+                    // the node identity so a saved texture source still
+                    // resolves after relaunch.
+                    source = .texture(nodeID: nodeID, name: "Texture")
+                }
+            }
+        }
+        borderless = defaults.object(forKey: Self.key("borderless")) as? Bool ?? borderless
+        transparent = defaults.object(forKey: Self.key("transparent")) as? Bool ?? transparent
+        alwaysOnTop = defaults.object(forKey: Self.key("alwaysOnTop")) as? Bool ?? alwaysOnTop
+        clickThrough = defaults.object(forKey: Self.key("clickThrough")) as? Bool ?? clickThrough
+        opacity = defaults.object(forKey: Self.key("opacity")) as? Double ?? opacity
+        scale = defaults.object(forKey: Self.key("scale")) as? Double ?? scale
+        if defaults.object(forKey: Self.key("geometry")) != nil {
+            x = defaults.double(forKey: Self.key("x"))
+            y = defaults.double(forKey: Self.key("y"))
+            width = max(80, defaults.double(forKey: Self.key("width")))
+            height = max(60, defaults.double(forKey: Self.key("height")))
+        }
+        restoringState = false
+    }
+
+    private func persistState() {
+        guard !restoringState else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(selectedWindowName, forKey: Self.key("windowName"))
+        defaults.set(source.id, forKey: Self.key("source"))
+        defaults.set(borderless, forKey: Self.key("borderless"))
+        defaults.set(transparent, forKey: Self.key("transparent"))
+        defaults.set(alwaysOnTop, forKey: Self.key("alwaysOnTop"))
+        defaults.set(clickThrough, forKey: Self.key("clickThrough"))
+        defaults.set(opacity, forKey: Self.key("opacity"))
+        defaults.set(scale, forKey: Self.key("scale"))
+        defaults.set(true, forKey: Self.key("geometry"))
+        defaults.set(x, forKey: Self.key("x"))
+        defaults.set(y, forKey: Self.key("y"))
+        defaults.set(width, forKey: Self.key("width"))
+        defaults.set(height, forKey: Self.key("height"))
     }
 
     func recoverWindowReference() {

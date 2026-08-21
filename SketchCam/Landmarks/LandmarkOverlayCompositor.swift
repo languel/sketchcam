@@ -129,7 +129,12 @@ final class LandmarkOverlayCompositor {
                     mirrored: settings.mirror
                 )
             }
-            return MappedGroup(region: group.region, points: points, edges: group.edges)
+            return MappedGroup(
+                region: group.region,
+                points: points,
+                edges: group.edges,
+                labels: group.points.map(\.label)
+            )
         }
 
         // Raw Marks remain inexpensive CGContext primitives, but drawing

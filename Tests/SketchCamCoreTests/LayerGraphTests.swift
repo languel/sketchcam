@@ -31,6 +31,11 @@ final class LayerGraphTests: XCTestCase {
         for key in [
             "portraitEnabled", "portraitStyle", "portraitFollow", "portraitFlourish",
             "portraitWidth", "portraitWidthVariation", "portraitHalo", "portraitColor",
+            "portraitSeed", "portraitVariation", "portraitRouteVariation",
+            "portraitSegments", "portraitConnectorWidth",
+            "portraitOutlineEnabled", "portraitOutlineStrength", "portraitHairEnabled",
+            "portraitHairStyle", "portraitHairAmount", "portraitUnifiedRoute",
+            "portraitDetailPriority", "portraitSubsample",
         ] {
             landmarks.removeValue(forKey: key)
         }
@@ -47,6 +52,19 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded.landmarks.resolvedPortraitWidthVariation, 0.45)
         XCTAssertFalse(decoded.landmarks.resolvedPortraitHalo)
         XCTAssertEqual(decoded.landmarks.resolvedPortraitColor, .ink)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitSeed, 7)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitVariation, 0.22)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitRouteVariation, 0.38)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitSegments, 1)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitConnectorWidth, 0.42)
+        XCTAssertFalse(decoded.landmarks.resolvedPortraitOutlineEnabled)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitOutlineStrength, 0.68)
+        XCTAssertFalse(decoded.landmarks.resolvedPortraitUnifiedRoute)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitDetailPriority, 0.65)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitSubsample, 1)
+        XCTAssertFalse(decoded.landmarks.resolvedPortraitHairEnabled)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitHairStyle, .clean)
+        XCTAssertEqual(decoded.landmarks.resolvedPortraitHairAmount, 0.45)
     }
 
     func testFreshSettingsStartWithCameraThresholdOnly() throws {
@@ -59,6 +77,30 @@ final class LayerGraphTests: XCTestCase {
         let camera = try XCTUnwrap(graph.layers.first)
         XCTAssertEqual(graph.node(camera.node)?.kind, .video)
         XCTAssertEqual(camera.effects.map(\.kind), [.threshold])
+    }
+
+    func testEnablingDrawingKeepsItAboveDuplicateUserCameras() {
+        var disabled = ProcessingSettings()
+        disabled.landmarks.enabled = true
+        disabled.landmarks.showDots = false
+        disabled.landmarks.showStick = false
+        disabled.landmarks.yarnEnabled = false
+        disabled.landmarks.wrapEnabled = false
+        disabled.landmarks.lineWalkEnabled = false
+        disabled.landmarks.portraitEnabled = false
+
+        let cameraOne = Node(name: "Camera 1", kind: .video, managed: false)
+        let cameraTwo = Node(name: "Camera 2", kind: .video, managed: false)
+        let graph = LayerGraph(
+            nodes: [cameraOne, cameraTwo],
+            layers: [Layer(node: cameraOne.id), Layer(node: cameraTwo.id)]
+        )
+
+        var enabled = disabled
+        enabled.landmarks.showStick = true
+        let reconciled = graph.reconciled(with: enabled)
+
+        XCTAssertEqual(reconciled.layers.map { reconciled.node($0.node)?.name }, ["Camera 1", "Camera 2", "Drawing"])
     }
 
     func testAcrylicDefaultsAndBodyMacro() throws {
@@ -242,6 +284,55 @@ final class LayerGraphTests: XCTestCase {
         XCTAssertEqual(decoded.layers.first?.effects.count, 2)
         XCTAssertEqual(decoded.layers.first?.mask?.mode, .threshold)
         XCTAssertEqual(decoded.layers.first?.mask?.personKeyColor.alpha, 0.8)
+    }
+
+    func testPatternEffectsRoundTripTheirParametricControls() throws {
+        XCTAssertEqual(EffectConfig(kind: .levels).levelGain, 1)
+        XCTAssertEqual(EffectConfig(kind: .levels).levelSoftClip, 0.2)
+        XCTAssertEqual(EffectConfig(kind: .blueNoiseStipple).patternDotResponse, 0)
+        XCTAssertTrue(EffectKind.duotone.usesAmount)
+        let experimental = EffectConfig(kind: .blueNoiseStipple, amount: 1.8,
+                                         thickness: 24, patternScale: 64,
+                                         patternSampling: 1.75, patternDotResponse: 2.2)
+        let experimentalDecoded = try JSONDecoder().decode(
+            EffectConfig.self, from: JSONEncoder().encode(experimental)
+        )
+        XCTAssertEqual(experimentalDecoded, experimental)
+        XCTAssertTrue(EffectConfig(kind: .blueNoiseStipple).transparentBackground)
+        XCTAssertTrue(EffectConfig(kind: .stipple).transparentBackground)
+        XCTAssertTrue(EffectConfig(kind: .stripes).transparentBackground)
+        XCTAssertTrue(EffectConfig(kind: .pixelate).transparentBackground)
+        XCTAssertEqual(EffectConfig(kind: .stripes).patternVariationScale, 1)
+        XCTAssertEqual(EffectConfig(kind: .stripes).patternStripeResponse, 1)
+        XCTAssertEqual(EffectConfig(kind: .stripes).patternStripeBleed, 0.5)
+        let effects = [
+            EffectConfig(kind: .levels, levelBlack: 0.08, levelWhite: 0.92,
+                         levelGamma: 1.4, levelGain: 1.8, levelSoftClip: 0.35),
+            EffectConfig(kind: .blueNoiseStipple, amount: 0.78, thickness: 2.5,
+                         patternScale: 10, patternSoftness: 0.25,
+                         patternSampling: 0.7, patternDotResponse: 0.85),
+            EffectConfig(kind: .stipple, amount: 0.7, thickness: 3.5,
+                         invert: true, patternScale: 9, patternSoftness: 0.2,
+                         patternSampling: 0.8,
+                         backgroundColor: RGBAColor(red: 0.9, green: 0.8, blue: 0.7, alpha: 1),
+                         transparentBackground: true),
+            EffectConfig(kind: .stripes, amount: 0.8, thickness: 6,
+                         patternScale: 18, patternAngle: 0.4, patternSoftness: 0.3,
+                         patternSampling: 0.65, patternVariationScale: 2.4,
+                         patternStripeResponse: 1.8, patternStripeBleed: 0.85,
+                         transparentBackground: false),
+            EffectConfig(kind: .pixelate, amount: 0.9, thickness: 2,
+                         patternScale: 7, patternSoftness: 0.6),
+            EffectConfig(kind: .duotone, amount: 0.9,
+                         color: RGBAColor(red: 0.1, green: 0.02, blue: 0.15, alpha: 1),
+                         levelBlack: 0.08, levelWhite: 0.94, levelGamma: 1.25,
+                         backgroundColor: RGBAColor(red: 0.95, green: 0.8, blue: 0.45, alpha: 1)),
+        ]
+        let camera = Node(name: "Camera", kind: .video)
+        let graph = LayerGraph(nodes: [camera], layers: [Layer(node: camera.id, effects: effects)])
+        let decoded = try JSONDecoder().decode(LayerGraph.self, from: JSONEncoder().encode(graph))
+        XCTAssertEqual(decoded, graph)
+        XCTAssertEqual(Array(EffectKind.allCases.suffix(3)), [.stipple, .stripes, .pixelate])
     }
 
     func testMaskWithPathSourceThrows() {
