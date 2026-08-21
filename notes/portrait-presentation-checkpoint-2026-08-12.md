@@ -19,7 +19,39 @@ Branch: `feat-drawing`
   - **Cubist** favors polygonal segments and angular bridges.
   - **Ornate** adds wave deformation, loops, and more elaborate connectors.
 - Added controls for **Follow markers**, **Flourish**, ink color, width,
-  calligraphic nib variation, and halo.
+  calligraphic nib variation, halo, and a deterministic **Seed**.
+- Added **Organic variation**: a seeded, low-amplitude normal drift that keeps
+  landmarks attached while allowing repeatable hand-drawn asymmetry. Shuffle
+  changes the look without changing the selected route for that seed.
+- Added **Route variation**: the same seed now also chooses among face-only
+  semantic itineraries, samples a stable subset of landmarks, reverses selected
+  open chains, and rotates closed features. The selection is stable between
+  detections, so live motion still morphs instead of rewiring every frame.
+- Added an opt-in **Top-of-head line** with Clean and Wild hair styles. This
+  extrapolation uses a face-local brow/eye frame, follows head roll, and cannot
+  connect hands or body joints; it participates in the seeded face itinerary
+  instead of being rendered as a disconnected extra route. Wild uses a compact
+  Yarn-like scalp weave rather than a tall cone-shaped arch.
+- Added **Segments** (1–6) to split the face itinerary at seeded semantic
+  boundaries. Same-region components such as inner/outer lips remain grouped
+  when possible. Added **Connector width** so cross-part bridges can be thinner
+  than the feature strokes while same-part links retain the main width.
+- Added an opt-in **Body outline** route. Portrait automatically requests the
+  tracked segmentation contour when this toggle is enabled, then prefers that
+  contour over an explicit hull and finally a cheap convex hull from current
+  face/body landmarks. The line-based silhouette is a separate, lighter route
+  inside Portrait, using the same seeded sampling, curve fitting, style, width,
+  and CPU/Metal renderer as the rest of the drawing.
+- Added an opt-in **Unify face, body, and outline** route planner. Face,
+  articulated body, and the optional silhouette now share one seeded itinerary
+  when enabled, with endpoint-aware handoffs that keep the line connected.
+  **Detail priority** biases that planner toward eyes, nose, and mouth without
+  changing the deterministic seed model. The existing separate-route mode
+  remains the default.
+- Unified mode now renders its prepared face/body/outline pool as one stroke,
+  keeps topology fixed while live landmarks move, and uses editable Seed plus
+  **Subsample** for intentional variation. Isolated pupil points are promoted
+  to small eye marks and nose interiors receive a seeded selection variant.
 - Uses the existing shared CPU/Metal ribbon stroke path and persists its settings
   without breaking presets written before Portrait existed.
 
@@ -52,17 +84,22 @@ but macOS test execution completes successfully; no simulator is used here.
 3. Start with Follow `0.72` and Flourish `0.20`.
 4. Move through expressions and body poses, then compare Fluid, Cubist, and
    Ornate. Increase Follow for likeness; reduce it for stronger idealization.
+   Use Seed/Shuffle and Organic variation to compare repeatable drawing looks.
+   Enable Body outline to add a line-based scalp-and-shoulder silhouette. The
+   Portrait toggle requests the Person contour automatically; Marks → Contour
+   remains the place to tune its detail.
 5. In Layers, make at least one frame presenter-only and another program-only.
    Open Output with source Presentation and confirm each destination contains
    only its selected frames.
 
 ## Known First-Slice Limits / Next Work
 
-- Face and body are separate continuous routes rather than one literal
-  pen-down path across the whole person.
-- The semantic itinerary and connectors are intentionally simple. Live tuning
-  should refine which features are visited, connector placement, and the amount
-  of characteristic asymmetry in each style.
+- The default mode still renders face, body, and outline as separate continuous
+  routes. Unified mode is the experimental single-pen alternative and may need
+  more semantic affinity tuning for expressive poses.
+- The semantic itinerary remains intentionally stylized. Live tuning should
+  refine the semantic affinity scores, segment selection, crown placement, and
+  the amount of characteristic asymmetry in each style.
 - Multiple detected people are not yet assigned independent portrait identities;
   this first slice is aimed at one presenter.
 - Artistic styles currently deform live landmark geometry directly. A later

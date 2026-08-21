@@ -8,7 +8,38 @@ using namespace metal;
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
 
 struct OpticalFlowParams { float gain; };
-struct LevelsParams { float blackPoint; float whitePoint; float gamma; };
+struct LevelsParams {
+    float blackPoint;
+    float whitePoint;
+    float gamma;
+    float gain;
+    float softClip;
+};
+struct DuotoneParams {
+    float4 shadowTint;
+    float4 highlightTint;
+    float strength;
+    float blackPoint;
+    float whitePoint;
+    float gamma;
+    uint invert;
+};
+struct PatternParams {
+    float scale;       // cell/stripe period in pixels
+    float thickness;   // dot or stripe width in pixels
+    float strength;    // tonal contrast / effect blend
+    float angle;       // stripe angle in radians
+    float softness;    // edge softness (also rounds pixel dots)
+    float sampling;    // local feature/luminance sampling amount
+    float variationScale; // longitudinal stripe variation scale
+    float dotResponse; // dot size response to tone/features (0 constant, 1 proportional)
+    float stripeResponse; // stripe width response (0 flat, 1 baseline, >1 exaggerated)
+    float stripeBleed; // permitted overlap beyond one stripe period
+    uint invert;       // invert luminance before quantising
+    uint transparentBackground;
+    float4 foregroundTint;
+    float4 backgroundTint;
+};
 
 // Vector fields first so Swift `MemoryLayout` matches without manual padding.
 struct ThresholdParams {
@@ -229,7 +260,362 @@ kernel void effect_levels(texture2d<float, access::read> inTex [[texture(0)]],
     float span = max(0.001, p.whitePoint - p.blackPoint);
     rgb = clamp((rgb - p.blackPoint) / span, 0.0, 1.0);
     rgb = pow(rgb, float3(1.0 / max(0.01, p.gamma)));
+    // Gain expands or compresses around middle gray. Soft clip adds a
+    // smooth shoulder at both extremes instead of a binary threshold.
+    rgb = clamp((rgb - 0.5) * max(0.01, p.gain) + 0.5, 0.0, 1.0);
+    float shoulder = clamp(p.softClip, 0.0, 1.0) * 0.45;
+    float3 softened = smoothstep(float3(shoulder),
+                                 float3(1.0 - shoulder), rgb);
+    rgb = mix(rgb, softened, clamp(p.softClip, 0.0, 1.0));
     outTex.write(float4(rgb * c.a, c.a), gid);
+}
+
+// A smooth two-colour tonal remap. It preserves the source alpha so it can be
+// layered over paper or other transparent effects without creating a matte.
+kernel void effect_duotone(texture2d<float, access::read> inTex [[texture(0)]],
+                           texture2d<float, access::write> outTex [[texture(1)]],
+                           constant DuotoneParams &p [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    float4 c = inTex.read(gid);
+    float3 rgb = c.a > 1e-5 ? c.rgb / c.a : c.rgb;
+    float span = max(0.001, p.whitePoint - p.blackPoint);
+    float tone = clamp((dot(rgb, kLuma) - p.blackPoint) / span, 0.0, 1.0);
+    tone = pow(tone, 1.0 / max(0.01, p.gamma));
+    if (p.invert == 1u) tone = 1.0 - tone;
+    float3 mapped = mix(p.shadowTint.rgb, p.highlightTint.rgb, tone);
+    rgb = mix(rgb, mapped, max(0.0, p.strength));
+    outTex.write(float4(rgb * c.a, c.a), gid);
+}
+
+// The pattern passes deliberately stay local and deterministic: source
+// cells jitter by a stable hash and sample nearby luminance/features, so they
+// do not shimmer as the camera moves. Marks use explicit ink/paper tints and
+// can leave the paper transparent for compositing over another layer.
+static float patternTone(float3 rgb, uint invert) {
+    float tone = 1.0 - dot(rgb, kLuma); // dark source -> more ink
+    return invert == 1u ? 1.0 - tone : tone;
+}
+
+static float2 patternHash2(float2 p) {
+    return fract(sin(float2(dot(p, float2(127.1, 311.7)),
+                            dot(p, float2(269.5, 183.3)))) * 43758.5453);
+}
+
+// Keep fine scales precise, then gently widen the response above the knee so
+// the coarse end of the slider does not feel compressed. Numeric values above
+// the UI range continue through this curve instead of being clipped.
+static float patternCellScale(float raw) {
+    float scale = max(2.0, raw);
+    constexpr float knee = 12.0;
+    if (scale <= knee) return scale;
+    return knee + pow(scale - knee, 1.10);
+}
+
+static float4 patternComposite(float mark, float4 source, constant PatternParams &p) {
+    float sourceAlpha = clamp(source.a, 0.0, 1.0);
+    float foregroundAlpha = sourceAlpha * clamp(p.foregroundTint.a * mark, 0.0, 1.0);
+    float backgroundAlpha = p.transparentBackground == 1u
+        ? 0.0
+        : sourceAlpha * clamp(p.backgroundTint.a, 0.0, 1.0);
+    float outAlpha = foregroundAlpha + backgroundAlpha * (1.0 - foregroundAlpha);
+    float3 outRGB = p.foregroundTint.rgb * foregroundAlpha
+        + p.backgroundTint.rgb * backgroundAlpha * (1.0 - foregroundAlpha);
+    return float4(outRGB, outAlpha);
+}
+
+static float patternToneAt(texture2d<float, access::sample> tex,
+                            sampler s, float2 point, float2 size, uint invert) {
+    float4 sample = tex.sample(s, point / size);
+    // Camera and composited layers are premultiplied. Read the straight colour
+    // for analysis so transparent edges do not become artificial dark ink.
+    float3 rgb = sample.a > 1e-5 ? sample.rgb / sample.a : sample.rgb;
+    return patternTone(rgb, invert);
+}
+
+// Candidate positions for the independent blue-noise pass. One candidate per
+// cell is enough to keep the shader bounded; the rank/spacing gate below turns
+// this jittered lattice into a progressive Poisson-like prefix.
+static float2 blueNoiseCenter(float2 cellID, float cell) {
+    float2 h = patternHash2(cellID + float2(97.13, 43.71));
+    return (cellID + 0.5) * cell + (h - 0.5) * cell * 0.84;
+}
+
+static float blueNoiseRank(float2 cellID) {
+    // A second hash decorrelates ordering from the position jitter. The same
+    // rank is used for every frame, so changing luminance only reveals/hides a
+    // stable subset instead of making particles crawl.
+    return patternHash2(cellID + float2(211.7, 83.9)).x;
+}
+
+static bool blueNoiseAccepted(float2 cellID, float2 center, float cell,
+                              float sampling) {
+    float rank = blueNoiseRank(cellID);
+    float minimumDistance = cell * mix(0.42, 0.82, sampling);
+    // The radius is below one cell at the normal settings, but a 5x5 search
+    // keeps the guarantee intact when the user enters a larger sampling value.
+    for (int oy = -2; oy <= 2; ++oy) {
+        for (int ox = -2; ox <= 2; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            float2 neighbourID = cellID + float2(ox, oy);
+            if (blueNoiseRank(neighbourID) >= rank) continue;
+            float2 neighbour = blueNoiseCenter(neighbourID, cell);
+            if (length(center - neighbour) < minimumDistance) return false;
+        }
+    }
+    return true;
+}
+
+// A fresh, feature-aware blue-noise stippler. It follows the same useful
+// property as the reference progressive Poisson list: low-density renders are
+// prefixes of a well-spaced point order. Tone controls the broad mass of ink,
+// while the local gradient term allocates extra points to eyes, mouths, edges,
+// and other high-frequency detail.
+kernel void effect_blue_noise_stipple(texture2d<float, access::sample> inTex [[texture(0)]],
+                                      texture2d<float, access::write> outTex [[texture(1)]],
+                                      constant PatternParams &p [[buffer(0)]],
+                                      uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(outTex.get_width(), outTex.get_height());
+    float2 pos = float2(gid) + 0.5;
+    float cell = patternCellScale(p.scale);
+    float2 cellID = floor(pos / cell);
+    float mark = 0.0;
+    float sampleRadius = max(1.0, cell * mix(0.32, 1.25, p.sampling));
+
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            float2 candidateID = cellID + float2(ox, oy);
+            float2 center = blueNoiseCenter(candidateID, cell);
+            if (!blueNoiseAccepted(candidateID, center, cell, p.sampling)) continue;
+
+            float tone = patternToneAt(inTex, s, center, size, p.invert);
+            float toneL = patternToneAt(inTex, s, center + float2(-sampleRadius, 0), size, p.invert);
+            float toneR = patternToneAt(inTex, s, center + float2(sampleRadius, 0), size, p.invert);
+            float toneU = patternToneAt(inTex, s, center + float2(0, -sampleRadius), size, p.invert);
+            float toneD = patternToneAt(inTex, s, center + float2(0, sampleRadius), size, p.invert);
+            float toneUL = patternToneAt(inTex, s, center + float2(-sampleRadius, -sampleRadius), size, p.invert);
+            float toneUR = patternToneAt(inTex, s, center + float2(sampleRadius, -sampleRadius), size, p.invert);
+            float toneDL = patternToneAt(inTex, s, center + float2(-sampleRadius, sampleRadius), size, p.invert);
+            float toneDR = patternToneAt(inTex, s, center + float2(sampleRadius, sampleRadius), size, p.invert);
+
+            float gradientX = (toneR - toneL) * 0.5;
+            float gradientY = (toneD - toneU) * 0.5;
+            float cardinalFeature = max(abs(toneR - toneL), abs(toneD - toneU));
+            float diagonalFeature = max(abs(toneUL - toneDR), abs(toneUR - toneDL));
+            float feature = max(cardinalFeature, diagonalFeature * 0.7);
+            float featureWeight = smoothstep(0.025, 0.24, feature);
+
+            // Gamma keeps highlights quiet while preserving midtone structure;
+            // featureWeight brings back thin, high-contrast facial details.
+            float tonalExponent = max(0.35, mix(2.35, 1.35, p.strength));
+            float tonalWeight = pow(clamp(tone, 0.0, 1.0), tonalExponent);
+            float density = clamp(
+                tonalWeight * (0.18 + 1.08 * p.strength)
+                + featureWeight * (0.08 + 0.92 * p.sampling), 0.0, 1.0);
+            float coverage = clamp(density * (0.78 + 0.22 * p.strength), 0.0, 1.0);
+            float rank = blueNoiseRank(candidateID);
+            float presence = smoothstep(rank - 0.025, rank + 0.025, coverage);
+
+            // A restrained attraction gives edges a more legible contour while
+            // keeping the blue-noise spacing visually intact.
+            float2 gradient = float2(gradientX, gradientY);
+            float gradientLength = length(gradient);
+            if (gradientLength > 1e-4) {
+                center += gradient / gradientLength * cell * (0.05 + 0.11 * p.sampling) * featureWeight;
+            }
+
+            float signal = clamp(tonalWeight + featureWeight * 0.7, 0.0, 1.0);
+            float radiusScale = mix(1.0, mix(0.38, 1.55, signal),
+                                    max(0.0, p.dotResponse));
+            float radius = max(0.35, p.thickness * radiusScale);
+            float edge = max(0.2, p.softness * 1.4);
+            float distanceToParticle = length(pos - center);
+            float candidateMask = (1.0 - smoothstep(radius - edge, radius + edge,
+                                                    distanceToParticle)) * presence;
+            mark = max(mark, candidateMask);
+        }
+    }
+
+    float4 source = inTex.sample(s, pos / size);
+    outTex.write(patternComposite(mark, source, p), gid);
+}
+
+static float2 stippleRawCenter(float2 cellID, float cell, float sampling) {
+    float2 h = patternHash2(cellID + float2(17.13, 7.91));
+    float theta = 6.2831853 * h.x;
+    // A radial multi-jitter keeps the candidate set non-axis-aligned while
+    // leaving enough room for the local Poisson-distance gate below.
+    float jitterRadius = cell * (0.18 + 0.36 * h.y) * (0.7 + 0.35 * sampling);
+    return (cellID + 0.5) * cell
+        + float2(cos(theta), sin(theta)) * jitterRadius;
+}
+
+static bool stipplePoissonAccepted(float2 cellID, float2 center,
+                                   float cell, float sampling) {
+    float rank = patternHash2(cellID + float2(61.7, 29.4)).x;
+    float minimumDistance = cell * (0.34 + 0.08 * (1.0 - sampling));
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            float2 neighbourID = cellID + float2(ox, oy);
+            float2 neighbourCenter = stippleRawCenter(neighbourID, cell, sampling);
+            float neighbourRank = patternHash2(neighbourID + float2(61.7, 29.4)).x;
+            if (neighbourRank < rank && length(center - neighbourCenter) < minimumDistance) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// A deterministic multi-jittered particle field. Each cell contributes one
+// candidate, but pixels search neighbouring cells so jittered particles are
+// not clipped at cell boundaries. Candidate rank controls density while
+// local tone contrast attracts particles toward features; in flat regions the
+// luminance term alone controls the field.
+kernel void effect_stipple(texture2d<float, access::sample> inTex [[texture(0)]],
+                           texture2d<float, access::write> outTex [[texture(1)]],
+                           constant PatternParams &p [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(outTex.get_width(), outTex.get_height());
+    float2 pos = float2(gid) + 0.5;
+    float cell = patternCellScale(p.scale);
+    float2 cellID = floor(pos / cell);
+    float dotMask = 0.0;
+
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            float2 candidateID = cellID + float2(ox, oy);
+            float2 center = stippleRawCenter(candidateID, cell, p.sampling);
+            if (!stipplePoissonAccepted(candidateID, center, cell, p.sampling)) continue;
+
+            float sampleRadius = max(1.0, cell * mix(0.16, 0.72, p.sampling));
+            float tone = patternToneAt(inTex, s, center, size, p.invert);
+            float toneL = patternToneAt(inTex, s, center + float2(-sampleRadius, 0), size, p.invert);
+            float toneR = patternToneAt(inTex, s, center + float2(sampleRadius, 0), size, p.invert);
+            float toneU = patternToneAt(inTex, s, center + float2(0, -sampleRadius), size, p.invert);
+            float toneD = patternToneAt(inTex, s, center + float2(0, sampleRadius), size, p.invert);
+            float feature = max(max(abs(toneR - toneL), abs(toneD - toneU)),
+                                max(abs(toneR - tone), abs(toneD - tone)));
+
+            // Move candidates toward the darker/high-ink side of a local
+            // contrast feature. On flat imagery this is effectively zero and
+            // the tone/density term produces the particles instead.
+            float bestTone = tone;
+            float2 bestDirection = float2(0);
+            if (toneL > bestTone) { bestTone = toneL; bestDirection = float2(-1, 0); }
+            if (toneR > bestTone) { bestTone = toneR; bestDirection = float2(1, 0); }
+            if (toneU > bestTone) { bestTone = toneU; bestDirection = float2(0, -1); }
+            if (toneD > bestTone) { bestTone = toneD; bestDirection = float2(0, 1); }
+            float attraction = clamp(p.sampling * (0.25 + feature * 2.2), 0.0, 1.0);
+            if (length(bestDirection) > 0.0) {
+                center += bestDirection * cell * (0.12 + 0.25 * attraction);
+            }
+
+            float density = clamp(tone * (0.35 + 1.55 * p.strength)
+                                  + feature * (0.25 + 0.9 * p.sampling), 0.0, 1.0);
+            float rank = patternHash2(candidateID + float2(61.7, 29.4)).x;
+            // Progressive subset: reveal the same blue-noise ordering at
+            // lighter densities instead of resampling/clustering points.
+            float presence = smoothstep(rank - 0.035, rank + 0.035,
+                                        density * (0.72 + 0.55 * p.strength));
+            float signal = clamp(tone + feature * 0.8, 0.0, 1.0);
+            float radiusScale = mix(1.0, mix(0.42, 1.45, signal),
+                                    max(0.0, p.dotResponse));
+            float radius = max(0.45, p.thickness * radiusScale);
+            float edge = max(0.25, p.softness * 1.6);
+            float distanceToParticle = length(pos - center);
+            float candidateMask = (1.0 - smoothstep(radius - edge, radius + edge,
+                                                    distanceToParticle)) * presence;
+            dotMask = max(dotMask, candidateMask);
+        }
+    }
+
+    float4 source = inTex.sample(s, (pos / size));
+    outTex.write(patternComposite(dotMask, source, p), gid);
+}
+
+kernel void effect_stripes(texture2d<float, access::sample> inTex [[texture(0)]],
+                           texture2d<float, access::write> outTex [[texture(1)]],
+                           constant PatternParams &p [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(outTex.get_width(), outTex.get_height());
+    float2 uv = (float2(gid) + 0.5) / size;
+    float4 source = inTex.sample(s, uv);
+    float2 centered = float2(gid) + 0.5 - size * 0.5;
+    float angle = p.angle;
+    float2 normal = float2(-sin(angle), cos(angle));
+    float across = dot(centered, normal);
+    float period = patternCellScale(p.scale);
+    float stripeOffset = (fract(across / period + 0.5) - 0.5) * period;
+    float phase = abs(stripeOffset / max(1.0, period * 0.5));
+    float2 stripeCenter = float2(gid) + 0.5 - normal * stripeOffset;
+    float2 along = float2(cos(angle), sin(angle));
+    // Sampling amount controls how much tone/feature information contributes;
+    // variationScale controls the spatial wavelength of that information.
+    float sampleDistance = max(1.0, period * mix(0.1, 0.8, p.sampling)
+                               * max(0.1, p.variationScale));
+    float4 centerSource = inTex.sample(s, stripeCenter / size);
+    float4 alongA = inTex.sample(s, (stripeCenter + along * sampleDistance) / size);
+    float4 alongB = inTex.sample(s, (stripeCenter - along * sampleDistance) / size);
+    float tone = patternTone(centerSource.rgb, p.invert);
+    float toneA = patternTone(alongA.rgb, p.invert);
+    float toneB = patternTone(alongB.rgb, p.invert);
+    float feature = max(max(abs(toneA - tone), abs(toneB - tone)),
+                        abs(toneA - toneB) * 0.5);
+    tone = clamp(mix(tone, (toneA + toneB) * 0.5, p.sampling * 0.65)
+                 + feature * p.sampling * 0.95, 0.0, 1.0);
+    float baseWidth = max(0.01, p.thickness / period);
+    // The reference technique maps source brightness to the width of short
+    // stripe strokes. Keep response 1 equivalent to the original SketchCam
+    // behavior, let 0 flatten the tonal modulation, and allow values above
+    // 1 to exaggerate the width range. Bleed is an explicit upper headroom
+    // control: at zero neighbouring stripes can meet but do not overlap;
+    // higher values let broad dark features merge into adjacent strokes.
+    float response = max(0.0, p.stripeResponse);
+    float responsiveTone = clamp(0.5 + (tone - 0.5) * response, 0.0, 1.0);
+    float widthSignal = responsiveTone * (0.35 + p.strength);
+    float maxWidth = 1.0 + max(0.0, p.stripeBleed);
+    float width = clamp(baseWidth * mix(0.35, 2.35, widthSignal), 0.01, maxWidth);
+    float edge = max(0.003, p.softness * 0.18);
+    float stripeMask = 1.0 - smoothstep(width - edge, width + edge, phase);
+    outTex.write(patternComposite(stripeMask, source, p), gid);
+}
+
+kernel void effect_pixelate(texture2d<float, access::sample> inTex [[texture(0)]],
+                            texture2d<float, access::write> outTex [[texture(1)]],
+                            constant PatternParams &p [[buffer(0)]],
+                            uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= outTex.get_width() || gid.y >= outTex.get_height()) return;
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(outTex.get_width(), outTex.get_height());
+    float2 pos = float2(gid) + 0.5;
+    float cell = patternCellScale(p.scale);
+    float2 cellID = floor(pos / cell);
+    float2 center = (cellID + 0.5) * cell;
+    float4 source = inTex.sample(s, center / size);
+    float tone = patternTone(source.rgb, p.invert);
+    float sampleRadius = max(1.0, cell * mix(0.08, 0.55, p.sampling));
+    float neighboringTone = patternTone(
+        inTex.sample(s, (center + float2(sampleRadius, sampleRadius)) / size).rgb,
+        p.invert
+    );
+    tone = mix(tone, neighboringTone, p.sampling * 0.4);
+    float2 local = abs(fract(pos / cell) - 0.5) * 2.0;
+    float squareDistance = max(local.x, local.y);
+    float roundDistance = length(local);
+    float shapeDistance = mix(squareDistance, roundDistance, max(0.0, p.softness));
+    float radius = clamp(0.06 + tone * (0.68 + 0.27 * p.strength), 0.03, 0.98);
+    float edge = max(0.003, p.softness * 0.16);
+    float dotMask = 1.0 - smoothstep(radius - edge, radius + edge, shapeDistance);
+    float blend = max(0.0, p.strength);
+    outTex.write(patternComposite(dotMask * blend, source, p), gid);
 }
 
 // Silhouette: fill the person matte region with a flat colour (ignores the

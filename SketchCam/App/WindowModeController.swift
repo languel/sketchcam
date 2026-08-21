@@ -5,11 +5,11 @@ import SwiftUI
 /// always-on-top, and the presentation-mode macro. SwiftUI doesn't expose
 /// the window, so `WindowAccessor` hands it over after the view appears.
 final class WindowModeController: ObservableObject {
-    @Published var panelVisible = true
+    @Published var panelVisible = true { didSet { persistState() } }
     /// true = panel sits beside the canvas and the canvas shrinks to fit;
     /// false = panel floats over the canvas (canvas full-size, partly obscured).
-    @Published var panelFit = true
-    @Published var decorated = true { didSet { apply() } }
+    @Published var panelFit = true { didSet { persistState() } }
+    @Published var decorated = true { didSet { apply(); persistState() } }
 
     /// Show the panel in fit-beside-canvas mode (or hide if already shown that way).
     func togglePanelFit() {
@@ -22,8 +22,8 @@ final class WindowModeController: ObservableObject {
         if panelVisible && !panelFit { panelVisible = false }
         else { panelFit = false; panelVisible = true }
     }
-    @Published var transparent = false { didSet { apply() } }
-    @Published var alwaysOnTop = false { didSet { apply() } }
+    @Published var transparent = false { didSet { apply(); persistState() } }
+    @Published var alwaysOnTop = false { didSet { apply(); persistState() } }
     @Published private(set) var presentationMode = false
     @Published private(set) var pipMode = false
 
@@ -41,6 +41,28 @@ final class WindowModeController: ObservableObject {
     private var beforePresentation: Snapshot?
     private var frameBeforePIP: NSRect?
     private var dragMonitor: Any?
+    private var restoringState = false
+
+    init() {
+        restoringState = true
+        let defaults = UserDefaults.standard
+        panelVisible = defaults.object(forKey: "sketchcam.window.panelVisible") as? Bool ?? panelVisible
+        panelFit = defaults.object(forKey: "sketchcam.window.panelFit") as? Bool ?? panelFit
+        decorated = defaults.object(forKey: "sketchcam.window.decorated") as? Bool ?? decorated
+        transparent = defaults.object(forKey: "sketchcam.window.transparent") as? Bool ?? transparent
+        alwaysOnTop = defaults.object(forKey: "sketchcam.window.alwaysOnTop") as? Bool ?? alwaysOnTop
+        restoringState = false
+    }
+
+    private func persistState() {
+        guard !restoringState else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(panelVisible, forKey: "sketchcam.window.panelVisible")
+        defaults.set(panelFit, forKey: "sketchcam.window.panelFit")
+        defaults.set(decorated, forKey: "sketchcam.window.decorated")
+        defaults.set(transparent, forKey: "sketchcam.window.transparent")
+        defaults.set(alwaysOnTop, forKey: "sketchcam.window.alwaysOnTop")
+    }
 
     deinit {
         if let dragMonitor {

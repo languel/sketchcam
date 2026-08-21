@@ -275,7 +275,8 @@ public struct ResolvedPaperConfig: Hashable, Sendable {
 /// A single struct carries the params for every effect kind; only the fields
 /// relevant to `kind` are used. Re-homes the legacy effect flags in a later step.
 public enum EffectKind: String, Codable, Sendable, CaseIterable {
-    case threshold, outline, blur, invert, mirror, personKey, opticalFlow, levels
+    case threshold, outline, blur, invert, mirror, personKey, opticalFlow, levels, duotone
+    case blueNoiseStipple, stipple, stripes, pixelate
 
     public var title: String {
         switch self {
@@ -286,15 +287,27 @@ public enum EffectKind: String, Codable, Sendable, CaseIterable {
         case .mirror: return "Mirror"
         case .personKey: return "Person Key"
         case .opticalFlow: return "Optical Flow"
-        case .levels: return "Levels"
+        case .levels: return "Levels / Gain"
+        case .duotone: return "Duotone / Tint"
+        case .blueNoiseStipple: return "Blue-noise Stipple"
+        case .stipple: return "Stipple"
+        case .stripes: return "Stripes"
+        case .pixelate: return "Pixel dots"
         }
     }
 
     /// Which parameter controls this kind shows in the editor.
-    public var usesAmount: Bool { self == .threshold || self == .outline || self == .blur || self == .opticalFlow }
+    public var usesAmount: Bool {
+        self == .threshold || self == .outline || self == .blur || self == .opticalFlow ||
+        self == .duotone ||
+        self == .blueNoiseStipple || self == .stipple || self == .stripes || self == .pixelate
+    }
     public var usesColor: Bool { self == .outline }
     public var usesThresholdOptions: Bool { self == .threshold }
-    public var usesInvert: Bool { self == .personKey }   // invert = key out the person
+    public var usesInvert: Bool { self == .personKey || usesPatternOptions }
+    public var usesPatternOptions: Bool {
+        self == .blueNoiseStipple || self == .stipple || self == .stripes || self == .pixelate
+    }
     /// Effects that need the shared person matte plumbed into the chain.
     public var needsPersonMatte: Bool { self == .personKey }
 }
@@ -304,7 +317,7 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
     public var kind: EffectKind
     public var enabled: Bool
     public var amount: Float        // threshold level / edge strength / blur radius
-    public var color: RGBAColor     // outline colour
+    public var color: RGBAColor     // outline colour / pattern foreground tint
     public var thickness: Float     // outline thickness
     public var invert: Bool         // threshold invert / personKey: key out person
     public var inkOnly: Bool        // threshold: transparent paper
@@ -312,11 +325,49 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
     public var levelBlack: Float
     public var levelWhite: Float
     public var levelGamma: Float
+    /// Contrast gain around the midpoint for the Levels / Gain effect.
+    public var levelGain: Float
+    /// Blends a smooth shoulder into the remap near black and white extremes.
+    public var levelSoftClip: Float
+    /// Pattern controls shared by the stipple, stripe, and pixel-dot passes.
+    /// Values are intentionally effect-agnostic so old saved graphs remain
+    /// compact while each effect can give them a semantic label in the UI.
+    public var patternScale: Float
+    public var patternAngle: Float
+    public var patternSoftness: Float
+    /// Feature/luminance sampling radius and response for print-like passes.
+    public var patternSampling: Float
+    /// Longitudinal feature scale for the stripe pass. Values above one make
+    /// width changes broader; values below one make them track fine detail.
+    public var patternVariationScale: Float
+    /// How strongly dot radius follows sampled tone and local feature energy.
+    /// Zero keeps a constant dot size; one makes the response fully proportional.
+    public var patternDotResponse: Float
+    /// How strongly stripe width follows sampled tone and local feature energy.
+    /// Zero keeps stripes near their base width; one preserves the original
+    /// tonal response; larger values exaggerate the range and can overlap.
+    public var patternStripeResponse: Float
+    /// How far stripe width may exceed one stripe period, allowing adjacent
+    /// strokes to bleed together. Zero keeps neighbouring stripes separated.
+    public var patternStripeBleed: Float
+    /// Pattern paper tint. `color` is the foreground/ink tint for patterns.
+    public var backgroundColor: RGBAColor
+    /// When true, only foreground marks are emitted; paper remains transparent.
+    public var transparentBackground: Bool
 
     public init(id: UUID = UUID(), kind: EffectKind, enabled: Bool = true,
                 amount: Float = 0.5, color: RGBAColor = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
                 thickness: Float = 2, invert: Bool = false, inkOnly: Bool = false, silhouette: Bool = false,
-                levelBlack: Float = 0, levelWhite: Float = 1, levelGamma: Float = 1) {
+                levelBlack: Float = 0, levelWhite: Float = 1, levelGamma: Float = 1,
+                levelGain: Float = 1, levelSoftClip: Float = 0.2,
+                patternScale: Float = 8, patternAngle: Float = 0, patternSoftness: Float = 0.35,
+                patternSampling: Float = 0.5,
+                patternVariationScale: Float = 1,
+                patternDotResponse: Float = 0,
+                patternStripeResponse: Float = 1,
+                patternStripeBleed: Float = 0.5,
+                backgroundColor: RGBAColor = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1),
+                transparentBackground: Bool = true) {
         self.id = id
         self.kind = kind
         self.enabled = enabled
@@ -329,12 +380,28 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
         self.levelBlack = levelBlack
         self.levelWhite = levelWhite
         self.levelGamma = levelGamma
+        self.levelGain = levelGain
+        self.levelSoftClip = levelSoftClip
+        self.patternScale = patternScale
+        self.patternAngle = patternAngle
+        self.patternSoftness = patternSoftness
+        self.patternSampling = patternSampling
+        self.patternVariationScale = patternVariationScale
+        self.patternDotResponse = patternDotResponse
+        self.patternStripeResponse = patternStripeResponse
+        self.patternStripeBleed = patternStripeBleed
+        self.backgroundColor = backgroundColor
+        self.transparentBackground = transparentBackground
     }
 
     // Tolerant decoding so chains persisted before a field existed still load.
     private enum CodingKeys: String, CodingKey {
         case id, kind, enabled, amount, color, thickness, invert, inkOnly, silhouette,
-             levelBlack, levelWhite, levelGamma
+             levelBlack, levelWhite, levelGamma, levelGain, levelSoftClip,
+             patternScale, patternAngle, patternSoftness,
+             patternSampling, patternVariationScale, patternDotResponse,
+             patternStripeResponse, patternStripeBleed,
+             backgroundColor, transparentBackground
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -350,6 +417,18 @@ public struct EffectConfig: Identifiable, Codable, Sendable, Equatable {
         levelBlack = try c.decodeIfPresent(Float.self, forKey: .levelBlack) ?? 0
         levelWhite = try c.decodeIfPresent(Float.self, forKey: .levelWhite) ?? 1
         levelGamma = try c.decodeIfPresent(Float.self, forKey: .levelGamma) ?? 1
+        levelGain = try c.decodeIfPresent(Float.self, forKey: .levelGain) ?? 1
+        levelSoftClip = try c.decodeIfPresent(Float.self, forKey: .levelSoftClip) ?? 0.2
+        patternScale = try c.decodeIfPresent(Float.self, forKey: .patternScale) ?? 8
+        patternAngle = try c.decodeIfPresent(Float.self, forKey: .patternAngle) ?? 0
+        patternSoftness = try c.decodeIfPresent(Float.self, forKey: .patternSoftness) ?? 0.35
+        patternSampling = try c.decodeIfPresent(Float.self, forKey: .patternSampling) ?? 0.5
+        patternVariationScale = try c.decodeIfPresent(Float.self, forKey: .patternVariationScale) ?? 1
+        patternDotResponse = try c.decodeIfPresent(Float.self, forKey: .patternDotResponse) ?? 0
+        patternStripeResponse = try c.decodeIfPresent(Float.self, forKey: .patternStripeResponse) ?? 1
+        patternStripeBleed = try c.decodeIfPresent(Float.self, forKey: .patternStripeBleed) ?? 0.5
+        backgroundColor = try c.decodeIfPresent(RGBAColor.self, forKey: .backgroundColor) ?? RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
+        transparentBackground = try c.decodeIfPresent(Bool.self, forKey: .transparentBackground) ?? true
     }
 }
 
@@ -907,21 +986,25 @@ public extension LayerGraph {
         // enabled. Source families (video/movie/solid/paper/personMatte) are
         // user-curated: seeded once in the initial graph and never resurrected,
         // so deleting the Camera (e.g. to use a Solid instead) sticks.
+        //
+        // Placement must consider user-created source layers too. A workspace
+        // can contain Camera 1 + Camera 2, both unmanaged; inserting Drawing at
+        // index zero would put it underneath both cameras and visibly reorder
+        // the stack when the user merely toggles a drawing algorithm.
         let autoFamilies: Set<String> = ["overlay", "ink", "web"]
         for dl in desired.layers {
             guard let f = family(desired, dl), autoFamilies.contains(f),
                   !keptFamilies.contains(f),
                   !resultNodes.contains(where: { $0.kind.family == f }),
                   let dn = desired.node(dl.node) else { continue }
-            // How many desired-managed families precede f and were kept?
-            let priorsKept = desired.layers.prefix(while: { family(desired, $0) != f })
-                .reduce(0) { acc, prior in keptFamilies.contains(family(desired, prior) ?? "") ? acc + 1 : acc }
-            // Walk result to just after that many kept-managed layers.
-            var idx = 0, seenManaged = 0
-            while idx < resultNodes.count, seenManaged < priorsKept {
-                if resultNodes[idx].managed { seenManaged += 1 }
-                idx += 1
-            }
+            // Place the new family immediately after the last existing layer
+            // belonging to any canonical predecessor family. This preserves
+            // duplicate user-created sources and keeps their relative order.
+            let priorFamilies = Set(desired.layers
+                .prefix(while: { family(desired, $0) != f })
+                .compactMap { family(desired, $0) })
+            let idx = resultNodes.lastIndex { priorFamilies.contains($0.kind.family) }
+                .map { $0 + 1 } ?? 0
             resultNodes.insert(dn, at: min(idx, resultNodes.count))
             resultLayers.insert(dl, at: min(idx, resultLayers.count))
             keptFamilies.append(f)

@@ -1,6 +1,8 @@
 import CoreGraphics
 import XCTest
 @testable import SketchCam
+import SketchCamCore
+import SketchCamShared
 
 final class SystemPointerControllerTests: XCTestCase {
     private let screen = CGRect(x: 100, y: 50, width: 1_000, height: 500)
@@ -178,5 +180,44 @@ final class SystemPointerControllerTests: XCTestCase {
             detectionID: 1,
             sourceSize: CGSize(width: 640, height: 480)
         )
+    }
+}
+
+final class PipelineStateStoreTests: XCTestCase {
+    func testSessionSnapshotRoundTripsLayerAndInputChoices() throws {
+        let suiteName = "PipelineStateStoreTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var settings = ProcessingSettings()
+        settings.threshold = 0.73
+        settings.mirror = true
+        settings.useLayerGraph = true
+
+        let snapshot = SketchCamSessionSnapshot(
+            settings: settings,
+            outputFormatID: SketchCamFormats.hd.id,
+            selectedDeviceID: "camera-under-test",
+            frameSource: .movie,
+            movieURLString: "file:///tmp/session-movie.mp4",
+            movieBookmark: Data([1, 2, 3]),
+            webBookmark: Data([4, 5, 6]),
+            movieRate: 0.5,
+            inputResolution: .hd
+        )
+
+        let store = PipelineStateStore(defaults: defaults)
+        store.saveSession(snapshot)
+
+        let restored = try XCTUnwrap(store.loadSession())
+        XCTAssertEqual(restored.settings, settings)
+        XCTAssertEqual(restored.outputFormatID, SketchCamFormats.hd.id)
+        XCTAssertEqual(restored.selectedDeviceID, "camera-under-test")
+        XCTAssertEqual(restored.frameSource, .movie)
+        XCTAssertEqual(restored.movieURLString, "file:///tmp/session-movie.mp4")
+        XCTAssertEqual(restored.movieBookmark, Data([1, 2, 3]))
+        XCTAssertEqual(restored.webBookmark, Data([4, 5, 6]))
+        XCTAssertEqual(restored.movieRate, 0.5)
+        XCTAssertEqual(restored.inputResolution, .hd)
     }
 }

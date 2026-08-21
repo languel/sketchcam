@@ -77,21 +77,66 @@ Check:
 - Output preset in SketchCam.
 - Whether another app is already holding exclusive camera access.
 
+## Filter Stack Is Stuck Near 10 FPS
+
+First separate image effects from analysis work. In the Input tab, leave **GPU
+compositor (experimental)** enabled, set **Processing** to 720p or 540p, then
+open **Analysis** and turn off **Live feature analysis**. This bypasses
+MediaPipe/landmark and Vision person-matte requests while preserving the final
+Output resolution. Turn off **Segmentation / person matte** too unless the
+stack is intentionally testing Person Key or a matte-backed mask.
+
+Use the Performance panel to compare **Process** and **Frame total** after each
+change. Detect/Segment are last-run timings and can remain displayed briefly
+after a bypass; they are not proof that a new analysis request is still on the
+hot path. See [`notes/performance-plan.md`](performance-plan.md) for the
+filter-only workflow and the current compositor details.
+
+## Session state and camera recovery
+
+SketchCam saves the live session as controls change. This includes the layer
+graph and effect settings, selected output format, input resolution, camera
+device ID, source choice, movie playback rate, and Output-window/window-mode
+choices. A relaunch restores those values before the first frame is started.
+
+Camera device IDs can change when a camera is unplugged or renamed. On launch
+and whenever the app becomes active, SketchCam refreshes the device list and
+selects the remembered device when it is available, otherwise the first
+available camera. If macOS reports an undecided camera permission, the Camera
+tab offers **Request access**; if permission was denied, use **Open Settings**,
+enable SketchCam under Privacy & Security → Camera, return to the app, and
+click **Refresh**. The remembered camera source is then started automatically.
+
+If permission is unavailable, SketchCam keeps the session usable by falling
+back to the test pattern until access is restored. The app does not silently
+re-arm the system pointer; Input Map arming remains an explicit per-launch
+safety action.
+
+Local movie selections are stored with a security-scoped bookmark, so a picked
+file can be reopened after relaunch without choosing it again. If the file was
+moved or the bookmark is no longer valid, choose it again from **Movie → Open
+Movie…**.
+
+Local files used by the Web layer are restored the same way; remote `http(s)`
+URLs do not need a sandbox bookmark.
+
 ## Input Map Will Not Arm After Accessibility Approval
 
 Input Map requires the installed `/Applications/SketchCam.app` to be approved in
 **System Settings → Privacy & Security → Accessibility**. Development rebuilds
-change the app's code hash. macOS can leave the old SketchCam row visibly enabled
-while rejecting the newly built executable; the TCC log then reports `Failed to
-match existing code requirement` for `kTCCServiceAccessibility`.
+must use the stable `/Applications/SketchCam.app` bundle and the same signed
+designated requirement. The quick-run helpers intentionally never launch a
+DerivedData copy.
 
-Approve only after the final rebuild:
+One-time setup:
 
 1. Build and install with `./script/build_and_run.sh`.
-2. Toggle SketchCam off/on in Accessibility.
-3. If Input Map still says `Accessibility unavailable`, select SketchCam, remove
-   it with `−`, add `/Applications/SketchCam.app` again with `+`, and enable it.
-4. Quit and reopen SketchCam. Input Map should say `Ready to arm`.
+2. Add `/Applications/SketchCam.app` and enable it.
+3. Return to SketchCam, click Refresh, and Arm. Input Map should say `Ready to arm`.
+
+If a previous development certificate was used, macOS may retain a stale TCC
+row. Remove that one row and add `/Applications/SketchCam.app` again. Future
+source-only rebuilds should not require repeating this.
 
 The scoped Terminal reset is an alternative to steps 2–3:
 
@@ -99,9 +144,9 @@ The scoped Terminal reset is an alternative to steps 2–3:
 tccutil reset Accessibility io.github.languel.sketchcam
 ```
 
-Then reopen SketchCam, click **Request access**, approve the current installed
-build, reopen once more, and Arm. `Request access` opens the Accessibility pane
-when macOS suppresses a repeated prompt for a stale entry.
+Then reopen SketchCam, click **Request access**, approve the installed app, and
+click Refresh. `Request access` is now explicit; Arm no longer reopens System
+Settings on every failed attempt.
 
 ## Remove The Extension
 

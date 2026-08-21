@@ -24,7 +24,7 @@ final class SourcePreviewReadouts: ObservableObject {
 }
 
 final class SketchCamViewModel: ObservableObject {
-    enum FrameSource: String, CaseIterable, Identifiable {
+    enum FrameSource: String, CaseIterable, Identifiable, Codable {
         case camera
         case movie
 
@@ -38,22 +38,29 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     @Published var cameraDevices: [CameraDeviceOption] = []
-    @Published var selectedDeviceID: String?
+    @Published var selectedDeviceID: String? {
+        didSet { persistSession() }
+    }
     @Published var frameSource = FrameSource.camera {
         didSet {
             guard oldValue != frameSource else { return }
-            applyFrameSource()
+            if !isRestoringSession { applyFrameSource() }
+            persistSession()
         }
     }
     @Published var movieURL: URL? {
         didSet {
-            if frameSource == .movie {
+            if !isRestoringSession, frameSource == .movie {
                 applyFrameSource()
             }
+            persistSession()
         }
     }
     @Published var movieRate: Double = 1.0 {
-        didSet { movieSource.setRate(Float(movieRate)) }
+        didSet {
+            movieSource.setRate(Float(movieRate))
+            persistSession()
+        }
     }
     /// Freeze the input: the next incoming frame is copied and re-fed to the
     /// pipeline on every tick, so detection/effects keep running on one
@@ -66,12 +73,19 @@ final class SketchCamViewModel: ObservableObject {
     }
     @Published var inputResolution = CameraInputResolution.vga {
         didSet {
-            guard oldValue != inputResolution, cameraPermissionState == .authorized else { return }
-            captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+            if !isRestoringSession,
+               oldValue != inputResolution,
+               cameraPermissionState == .authorized {
+                captureService.start(deviceID: selectedDeviceID, inputResolution: inputResolution)
+            }
+            persistSession()
         }
     }
     @Published var settings = ProcessingSettings() {
-        didSet { store.settings = settings }
+        didSet {
+            store.settings = settings
+            persistSession()
+        }
     }
     @Published var outputFormat = SketchCamFormats.defaultFormat {
         didSet {
@@ -79,6 +93,7 @@ final class SketchCamViewModel: ObservableObject {
             if settings.workspace != nil {
                 settings.workspace?.outputViewport.frame.size = outputFormat.size
             }
+            persistSession()
         }
     }
     /// High-frequency live readouts (preview image + per-stage stats) live on a
@@ -98,6 +113,7 @@ final class SketchCamViewModel: ObservableObject {
     let activationManager = ExtensionActivationManager()
 
     private let store = PipelineStateStore()
+    private var isRestoringSession = false
     private let captureService = CameraCaptureService()
     private let movieSource = MoviePlaybackSource()
     // One CIContext for the whole pipeline (processor + preview): separate
@@ -178,6 +194,12 @@ final class SketchCamViewModel: ObservableObject {
     private let sourcePreviewInterval: CFAbsoluteTime = 1.0 / 12.0
 
     init() {
+        isRestoringSession = true
+        restoreSession()
+        isRestoringSession = false
+        store.settings = settings
+        store.outputFormat = outputFormat
+
         captureService.onConfigurationChanged = { [weak self] size in
             DispatchQueue.main.async {
                 self?.live.stats.cameraResolution = size
@@ -201,6 +223,82 @@ final class SketchCamViewModel: ObservableObject {
             guard let self, self.frameSource == .movie else { return nil }
             return self.movieSource.currentTimeSeconds
         }
+        persistSession()
+    }
+
+    private func restoreSession() {
+        guard let snapshot = store.loadSession(), snapshot.version == 1 else { return }
+        settings = snapshot.settings
+        selectedDeviceID = snapshot.selectedDeviceID
+        frameSource = snapshot.frameSource
+        movieRate = snapshot.movieRate
+        inputResolution = snapshot.inputResolution
+        if let format = SketchCamFormats.all.first(where: { $0.id == snapshot.outputFormatID }) {
+            outputFormat = format
+        }
+        movieURL = Self.resolveMovieURL(string: snapshot.movieURLString, bookmark: snapshot.movieBookmark)
+        if let bookmark = snapshot.webBookmark,
+           let webURL = Self.resolveSecurityScopedURL(bookmark) {
+            _ = webURL.startAccessingSecurityScopedResource()
+            webPickedURLs.append(webURL)
+        }
+    }
+
+    private static func resolveSecurityScopedURL(_ bookmark: Data) -> URL? {
+        var stale = false
+        return try? URL(
+            resolvingBookmarkData: bookmark,
+            options: [.withSecurityScope, .withoutMounting],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        )
+    }
+
+    private static func resolveMovieURL(string: String?, bookmark: Data?) -> URL? {
+        if let bookmark {
+            if let url = resolveSecurityScopedURL(bookmark) {
+                _ = url.startAccessingSecurityScopedResource()
+                return url
+            }
+        }
+        guard let string, !string.isEmpty else { return nil }
+        if let url = URL(string: string), url.scheme != nil { return url }
+        return URL(fileURLWithPath: string)
+    }
+
+    private func persistSession() {
+        guard !isRestoringSession else { return }
+        let bookmark: Data?
+        if let movieURL, movieURL.isFileURL {
+            bookmark = try? movieURL.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } else {
+            bookmark = nil
+        }
+        let webBookmark: Data?
+        if let webURL = URL(string: settings.web.urlString), webURL.isFileURL {
+            webBookmark = try? webURL.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        } else {
+            webBookmark = nil
+        }
+        store.saveSession(SketchCamSessionSnapshot(
+            settings: settings,
+            outputFormatID: outputFormat.id,
+            selectedDeviceID: selectedDeviceID,
+            frameSource: frameSource,
+            movieURLString: movieURL?.absoluteString,
+            movieBookmark: bookmark,
+            webBookmark: webBookmark,
+            movieRate: movieRate,
+            inputResolution: inputResolution
+        ))
     }
 
     func openMoviePanel() {
@@ -209,6 +307,9 @@ final class SketchCamViewModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.message = "Choose a movie to use as the frame source"
         if panel.runModal() == .OK, let url = panel.url {
+            // Keep the user-selected file readable after a relaunch in the
+            // sandbox. The bookmark is persisted with the session snapshot.
+            _ = url.startAccessingSecurityScopedResource()
             movieURL = url
             frameSource = .movie
         }
@@ -617,22 +718,11 @@ final class SketchCamViewModel: ObservableObject {
             settings.landmarks.enabled = true
             settings.landmarks.sourceMode = mode == "synthetic" ? .synthetic : .camera
         }
-        Task {
-            let granted = await CameraPermissionManager.requestAccess()
-            DispatchQueue.main.async {
-                self.cameraPermissionState = CameraPermissionManager.state
-                if granted {
-                    self.settings.testPatternMode = false
-                    self.captureService.start(deviceID: self.selectedDeviceID, inputResolution: self.inputResolution)
-                } else {
-                    self.settings.testPatternMode = true
-                    self.errorText = "Camera permission denied; using test pattern."
-                }
-            }
-        }
+        refreshCameraAccess()
     }
 
     func stop() {
+        persistSession()
         captureService.stop()
         movieSource.stop()
         sourceFrameLock.withLock {
@@ -651,9 +741,51 @@ final class SketchCamViewModel: ObservableObject {
     func refreshDevices() {
         let devices = captureService.availableDevices()
         cameraDevices = devices
-        if selectedDeviceID == nil {
+        if selectedDeviceID == nil || (selectedDeviceID != nil && !devices.contains(where: { $0.id == selectedDeviceID })) {
             selectedDeviceID = devices.first?.id
         }
+    }
+
+    /// Re-checks the OS permission after a restart or when returning from
+    /// System Settings, then resumes the remembered camera input when possible.
+    func refreshCameraAccess() {
+        let state = CameraPermissionManager.state
+        cameraPermissionState = state
+        switch state {
+        case .authorized:
+            settings.testPatternMode = false
+            applyFrameSource()
+        case .unknown:
+            requestCameraAccess()
+        case .denied, .restricted:
+            if frameSource == .camera {
+                settings.testPatternMode = true
+                errorText = "Camera permission is unavailable; using the test pattern."
+            }
+        }
+    }
+
+    func requestCameraAccess() {
+        Task {
+            let granted = await CameraPermissionManager.requestAccess()
+            DispatchQueue.main.async {
+                self.cameraPermissionState = CameraPermissionManager.state
+                if granted || self.cameraPermissionState == .authorized {
+                    self.settings.testPatternMode = false
+                    self.errorText = nil
+                    self.refreshDevices()
+                    self.applyFrameSource()
+                } else if self.frameSource == .camera {
+                    self.settings.testPatternMode = true
+                    self.errorText = "Camera permission denied; open Camera Settings to reconnect the input."
+                }
+            }
+        }
+    }
+
+    func openCameraSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func selectCamera(_ id: String?) {
@@ -824,25 +956,31 @@ final class SketchCamViewModel: ObservableObject {
             let webLayer = settings.web.enabled ? self.webController.currentImage() : nil
             do {
                 let frameIndex = self.nextFrameIndex()
-                // Segmentation runs when keying OR the silhouette contour
-                // needs it; the processor only keys when keying is on.
-                let contourWanted = settings.landmarks.enabled && settings.landmarks.trackContour
+                let analysisEnabled = settings.resolvedLiveAnalysisEnabled
+                // Segmentation runs when keying OR a silhouette contour is
+                // needed. Portrait's Body outline owns the request too, so
+                // enabling that one Portrait control produces a real line
+                // contour without requiring a separate Marks toggle.
+                let portraitOutlineWanted = analysisEnabled && settings.landmarks.resolvedPortraitEnabled
+                    && settings.landmarks.resolvedPortraitOutlineEnabled
+                let contourWanted = analysisEnabled && settings.landmarks.enabled
+                    && (settings.landmarks.trackContour || portraitOutlineWanted)
                 // v2: a Person Key effect anywhere in the layer stack needs the matte.
-                let personKeyWanted = settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
+                let personKeyWanted = analysisEnabled && settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
                 var segSettings = settings.segmentation
-                segSettings.enabled = settings.segmentation.enabled || contourWanted || personKeyWanted
+                segSettings.enabled = analysisEnabled && (settings.segmentation.enabled || contourWanted || personKeyWanted)
                 let rawMatte = self.segmentationService.currentMatte(
                     pixelBuffer: originalPixelBuffer,
                     settings: segSettings
                 )
-                let matte = (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
+                let matte = analysisEnabled && (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 let drawingInput = self.drawingAnalysisBinding(graph: graph)
                 // Landmark analysis remains shared infrastructure: routing the
                 // Drawing producer to Mouse must not starve control fields or
                 // other future landmark consumers.
-                let landmarkDrawingWanted = settings.landmarks.enabled
+                let landmarkDrawingWanted = analysisEnabled && settings.landmarks.enabled
                 let detectionWanted = landmarkDrawingWanted
                 let drawingDetection: LandmarkDetection? = {
                     guard detectionWanted else { return nil }
@@ -903,7 +1041,7 @@ final class SketchCamViewModel: ObservableObject {
                     mirrored: settings.mirror
                 )
                 let overlay: CIImage? = {
-                    guard settings.landmarks.enabled else { return nil }
+                    guard analysisEnabled && settings.landmarks.enabled else { return nil }
                     let routedDetection: LandmarkDetection?
                     var routedSettings = settings
                     switch drawingInput {
@@ -1232,7 +1370,8 @@ final class SketchCamViewModel: ObservableObject {
                                 inkLayers: [UUID: CIImage],
                                 clockSource: FrameSource,
                                 destination: MetalLayerCompositor.Destination = .program) -> ProcessedFrame? {
-        let outputRect = CGRect(origin: .zero, size: outputFormat.size)
+        let processingFormat = Self.gpuProcessingFormat(for: outputFormat, quality: settings.processingQuality)
+        let outputRect = CGRect(origin: .zero, size: processingFormat.size)
         let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
         let cameraImage: CIImage? = sourceFrames.camera.map {
             CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
@@ -1249,14 +1388,21 @@ final class SketchCamViewModel: ObservableObject {
             return CoreImageFrameProcessor.aspectFill(inSrc, in: outputRect, mirrored: settings.mirror)
         }
 
+        let scaledOverlay = Self.scaleImage(overlay, from: outputFormat.size, to: processingFormat.size)
+        let scaledWebLayer = Self.scaleImage(webLayer, from: outputFormat.size, to: processingFormat.size)
+        let scaledInkLayer = Self.scaleImage(inkLayer, from: outputFormat.size, to: processingFormat.size)
+        let scaledInkLayers = inkLayers.mapValues {
+            Self.scaleImage($0, from: outputFormat.size, to: processingFormat.size) ?? $0
+        }
+
         let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
-        let needsPersonMatte = graph.layers.contains { layer in
+        let needsPersonMatte = settings.resolvedLiveAnalysisEnabled && graph.layers.contains { layer in
             layer.visible &&
             (layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte } ||
              layer.mask?.source == .source(.personMatte))
         }
         var sourceSegmentation = settings.segmentation
-        sourceSegmentation.enabled = sourceSegmentation.enabled || needsPersonMatte
+        sourceSegmentation.enabled = settings.resolvedLiveAnalysisEnabled && (sourceSegmentation.enabled || needsPersonMatte)
         let cameraPersonMatteImage = sourceFrames.camera.flatMap {
             sourcePersonMatteImage(
                 pixelBuffer: $0,
@@ -1290,13 +1436,13 @@ final class SketchCamViewModel: ObservableObject {
                 case .personMatte:
                     return personMatteImage
                 case .overlay, .marks, .drawing:
-                    return overlay
+                    return scaledOverlay
                 case .ink:
-                    return inkLayers[node.id] ?? inkLayer
+                    return scaledInkLayers[node.id] ?? scaledInkLayer
                 case .acrylic(let config):
-                    return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
+                    return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: processingFormat.size)
                 case .web:
-                    return webLayer
+                    return scaledWebLayer
                 case .image(let config):
                     return self.imageMaterial(config)
                 case .effect:
@@ -1316,13 +1462,55 @@ final class SketchCamViewModel: ObservableObject {
             }
         )
         let workspace = settings.workspace.map { workspace in
-            var resolved = workspace
-            resolved.outputViewport.frame = CGRect(origin: workspace.outputViewport.frame.origin, size: outputFormat.size)
-            return resolved
+            Self.scaledWorkspace(workspace, from: outputFormat.size, to: processingFormat.size)
         }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
                              workspace: workspace, destination: destination,
-                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror,
+                             processingFormat: processingFormat)
+    }
+
+    private static func gpuProcessingFormat(for outputFormat: FrameFormat, quality: ProcessingQuality) -> FrameFormat {
+        guard let maxHeight = quality.maxHeight,
+              outputFormat.height > maxHeight else { return outputFormat }
+        let scale = Double(maxHeight) / Double(outputFormat.height)
+        let width = max(2, Int((Double(outputFormat.width) * scale).rounded()))
+        let height = max(2, Int((Double(outputFormat.height) * scale).rounded()))
+        return FrameFormat(id: "gpu-\(outputFormat.id)-\(width)x\(height)", width: width, height: height,
+                           frameRate: outputFormat.frameRate, pixelFormat: outputFormat.pixelFormat)
+    }
+
+    private static func scaleImage(_ image: CIImage?, from sourceSize: CGSize, to targetSize: CGSize) -> CIImage? {
+        guard let image else { return nil }
+        guard sourceSize != targetSize else { return image }
+        return image
+            .transformed(by: CGAffineTransform(scaleX: targetSize.width / max(1, sourceSize.width),
+                                               y: targetSize.height / max(1, sourceSize.height)))
+            .cropped(to: CGRect(origin: .zero, size: targetSize))
+    }
+
+    private static func scaledWorkspace(_ workspace: CollageWorkspace, from sourceSize: CGSize,
+                                        to targetSize: CGSize) -> CollageWorkspace {
+        guard sourceSize != targetSize else { return workspace }
+        let sx = targetSize.width / max(1, sourceSize.width)
+        let sy = targetSize.height / max(1, sourceSize.height)
+        let ss = min(sx, sy)
+        func scaleRect(_ rect: CGRect) -> CGRect {
+            CGRect(x: rect.origin.x * sx, y: rect.origin.y * sy,
+                   width: rect.size.width * sx, height: rect.size.height * sy)
+        }
+        var resolved = workspace
+        resolved.outputViewport.frame = scaleRect(workspace.outputViewport.frame)
+        resolved.frames = workspace.frames.map { frame in
+            var scaled = frame
+            scaled.localBounds = scaleRect(frame.localBounds)
+            scaled.transform.tx *= sx
+            scaled.transform.ty *= sy
+            scaled.bleed *= ss
+            return scaled
+        }
+        resolved.viewCenter = CGPoint(x: workspace.viewCenter.x * sx, y: workspace.viewCenter.y * sy)
+        return resolved
     }
 
     private func sourcePersonMatteImage(

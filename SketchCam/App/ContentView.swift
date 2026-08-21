@@ -506,6 +506,9 @@ struct ContentView: View {
         .onChange(of: windowMode.presentationMode) { _, isPresentation in
             syncLayoutWithPresentationMode(isPresentation)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshCameraAccess()
+        }
         .onDisappear {
             removeSpacePanMonitor()
             model.stop()
@@ -2863,6 +2866,31 @@ struct ContentView: View {
 
     @ViewBuilder private var cameraTab: some View {
         SectionHeader("Camera")
+        if model.cameraPermissionState != .authorized {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "camera.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.cameraPermissionState == .unknown ? "Camera permission needed" : "Camera permission unavailable")
+                        .font(.caption.weight(.semibold))
+                    Text(model.cameraPermissionState == .unknown
+                         ? "SketchCam will ask macOS for camera access so it can reconnect the remembered input."
+                         : "Allow SketchCam in System Settings, then return here and refresh.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        if model.cameraPermissionState == .unknown {
+                            Button("Request access") { model.requestCameraAccess() }
+                        }
+                        Button("Open Settings") { model.openCameraSettings() }
+                        Button("Refresh") { model.refreshCameraAccess() }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(7)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.orange.opacity(0.08)))
+        }
         SourcePreviewImage(
             previews: model.sourcePreviews,
             source: .camera,
@@ -3033,6 +3061,12 @@ struct ContentView: View {
         Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
             .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
+        SectionHeader("Analysis")
+        Toggle("Live feature analysis", isOn: liveAnalysisBinding)
+            .help("When off, skips MediaPipe landmark detection and automatic Vision person-matte work. Feature-driven layers pass through, so you can tune image effects without paying for analysis.")
+        Toggle("Segmentation / person matte", isOn: $model.settings.segmentation.enabled)
+            .help("Request Vision person segmentation when live analysis is enabled. Person Key and contour features can still request it automatically; turn Live feature analysis off for a complete bypass.")
+
         SectionHeader("Ink Undo")
         HStack {
             Text("GPU states")
@@ -3197,6 +3231,13 @@ struct ContentView: View {
         let simHeight = max(1, Int((Double(height) * simScale).rounded()))
         // Dye fields use 26 bytes/pixel; solver fields use 6 bytes/pixel.
         return Double(dyeWidth * dyeHeight * 26 + simWidth * simHeight * 6)
+    }
+
+    private var liveAnalysisBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.resolvedLiveAnalysisEnabled },
+            set: { model.settings.liveAnalysisEnabled = $0 }
+        )
     }
 
     private var inkUndoMaximumStateCount: Int {
@@ -3537,6 +3578,70 @@ struct ContentView: View {
                 defaultValue: 0.2,
                 hint: "Adds intentional loops, bridges, and squiggles without changing which facial features connect."
             )
+            SliderRow(
+                title: "Organic variation",
+                value: optionalLandmarkFloatBinding(\.portraitVariation, defaultValue: 0.22),
+                defaultValue: 0.22,
+                hint: "Seeded hand-drawn drift along the selected route."
+            )
+            portraitSeedRow
+            SliderRow(
+                title: "Route variation",
+                value: optionalLandmarkFloatBinding(\.portraitRouteVariation, defaultValue: 0.38),
+                defaultValue: 0.38,
+                hint: "Separate-route topology variation. Unified mode keeps the route stable and uses Seed, Detail priority, and Subsample for exploration."
+            )
+            .disabled(model.settings.landmarks.resolvedPortraitUnifiedRoute)
+            HStack {
+                Stepper(value: portraitSegmentsBinding, in: 1...6) {
+                    Text("Segments \(model.settings.landmarks.resolvedPortraitSegments)")
+                        .monospacedDigit()
+                }
+                .help("Split the seeded face route at semantic boundaries. One keeps a single unicursal line; higher values can isolate features while inner and outer lips remain together when possible.")
+            }
+
+            SectionHeader("Route graph")
+            Toggle("Unify face, body, and outline", isOn: portraitUnifiedRouteBinding)
+                .help("Send face landmarks, articulated body paths, and the optional silhouette through one seeded line planner so cross-part handoffs stay visually connected.")
+            SliderRow(
+                title: "Detail priority",
+                value: optionalLandmarkFloatBinding(\.portraitDetailPriority, defaultValue: 0.65),
+                defaultValue: 0.65,
+                hint: "Bias the unified planner toward eyes, iris/pupil marks, nose, and mouth. Lower values preserve more geometric travel; higher values keep facial details in the expressive part of the line."
+            )
+            SliderRow(
+                title: "Subsample",
+                value: optionalLandmarkFloatBinding(\.portraitSubsample, defaultValue: 1),
+                range: 0.05...1,
+                defaultValue: 1,
+                hint: "Percentage of source landmark points retained by the seeded drawing route. Lower values make simpler, more varied portraits while preserving detail anchors."
+            )
+
+            SectionHeader("Crown")
+            Toggle("Top-of-head line", isOn: portraitHairEnabledBinding)
+                .help("Add a face-only crown extrapolation. It never uses hands or body points.")
+            Picker("Hair", selection: portraitHairStyleBinding) {
+                ForEach(PortraitHairStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            SliderRow(
+                title: "Hair amount",
+                value: optionalLandmarkFloatBinding(\.portraitHairAmount, defaultValue: 0.45),
+                defaultValue: 0.45,
+                hint: "Clean keeps a restrained arc; Wild adds seeded squiggles and extra crown lift."
+            )
+
+            SectionHeader("Silhouette")
+            Toggle("Body outline", isOn: portraitOutlineEnabledBinding)
+                .help("Add a line-based scalp, shoulder, and body silhouette. Portrait requests the Vision contour automatically; Marks → Person can still control its detail.")
+            SliderRow(
+                title: "Outline weight",
+                value: optionalLandmarkFloatBinding(\.portraitOutlineStrength, defaultValue: 0.68),
+                defaultValue: 0.68,
+                hint: "Opacity of the silhouette contribution; in unified mode it also scales the silhouette portion of the shared line."
+            )
 
             SectionHeader("Stroke")
             ColorPicker("Ink", selection: portraitColorBinding, supportsOpacity: true)
@@ -3551,6 +3656,13 @@ struct ContentView: View {
                 value: optionalLandmarkFloatBinding(\.portraitWidthVariation, defaultValue: 0.45),
                 defaultValue: 0.45,
                 hint: "Calligraphic taper and swell along the continuous route."
+            )
+            SliderRow(
+                title: "Connector width",
+                value: optionalLandmarkFloatBinding(\.portraitConnectorWidth, defaultValue: 0.42),
+                range: 0.12...1,
+                defaultValue: 0.42,
+                hint: "Relative width of bridges between different semantic parts. Same-part links, such as inner and outer mouth, keep the main width."
             )
             Toggle("Halo (glow)", isOn: portraitHaloBinding)
         }
@@ -4309,6 +4421,23 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder private var portraitSeedRow: some View {
+        SectionHeader("Seed")
+        HStack {
+            Stepper(value: portraitSeedBinding, in: 0...99_999) {
+                HStack(spacing: 5) {
+                    Text("Seed")
+                    TextField("7", value: portraitSeedBinding, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 74)
+                        .monospacedDigit()
+                        .numericScrub(value: portraitSeedBinding, defaultValue: 7)
+                }
+            }
+            Button("Shuffle") { portraitSeedBinding.wrappedValue = Int.random(in: 0..<100_000) }
+        }
+    }
+
     @ViewBuilder private var inkSeedRow: some View {
         SectionHeader("Seed")
         HStack {
@@ -4859,6 +4988,48 @@ struct ContentView: View {
         )
     }
 
+    private var portraitOutlineEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitOutlineEnabled },
+            set: { model.settings.landmarks.portraitOutlineEnabled = $0 }
+        )
+    }
+
+    private var portraitSeedBinding: Binding<Int> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitSeed },
+            set: { model.settings.landmarks.portraitSeed = $0 }
+        )
+    }
+
+    private var portraitSegmentsBinding: Binding<Int> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitSegments },
+            set: { model.settings.landmarks.portraitSegments = $0 }
+        )
+    }
+
+    private var portraitUnifiedRouteBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitUnifiedRoute },
+            set: { model.settings.landmarks.portraitUnifiedRoute = $0 }
+        )
+    }
+
+    private var portraitHairEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitHairEnabled },
+            set: { model.settings.landmarks.portraitHairEnabled = $0 }
+        )
+    }
+
+    private var portraitHairStyleBinding: Binding<PortraitHairStyle> {
+        Binding(
+            get: { model.settings.landmarks.resolvedPortraitHairStyle },
+            set: { model.settings.landmarks.portraitHairStyle = $0 }
+        )
+    }
+
     private var portraitStyleBinding: Binding<PortraitStyle> {
         Binding(
             get: { model.settings.landmarks.resolvedPortraitStyle },
@@ -5248,7 +5419,7 @@ private struct EffectChainEditor: View {
             }
             Menu {
                 ForEach(EffectKind.allCases, id: \.self) { kind in
-                    Button(kind.title) { effects.append(EffectConfig(kind: kind, amount: defaultAmount(kind))) }
+                    Button(kind.title) { effects.append(defaultEffect(kind)) }
                 }
             } label: {
                 Label("Add effect", systemImage: "plus.circle")
@@ -5271,8 +5442,62 @@ private struct EffectChainEditor: View {
         case .outline: return 0.3
         case .blur: return 3
         case .opticalFlow: return 1
+        case .blueNoiseStipple: return 0.78
+        case .stipple: return 0.72
+        case .stripes: return 0.78
+        case .pixelate: return 0.82
+        case .duotone: return 1
         case .invert, .mirror, .personKey, .levels: return 0
         }
+    }
+
+    private func defaultEffect(_ k: EffectKind) -> EffectConfig {
+        var effect = EffectConfig(kind: k, amount: defaultAmount(k))
+        switch k {
+        case .blueNoiseStipple:
+            effect.patternScale = 10
+            effect.thickness = 2.5
+            effect.patternSoftness = 0.25
+            effect.patternSampling = 0.7
+            effect.patternDotResponse = 0.75
+            effect.transparentBackground = true
+        case .stipple:
+            effect.patternScale = 8
+            effect.thickness = 3
+            effect.patternSoftness = 0.4
+            effect.patternSampling = 0.7
+            effect.patternDotResponse = 0
+        case .stripes:
+            effect.patternScale = 18
+            effect.thickness = 6
+            effect.patternAngle = 0
+            effect.patternSoftness = 0.25
+            effect.patternSampling = 0.75
+            effect.patternVariationScale = 1
+            effect.patternStripeResponse = 1
+            effect.patternStripeBleed = 0.5
+        case .pixelate:
+            effect.patternScale = 8
+            effect.thickness = 3
+            effect.patternSoftness = 0.15
+            effect.patternSampling = 0.5
+            effect.transparentBackground = true
+        case .levels:
+            effect.levelBlack = 0
+            effect.levelWhite = 1
+            effect.levelGamma = 1
+            effect.levelGain = 1
+            effect.levelSoftClip = 0.2
+        case .duotone:
+            effect.color = RGBAColor(red: 0.08, green: 0.03, blue: 0.12, alpha: 1)
+            effect.backgroundColor = RGBAColor(red: 0.98, green: 0.86, blue: 0.62, alpha: 1)
+            effect.levelBlack = 0
+            effect.levelWhite = 1
+            effect.levelGamma = 1
+        default:
+            break
+        }
+        return effect
     }
 }
 
@@ -5320,7 +5545,12 @@ private struct EffectPanel: View {
         case .mirror: return "Flips this layer horizontally."
         case .personKey: return "Keeps only the person (Vision matte). Invert to drop the person and keep the background. Higher matte quality is sharper but costs more."
         case .opticalFlow: return "Visualizes frame-to-frame motion. Red/green encode direction; brightness encodes speed."
-        case .levels: return "Remaps black and white points, then applies gamma. Useful before or after analytical effects."
+        case .levels: return "Smooth tonal remap for the effect chain. Adjust black/white points, gamma, midpoint gain, and soft clipping before Blue-noise Stipple or other analytical effects."
+        case .duotone: return "Maps luminance continuously between a shadow and highlight tint. Use Blend and the tonal controls to make a restrained tint or a full duotone print pass."
+        case .blueNoiseStipple: return "Independent progressive Poisson-style stippling. Stable blue-noise spacing keeps dots even while luminance and local contrast add detail where the image needs it."
+        case .stipple: return "Renders stable blue-noise-like ink particles. Density follows luminance and local contrast; Feature pull attracts particles toward detail."
+        case .stripes: return "Renders luminance as stable short strokes on parallel stripes. Variation controls the spatial scale; Response controls width range; Bleed allows adjacent strokes to merge."
+        case .pixelate: return "Samples the source into stable square or round cells for a tinted newspaper pixel/dot print effect."
         }
     }
 
@@ -5333,24 +5563,39 @@ private struct EffectPanel: View {
                     .onTapGesture(count: 2) { effect.amount = defaultAmount }
                     .help("Double-click to reset to \(String(format: "%.2f", defaultAmount))")
                 Slider(value: $effect.amount, in: amountRange).controlSize(.small)
-                Text(String(format: "%.2f", effect.amount))
-                    .font(.caption2)
-                    .frame(width: 32)
-                    .numericScrub(value: $effect.amount, defaultValue: defaultAmount)
+                BufferedNumberField(
+                    value: Binding(get: { Double(effect.amount) },
+                                   set: { effect.amount = Float($0) }),
+                    precision: 2, font: .caption2, width: 42,
+                    defaultValue: Double(defaultAmount)
+                )
             }
+            .help(amountHelpText)
         }
         if effect.kind.usesColor {
-            ColorPicker("Stroke", selection: colorBinding, supportsOpacity: true).controlSize(.small)
+            ColorPicker("Stroke", selection: colorBinding, supportsOpacity: true)
+                .controlSize(.small)
+                .help("Outline colour and opacity.")
         }
         if effect.kind.usesThresholdOptions {
-            Toggle("Ink only (transparent paper)", isOn: $effect.inkOnly).controlSize(.small)
-            Toggle("Invert", isOn: $effect.invert).controlSize(.small)
+            Toggle("Ink only (transparent paper)", isOn: $effect.inkOnly)
+                .controlSize(.small)
+                .help("Keep only dark threshold marks and make the paper transparent.")
+            Toggle("Invert", isOn: $effect.invert)
+                .controlSize(.small)
+                .help("Reverse the threshold decision.")
         }
         if effect.kind == .personKey {
-            Toggle("Key out person (invert)", isOn: $effect.invert).controlSize(.small)
-            Toggle("Silhouette (flat fill)", isOn: $effect.silhouette).controlSize(.small)
+            Toggle("Key out person (invert)", isOn: $effect.invert)
+                .controlSize(.small)
+                .help("Remove the detected person instead of keeping them.")
+            Toggle("Silhouette (flat fill)", isOn: $effect.silhouette)
+                .controlSize(.small)
+                .help("Replace the keyed person with one flat fill colour.")
             if effect.silhouette {
-                ColorPicker("Fill", selection: colorBinding, supportsOpacity: true).controlSize(.small)
+                ColorPicker("Fill", selection: colorBinding, supportsOpacity: true)
+                    .controlSize(.small)
+                    .help("Silhouette fill colour and opacity.")
             }
             Picker("Matte", selection: $personMatteQuality) {
                 ForEach(SegmentationQuality.allCases) { q in Text(q.title).tag(q) }
@@ -5361,22 +5606,73 @@ private struct EffectPanel: View {
             levelSlider("Black", value: $effect.levelBlack, range: 0...0.99, defaultValue: 0)
             levelSlider("White", value: $effect.levelWhite, range: 0.01...1, defaultValue: 1)
             levelSlider("Gamma", value: $effect.levelGamma, range: 0.1...3, defaultValue: 1)
+            levelSlider("Gain", value: $effect.levelGain, range: 0...4, defaultValue: 1)
+            levelSlider("Soft ramp", value: $effect.levelSoftClip, range: 0...1, defaultValue: 0.2)
+        }
+        if effect.kind == .duotone {
+            ColorPicker("Shadow", selection: colorBinding, supportsOpacity: true)
+                .controlSize(.small)
+                .help("Colour assigned to the darkest source tones.")
+            ColorPicker("Highlight", selection: backgroundColorBinding, supportsOpacity: true)
+                .controlSize(.small)
+                .help("Colour assigned to the brightest source tones.")
+            levelSlider("Black", value: $effect.levelBlack, range: 0...0.99, defaultValue: 0)
+            levelSlider("White", value: $effect.levelWhite, range: 0.01...1, defaultValue: 1)
+            levelSlider("Gamma", value: $effect.levelGamma, range: 0.1...3, defaultValue: 1)
+            Toggle("Invert tone", isOn: $effect.invert)
+                .controlSize(.small)
+                .help("Swap the shadow/highlight direction before tinting.")
+        }
+        if effect.kind.usesPatternOptions {
+            ColorPicker("Ink", selection: colorBinding, supportsOpacity: true)
+                .controlSize(.small)
+                .help("Colour and opacity of generated marks.")
+            ColorPicker("Paper", selection: backgroundColorBinding, supportsOpacity: true)
+                .controlSize(.small)
+                .help("Background tint used when transparent paper is disabled.")
+            Toggle("Transparent paper (no background)", isOn: $effect.transparentBackground)
+                .controlSize(.small)
+                .help("Leave unmarked source areas transparent so the effect layers over what is below.")
+            patternSlider("Scale", value: $effect.patternScale, range: patternScaleRange,
+                          defaultValue: patternScaleDefault)
+            patternSlider(patternThicknessLabel, value: $effect.thickness,
+                          range: patternThicknessRange, defaultValue: patternThicknessDefault)
+            patternSlider("Softness", value: $effect.patternSoftness, range: 0...1, defaultValue: 0.35)
+            patternSlider(patternSamplingLabel, value: $effect.patternSampling, range: 0...1, defaultValue: 0.5)
+            if effect.kind == .blueNoiseStipple || effect.kind == .stipple {
+                patternSlider("Dot response", value: $effect.patternDotResponse, range: 0...1,
+                              defaultValue: patternDotResponseDefault)
+            }
+            if effect.kind == .stripes {
+                patternSlider("Variation", value: $effect.patternVariationScale, range: 0.1...4,
+                              defaultValue: 1)
+                patternSlider("Response", value: $effect.patternStripeResponse, range: 0...2,
+                              defaultValue: 1)
+                patternSlider("Bleed", value: $effect.patternStripeBleed, range: 0...1,
+                              defaultValue: 0.5)
+                patternSlider("Angle", value: $effect.patternAngle, range: -Float.pi...Float.pi,
+                              defaultValue: 0)
+            }
+            Toggle("Invert tone", isOn: $effect.invert)
+                .controlSize(.small)
+                .help("Reverse which source tones receive the marks.")
         }
     }
 
     private func levelSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, defaultValue: Float) -> some View {
-        HStack {
+        let doubleValue = Binding<Double>(get: { Double(value.wrappedValue) },
+                                          set: { value.wrappedValue = Float($0) })
+        return HStack {
             Text(title).font(.caption2).frame(width: 56, alignment: .leading)
                 .contentShape(Rectangle())
                 .numericScrub(value: value, defaultValue: defaultValue)
                 .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
-                .help("Double-click to reset")
+                .help("\(levelHelpText(title)) Double-click the label to reset.")
             Slider(value: value, in: range).controlSize(.small)
-            Text(String(format: "%.2f", value.wrappedValue))
-                .font(.caption2)
-                .frame(width: 32)
-                .numericScrub(value: value, defaultValue: defaultValue)
+            BufferedNumberField(value: doubleValue, precision: 2, font: .caption2, width: 42,
+                                defaultValue: Double(defaultValue))
         }
+        .help("\(levelHelpText(title)) Slider bounds are convenient defaults; typed values are preserved until the remap visibly saturates. Double-click the label to reset.")
     }
 
     private var amountLabel: String {
@@ -5385,6 +5681,11 @@ private struct EffectPanel: View {
         case .outline: return "Strength"
         case .blur: return "Radius"
         case .opticalFlow: return "Gain"
+        case .blueNoiseStipple: return "Density"
+        case .stipple: return "Density"
+        case .stripes: return "Contrast"
+        case .pixelate: return "Blend"
+        case .duotone: return "Blend"
         default: return "Amount"
         }
     }
@@ -5394,6 +5695,7 @@ private struct EffectPanel: View {
         case .outline: return 0...2
         case .blur: return 0...20
         case .opticalFlow: return 0...4
+        case .blueNoiseStipple, .stipple, .stripes, .pixelate: return 0...1
         default: return 0...1
         }
     }
@@ -5402,9 +5704,149 @@ private struct EffectPanel: View {
         case .threshold: return 0.52
         case .outline: return 0.25
         case .blur, .opticalFlow: return 0.5
+        case .blueNoiseStipple: return 0.78
+        case .stipple: return 0.72
+        case .stripes: return 0.78
+        case .pixelate: return 0.82
+        case .duotone: return 1
         default: return 0.5
         }
     }
+
+    private var patternScaleRange: ClosedRange<Float> {
+        switch effect.kind {
+        case .stripes: return 4...96
+        default: return 2...40
+        }
+    }
+
+    private var patternScaleDefault: Float {
+        switch effect.kind {
+        case .stripes: return 18
+        default: return 8
+        }
+    }
+
+    private var patternThicknessRange: ClosedRange<Float> {
+        switch effect.kind {
+        case .stripes: return 0.5...40
+        default: return 0.5...16
+        }
+    }
+
+    private var patternThicknessDefault: Float {
+        switch effect.kind {
+        case .stripes: return 6
+        default: return 3
+        }
+    }
+
+    private var patternThicknessLabel: String {
+        switch effect.kind {
+        case .stripes: return "Width"
+        case .pixelate: return "Pixel"
+        default: return "Dot"
+        }
+    }
+
+    private var patternSamplingLabel: String {
+        switch effect.kind {
+        case .blueNoiseStipple: return "Feature bias"
+        case .stipple: return "Feature pull"
+        default: return "Sampling"
+        }
+    }
+
+    private var patternDotResponseDefault: Float {
+        effect.kind == .blueNoiseStipple ? 0.75 : 0
+    }
+
+    private func patternSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>,
+                               defaultValue: Float) -> some View {
+        let isAngle = title == "Angle"
+        let displayedValue = Binding<Float>(
+            get: { isAngle ? value.wrappedValue * 180 / .pi : value.wrappedValue },
+            set: { newValue in value.wrappedValue = isAngle ? newValue * .pi / 180 : newValue }
+        )
+        let displayedDefault = isAngle ? defaultValue * 180 / .pi : defaultValue
+        let displayedDouble = Binding<Double>(get: { Double(displayedValue.wrappedValue) },
+                                              set: { displayedValue.wrappedValue = Float($0) })
+        return HStack {
+            Text(title).font(.caption2).frame(width: 56, alignment: .leading)
+                .contentShape(Rectangle())
+                .numericScrub(value: value, defaultValue: defaultValue)
+                .onTapGesture(count: 2) { value.wrappedValue = defaultValue }
+                .help("Double-click to reset")
+            Slider(value: value, in: range).controlSize(.small)
+            BufferedNumberField(value: displayedDouble, precision: isAngle ? 0 : 2,
+                                font: .caption2, width: 48,
+                                defaultValue: Double(displayedDefault))
+        }
+        .help("\(patternHelpText(title)) Slider bounds are convenient defaults; typed values are passed through until the effect visibly saturates. Double-click the label to reset.")
+    }
+
+    private var amountHelpText: String {
+        switch effect.kind {
+        case .threshold: return "Threshold level: lower values classify more of the image as ink."
+        case .outline: return "Edge strength: how strongly luminance edges become strokes."
+        case .blur: return "Blur radius in pixels. Larger values soften more of the source."
+        case .opticalFlow: return "Motion gain: scales the visualized frame-to-frame movement."
+        case .duotone: return "Blend: 0 keeps the source colour; 1 applies the full shadow/highlight remap."
+        case .blueNoiseStipple, .stipple: return "Density: how many candidate particles are revealed. Feature bias/pull can add particles around detail."
+        case .stripes: return "Contrast: baseline tonal strength for the stripe stroke widths and mark coverage."
+        case .pixelate: return "Blend: how strongly the sampled pixel/dot pattern replaces the source."
+        default: return "Effect amount."
+        }
+    }
+
+    private func levelHelpText(_ title: String) -> String {
+        switch title {
+        case "Black": return "Black point: source values below this become the shadow end."
+        case "White": return "White point: source values above this become the highlight end."
+        case "Gamma": return "Gamma: bends the tonal ramp between the black and white points."
+        case "Gain": return "Gain: expands or compresses Levels contrast around middle gray."
+        case "Soft ramp": return "Soft ramp: rounds the Levels extremes instead of clipping abruptly."
+        default: return "Tonal remap control."
+        }
+    }
+
+    private func patternHelpText(_ title: String) -> String {
+        switch (effect.kind, title) {
+        case (.blueNoiseStipple, "Scale"), (.stipple, "Scale"):
+            return "Cell scale: smaller values make a finer field; larger values make fewer, larger marks. A gentle knee keeps the coarse end useful."
+        case (.blueNoiseStipple, "Dot"), (.stipple, "Dot"):
+            return "Base dot radius in pixels before tone/feature response. Values above the slider range can intentionally make marks overlap."
+        case (.blueNoiseStipple, "Dot response"), (.stipple, "Dot response"):
+            return "Dot response: how much local luminance and feature energy change dot radius. 0 is constant size; 1 is fully responsive; larger typed values exaggerate it."
+        case (.blueNoiseStipple, "Feature bias"):
+            return "Feature bias: allocates extra blue-noise particles to local contrast such as eyes, edges, and mouth detail."
+        case (.stipple, "Feature pull"):
+            return "Feature pull: attracts candidates toward local contrast and increases their reveal probability."
+        case (.stripes, "Scale"):
+            return "Stripe period: distance from one stripe center to the next. The high end uses a gentle knee so coarse patterns remain adjustable."
+        case (.stripes, "Width"):
+            return "Base stripe width in pixels before tone and feature modulation."
+        case (.stripes, "Variation"):
+            return "Variation scale: spatial wavelength of width changes along each stripe. Smaller values follow finer detail; larger values make broader swells."
+        case (.stripes, "Response"):
+            return "Stripe response: how strongly source luminance changes stripe width. 0 is nearly uniform; 1 is the baseline portrait-in-stripes mapping; larger values exaggerate dark/light width differences."
+        case (.stripes, "Bleed"):
+            return "Stripe bleed: extra width headroom beyond one stripe period. 0 lets neighbours meet; higher values allow broad strokes to merge into adjacent stripes."
+        case (.stripes, "Angle"):
+            return "Stripe angle in degrees."
+        case (.pixelate, "Scale"):
+            return "Cell scale: size of the sampled pixel/dot cells. Smaller values preserve finer detail."
+        case (.pixelate, "Pixel"):
+            return "Pixel/dot size inside each sampled cell. Softness rounds the cell shape."
+        case (_, "Softness"):
+            return "Edge softness: feathering around dots, pixels, or stripe edges."
+        case (_, "Sampling"), (_, "Feature bias"), (_, "Feature pull"):
+            return "Sampling radius and local contrast influence used to shape the marks."
+        default:
+            return "Pattern parameter."
+        }
+    }
+
     private var colorBinding: Binding<Color> {
         Binding(
             get: { Color(.sRGB, red: Double(effect.color.red), green: Double(effect.color.green),
@@ -5416,6 +5858,93 @@ private struct EffectPanel: View {
                 }
             }
         )
+    }
+
+    private var backgroundColorBinding: Binding<Color> {
+        Binding(
+            get: { Color(.sRGB, red: Double(effect.backgroundColor.red), green: Double(effect.backgroundColor.green),
+                         blue: Double(effect.backgroundColor.blue), opacity: Double(effect.backgroundColor.alpha)) },
+            set: { newValue in
+                if let ns = NSColor(newValue).usingColorSpace(.sRGB) {
+                    effect.backgroundColor = RGBAColor(red: Float(ns.redComponent), green: Float(ns.greenComponent),
+                                                       blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))
+                }
+            }
+        )
+    }
+}
+
+private struct SolidNodeEditor: View {
+    @Binding var config: SolidConfig
+    @State private var hexText: String
+    @FocusState private var hexFocused: Bool
+
+    init(config: Binding<SolidConfig>) {
+        self._config = config
+        self._hexText = State(initialValue: Self.hexString(config.wrappedValue.color))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                RGBAColorPicker("Color", rgba: $config.color, supportsOpacity: true)
+                Spacer(minLength: 4)
+                TextField("#RRGGBBAA", text: $hexText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption2.monospacedDigit())
+                    .frame(width: 94)
+                    .focused($hexFocused)
+                    .onSubmit { commitHex() }
+                    .onExitCommand { cancelHex() }
+                    .help("Enter an exact color as #RRGGBB or #RRGGBBAA")
+            }
+            Text("Hex value includes opacity")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+        .onAppear { hexText = Self.hexString(config.color) }
+        .onChange(of: config.color) { _, newValue in
+            if !hexFocused { hexText = Self.hexString(newValue) }
+        }
+    }
+
+    private func commitHex() {
+        guard let parsed = Self.parseHex(hexText) else {
+            cancelHex()
+            return
+        }
+        config.color = parsed
+        hexText = Self.hexString(parsed)
+    }
+
+    private func cancelHex() {
+        hexText = Self.hexString(config.color)
+        hexFocused = false
+    }
+
+    private static func hexString(_ color: RGBAColor) -> String {
+        let channels = [color.red, color.green, color.blue, color.alpha].map {
+            Int((max(0, min(1, $0)) * 255).rounded())
+        }
+        return String(format: "#%02X%02X%02X%02X", channels[0], channels[1], channels[2], channels[3])
+    }
+
+    private static func parseHex(_ text: String) -> RGBAColor? {
+        let cleaned = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+        guard cleaned.count == 6 || cleaned.count == 8,
+              let value = UInt64(cleaned, radix: 16) else { return nil }
+        let hasAlpha = cleaned.count == 8
+        let red = (value >> (hasAlpha ? 24 : 16)) & 0xFF
+        let green = (value >> (hasAlpha ? 16 : 8)) & 0xFF
+        let blue = (value >> (hasAlpha ? 8 : 0)) & 0xFF
+        let alpha = hasAlpha ? value & 0xFF : 0xFF
+        return RGBAColor(red: Float(red) / 255,
+                         green: Float(green) / 255,
+                         blue: Float(blue) / 255,
+                         alpha: Float(alpha) / 255)
     }
 }
 
@@ -5583,6 +6112,7 @@ private struct BufferedNumberField: View {
                 editing = false
             }
             .numericScrub(value: $value, precision: precision, defaultValue: defaultValue)
+            .help("Type an exact value and press Return")
     }
 
     private func commit() {
@@ -6135,6 +6665,11 @@ private struct WorkspaceFrameStackEditor: View {
                 field("W", value: cropValue(frame.id, keyPath: \.size.width), defaultValue: 1)
                 field("H", value: cropValue(frame.id, keyPath: \.size.height), defaultValue: 1)
             }
+            if let nodeID = linkedNodeID(frame),
+               let node = model.settings.layerGraph?.node(nodeID),
+               case .solid = node.kind {
+                SolidNodeEditor(config: solidConfigBinding(nodeID))
+            }
             MaskEditor(mask: frameMaskBinding(frame.id),
                        personMatteQuality: $model.settings.segmentation.quality,
                        sources: maskSources(excluding: frame.id))
@@ -6246,6 +6781,13 @@ private struct WorkspaceFrameStackEditor: View {
         return id
     }
 
+    private func linkedNodeID(_ frame: WorkspaceFrame) -> UUID? {
+        guard let layerID = linkedLayerID(frame),
+              let graph = model.settings.layerGraph,
+              let layer = graph.layers.first(where: { $0.id == layerID }) else { return nil }
+        return layer.node
+    }
+
     private func toggleVisible(_ id: UUID) {
         mutateFrame(id) { $0.visible.toggle() }
     }
@@ -6354,6 +6896,23 @@ private struct WorkspaceFrameStackEditor: View {
                 guard var graph = model.settings.layerGraph,
                       let index = graph.layers.firstIndex(where: { $0.id == layerID }) else { return }
                 graph.layers[index].effects = effects
+                model.settings.layerGraph = graph
+            }
+        )
+    }
+
+    private func solidConfigBinding(_ nodeID: UUID) -> Binding<SolidConfig> {
+        Binding(
+            get: {
+                guard case .solid(let config)? = model.settings.layerGraph?.node(nodeID)?.kind else {
+                    return SolidConfig()
+                }
+                return config
+            },
+            set: { newValue in
+                guard var graph = model.settings.layerGraph,
+                      let index = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                graph.nodes[index].kind = .solid(newValue)
                 model.settings.layerGraph = graph
             }
         )
@@ -6560,7 +7119,9 @@ private struct LayerStackEditor: View {
                         .buttonStyle(.borderless)
                         .help(layer.visible ? "Hide layer" : "Show layer")
                         if let color = solidColor(layer) {
-                            ColorPicker("", selection: color, supportsOpacity: false).labelsHidden()
+                            ColorPicker("", selection: color, supportsOpacity: true)
+                                .labelsHidden()
+                                .help("Solid layer color")
                         }
                         if editingLayer == layer.id {
                             TextField("", text: $editText)
@@ -6639,6 +7200,9 @@ private struct LayerStackEditor: View {
                                 )
                                 if case .paper = node.kind {
                                     PaperNodeEditor(config: paperConfigBinding(node.id))
+                                }
+                                if case .solid = node.kind {
+                                    SolidNodeEditor(config: solidConfigBinding(node.id))
                                 }
                                 if case .acrylic = node.kind {
                                     AcrylicNodeEditor(config: acrylicConfigBinding(node.id))
@@ -6757,6 +7321,23 @@ private struct LayerStackEditor: View {
         )
     }
 
+    private func solidConfigBinding(_ nodeID: UUID) -> Binding<SolidConfig> {
+        Binding(
+            get: {
+                guard case .solid(let config)? = model.settings.layerGraph?.node(nodeID)?.kind else {
+                    return SolidConfig()
+                }
+                return config
+            },
+            set: { newValue in
+                mutate { g in
+                    guard let i = g.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                    g.nodes[i].kind = .solid(newValue)
+                }
+            }
+        )
+    }
+
     private func acrylicConfigBinding(_ nodeID: UUID) -> Binding<AcrylicConfig> {
         Binding(
             get: {
@@ -6795,7 +7376,7 @@ private struct LayerStackEditor: View {
         return Binding(
             get: {
                 guard case .solid(let cfg) = model.settings.layerGraph?.node(layer.node)?.kind else { return .gray }
-                return Color(.sRGB, red: Double(cfg.color.red), green: Double(cfg.color.green), blue: Double(cfg.color.blue), opacity: 1)
+                return Color(.sRGB, red: Double(cfg.color.red), green: Double(cfg.color.green), blue: Double(cfg.color.blue), opacity: Double(cfg.color.alpha))
             },
             set: { newValue in
                 guard let ns = NSColor(newValue).usingColorSpace(.sRGB) else { return }
@@ -6803,7 +7384,7 @@ private struct LayerStackEditor: View {
                     guard let i = g.nodes.firstIndex(where: { $0.id == layer.node }) else { return }
                     g.nodes[i].kind = .solid(SolidConfig(color: RGBAColor(
                         red: Float(ns.redComponent), green: Float(ns.greenComponent),
-                        blue: Float(ns.blueComponent), alpha: 1)))
+                        blue: Float(ns.blueComponent), alpha: Float(ns.alphaComponent))))
                 }
             }
         )

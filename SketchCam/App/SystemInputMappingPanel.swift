@@ -31,18 +31,25 @@ struct SystemInputMappingPanel: View {
                 }
 
                 if !pointer.isTrusted {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Accessibility access is missing or belongs to an older build. After rebuilding, toggle SketchCam off and on in System Settings. If that does not refresh it, remove SketchCam with − and add /Applications/SketchCam.app again with +, then reopen the app.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Request access") { pointer.requestAccessibility() }
-                            Button("Open Settings") { pointer.openAccessibilitySettings() }
-                            Button("Refresh") { pointer.refreshTrust() }
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "hand.raised.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Accessibility permission required")
+                                .font(.caption.weight(.semibold))
+                            Text("Approve the installed /Applications/SketchCam.app once. Normal rebuilds now keep the same signed app identity.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                Button("Request access") { pointer.requestAccessibility() }
+                                Button("Open Settings") { pointer.openAccessibilitySettings() }
+                                Button("Refresh") { pointer.refreshTrust() }
+                            }
+                            .controlSize(.small)
                         }
-                        .controlSize(.small)
                     }
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.orange.opacity(0.10)))
+                    .padding(7)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.orange.opacity(0.08)))
                 }
 
                 section("POINTER FEATURE") {

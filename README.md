@@ -15,15 +15,15 @@ A macOS app captures a webcam, runs a GPU compositing pipeline, previews it, and
   - **Yarn** — seeded woven tangle per feature; Weave (waviness), coil/loop Noise (linear × circular) and Winding.
   - **Wrap** — a continuous yarn-wire that winds through the *inside* of the person (Gormley-style): heavy interior sampling, proximity-ordered, with LineWalk-style Wildness/Scale and coil/winding Loops.
   - **Line walk** — "taking a line for a walk": one or more continuous lines planned through the semantic features. Continuity (one unicursal line → separate paths → fragments), Density, a Curve picker (Polyline / Spline / Hobby / Bezier), a 2-D Wildness pad (along-path × orthogonal), Scale (local↔global).
-  - **Portrait** — stable semantic face and body routes that continuously morph with incoming landmarks instead of reconnecting them. Follow controls likeness versus idealization; Fluid, Cubist, and Ornate hands plus Flourish add intentional bridges, loops, and squiggles.
+  - **Portrait** — semantic face and body routes that continuously morph with incoming landmarks instead of reconnecting them every frame. Follow controls likeness versus idealization; Fluid, Cubist, and Ornate hands plus Flourish add intentional bridges, loops, and squiggles. Seed controls both the artistic drift and an optional Route variation layer that samples/reverses landmarks and chooses among semantic face itineraries. An optional face-only Clean/Wild crown line joins that itinerary; Segments can split it at seeded semantic boundaries, and Connector width makes cross-part bridges lighter while same-part links stay full weight. Body outline remains a separate contour/hull silhouette.
   - All algorithms render as smooth variable-width **ribbons** (calligraphic taper/swell) with an optional glow **Halo**; an optional **GPU (Metal)** path tessellates every enabled algorithm in one pass.
   - The merged Drawing producer's path input can use either live Landmarks or the shared Mouse/canvas stroke stream. Committed strokes and the active stroke are routed without consuming Ink's own live samples.
 - **Input Map**: a homunculus-style MediaPipe hand map selects any left/right hand landmark as the macOS pointer. Right index tip is the default; normalized thumb–index distance drives primary-button down/up with hysteresis, so a short pinch clicks and a held pinch drags. **While pinching** coexists with the physical mouse; **Always** continuously drives the pointer. Mapping settings persist, but system control must be explicitly armed each launch and requires macOS Accessibility approval. See [`notes/input-mapping.md`](notes/input-mapping.md).
 - **Ink**: a full-canvas Metal fluid-simulation inkwash layer (velocity/pressure/vorticity with a persistent wetness gate, chromatic diffusion, fixed pigment, and Beer-Lambert display). Pen and wash have independent sizes; Option-drag sprays water without pigment or displacement; **Wet canvas** and **Motion wetness** prepare regions for routed optical flow to carry pigment. Cached procedural paper supplies both a visible substrate and absorbency/drag/resistance fields. Editable parameter fields accept exact or experimental values, and double-clicking any numeric parameter label restores its factory default. See [`notes/ink-simulation.md`](notes/ink-simulation.md) for the algorithm and control mapping.
 - **Presets**: save the entire app state (effects, threshold, background + the full drawing/detection config) as named, persistent presets; recall either just the render style (Marks/Drawing/Detection) or the whole state.
+- **Session recovery**: the live layer graph, processing choices, source selection, camera preference, movie bookmark/playback rate, output format, and window/output choices are saved as they change and restored on relaunch. Camera access is rechecked on launch/app activation; the Camera tab requests permission when needed and reconnects the remembered device when available.
 - **UI**: dockable/floating controls for Settings, Layers, Camera, Movie, Marks, Input Map, Yarn, Wrap, Line walk, Portrait, Ink, Paper, Web, Presets, Keys, Output, History, Timeline, and Debug, with compact one-line style rows. The Output window can show the program viewport or the independently filtered Presentation composite.
-- **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, GPU drawing + stroke style toggles (Settings ▸ Rendering), per-stage ms HUD.
-- The pipeline sustains 30 fps at 1080p with all features enabled (~2–5 ms/frame on the hot path; detection and segmentation run off-path on their own queues). See `notes/performance-plan.md` for the audit, architecture, and measured numbers.
+- **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, GPU drawing + stroke style toggles (Settings ▸ Rendering), per-stage ms HUD, and an Analysis section with independent live-feature and person-matte bypasses. The GPU compositor renders effects at the selected processing resolution and upscales once for the published output; disabled effect chains are true no-ops. See `notes/performance-plan.md` for the audit, filter-only workflow, and measured numbers.
 
 ## Current Status
 
@@ -62,25 +62,42 @@ xcodebuild \
 
 ## Run Locally
 
-To run the newest existing Debug build without rebuilding or installing:
+Use one stable development loop. The app that receives Accessibility approval
+is always `/Applications/SketchCam.app`; the quick-run helpers no longer guess
+at a newer DerivedData copy.
 
-```sh
-./script/rundebug.sh
-```
-
-`./script/rundebug.sh --debug` opens that same local build under `lldb`;
-`--logs`, `--telemetry`, `--verify`, and `--print` mirror the quick-run helpers.
-`./script/run.sh` remains as the older quick-run helper.
-
-Use the build-and-install script when you want a fresh build copied to `/Applications`:
+To rebuild, install in place, and run:
 
 ```sh
 ./script/build_and_run.sh
 ```
 
-The script regenerates the Xcode project, builds `SketchCam.app`, copies it to `/Applications/SketchCam.app`, and opens it. The `/Applications` location matters because macOS system extensions must be activated from an app bundle in `/Applications`.
+For fast iterations without a rebuild:
 
-Development rebuilds change the app's code signature and can invalidate an existing Input Map Accessibility grant. After the final rebuild, toggle SketchCam off/on in **System Settings → Privacy & Security → Accessibility**. If macOS retains a stale entry, remove it with `−`, add `/Applications/SketchCam.app` with `+`, then reopen SketchCam. See [`notes/troubleshooting.md`](notes/troubleshooting.md#input-map-will-not-arm-after-accessibility-approval).
+```sh
+./script/run.sh                 # relaunch the installed app
+./script/run.sh --debug         # debug that same installed app in lldb
+./script/run.sh --logs          # launch + stream app logs
+./script/run.sh --telemetry     # launch + stream SketchCam subsystem logs
+./script/run.sh --verify        # launch + verify the process
+```
+
+`script/rundebug.sh` remains as a compatibility alias for `script/run.sh`.
+Use `SKETCHCAM_SKIP_XCODEGEN=1` when `project.yml` is unchanged and you want to
+skip project regeneration during a build.
+
+The build script updates the existing `/Applications/SketchCam.app` bundle in
+place and uses the same bundle identifier and development signing identity.
+That keeps the Accessibility designated requirement stable across normal
+source rebuilds. macOS still requires a one-time reapproval if the signing
+certificate or team changes. To open the correct pane without rebuilding:
+
+```sh
+./script/run.sh --permissions
+```
+
+Do not launch a DerivedData app for system-pointer testing; it is a different
+runtime identity from the approved `/Applications` bundle.
 
 On a first run on a new Mac, allow Xcode to register the device while creating the development profiles:
 
