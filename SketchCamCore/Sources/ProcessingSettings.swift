@@ -318,6 +318,11 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// web) from the graph on the GPU — per-layer Metal effect chain + mask —
     /// instead of the CoreImage base. Experimental; off = legacy CoreImage path.
     public var useGPUCompositor: Bool
+    /// Master switch for live landmark and person-matte analysis. Optional so
+    /// sessions saved before this control existed default to the historical
+    /// behavior (enabled). Filter-only stacks can turn it off to avoid paying
+    /// for MediaPipe/Vision work when no feature-driven layer is needed.
+    public var liveAnalysisEnabled: Bool?
     /// Preview/display refresh cap in fps. 0 = full-tilt (every published
     /// frame). The preview pane doubles as the main display (presentation
     /// mode), so this is a real output rate, not a throttle-to-save-cost.
@@ -357,6 +362,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         workspace: CollageWorkspace? = nil,
         controlFields: ControlFieldGraph? = nil,
         useGPUCompositor: Bool = true,
+        liveAnalysisEnabled: Bool? = nil,
         previewFPS: Double = 0,
         useMetalPreview: Bool = true,
         artboardDragCanvasWithScroll: Bool? = nil,
@@ -387,6 +393,7 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         self.workspace = workspace
         self.controlFields = controlFields
         self.useGPUCompositor = useGPUCompositor
+        self.liveAnalysisEnabled = liveAnalysisEnabled
         self.previewFPS = previewFPS
         self.useMetalPreview = useMetalPreview
         self.artboardDragCanvasWithScroll = artboardDragCanvasWithScroll
@@ -409,6 +416,8 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
         }
         return graph
     }
+
+    public var resolvedLiveAnalysisEnabled: Bool { liveAnalysisEnabled ?? true }
 }
 
 public enum LandmarkSourceMode: String, CaseIterable, Identifiable, Sendable, Codable {

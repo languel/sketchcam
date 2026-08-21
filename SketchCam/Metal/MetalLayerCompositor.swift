@@ -32,6 +32,7 @@ final class MetalLayerCompositor {
     private let ciContext: CIContext
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
     private let pool = PixelBufferPool()       // persistent working buffers
+    private let processingOutPool = PixelBufferPool()
     private let outPool = PixelBufferPool()    // per-frame published output
 
     // Persistent working buffers, reallocated on size change. Holding all of
@@ -52,9 +53,11 @@ final class MetalLayerCompositor {
     func composite(graph: LayerGraph, streams: Streams, outputFormat: FrameFormat,
                    workspace: CollageWorkspace? = nil,
                    destination: Destination = .program,
-                   frameIndex: Int, timestamp: CMTime, mirror: Bool) -> ProcessedFrame? {
-        guard ensureBuffers(for: outputFormat) else { return nil }
-        let rect = CGRect(origin: .zero, size: outputFormat.size)
+                   frameIndex: Int, timestamp: CMTime, mirror: Bool,
+                   processingFormat: FrameFormat? = nil) -> ProcessedFrame? {
+        let renderFormat = processingFormat ?? outputFormat
+        guard ensureBuffers(for: renderFormat) else { return nil }
+        let rect = CGRect(origin: .zero, size: renderFormat.size)
         guard let accumA, let accumB, let content, let masked, let fxScratch, let matteBuf, let sourceFx else { return nil }
 
         // Start from a transparent canvas.
@@ -66,11 +69,10 @@ final class MetalLayerCompositor {
             streams: streams,
             workspace: workspace,
             destination: destination,
-            outputFormat: outputFormat
+            outputFormat: renderFormat
         )
         for item in items where item.opacity > 0.001 {
             guard let img = item.image else { continue }
-            clear(content)
             rasterize(img, into: content)
 
             // Layer masks clip the raw source first. Effect-chain Person Key still
@@ -118,9 +120,15 @@ final class MetalLayerCompositor {
                 chainMatte = matteBuf
             }
 
-            // Per-layer effect chain after source masking.
-            guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
-                                     effects: item.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
+            // Per-layer effect chain after source masking. Avoid a full-frame
+            // copy kernel when the layer has no enabled effects; this is the
+            // common filter-bypass path and keeps layer toggles meaningful.
+            if item.effects.contains(where: { $0.enabled }) {
+                guard effects.applyChain(input: chainInput, output: chainOutput, scratch: fxScratch,
+                                         effects: item.effects, matte: chainMatte, frameIndex: frameIndex) else { return nil }
+            } else {
+                chainOutput = chainInput
+            }
 
             // Composite onto the accumulator with the layer opacity/blend mode.
             guard effects.composite(base: cur, overlay: chainOutput, output: other,
@@ -130,8 +138,25 @@ final class MetalLayerCompositor {
 
         // `cur` holds the result; hand back a copy from the pool so the working
         // buffers stay ours for the next frame.
-        guard let output = try? outPool.makeBuffer(format: outputFormat),
-              effects.copy(input: cur, output: output) else { return nil }
+        let output: CVPixelBuffer
+        if renderFormat == outputFormat {
+            guard let destination = try? outPool.makeBuffer(format: outputFormat),
+                  effects.copy(input: cur, output: destination) else { return nil }
+            output = destination
+        } else {
+            guard let rendered = try? processingOutPool.makeBuffer(format: renderFormat),
+                  effects.copy(input: cur, output: rendered),
+                  let destination = try? outPool.makeBuffer(format: outputFormat) else { return nil }
+            let scaleX = outputFormat.size.width / renderFormat.size.width
+            let scaleY = outputFormat.size.height / renderFormat.size.height
+            let scaled = CIImage(cvPixelBuffer: rendered)
+                .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+                .cropped(to: CGRect(origin: .zero, size: outputFormat.size))
+            ciContext.render(scaled, to: destination,
+                             bounds: CGRect(origin: .zero, size: outputFormat.size),
+                             colorSpace: colorSpace)
+            output = destination
+        }
         guard let sampleBuffer = try? PixelBufferUtils.makeSampleBuffer(
             pixelBuffer: output, formatDescription: outPool.formatDescription, presentationTime: timestamp) else { return nil }
 
@@ -344,8 +369,12 @@ final class MetalLayerCompositor {
             rasterize(personMatte, into: routeMatte)
             effectMatte = routeMatte
         }
-        guard effects.applyChain(input: chainInput, output: chainOutput, scratch: routeScratch,
-                                 effects: enabledEffects, matte: effectMatte, frameIndex: frameIndex) else { return raw }
+        if enabledEffects.isEmpty {
+            chainOutput = chainInput
+        } else {
+            guard effects.applyChain(input: chainInput, output: chainOutput, scratch: routeScratch,
+                                     effects: enabledEffects, matte: effectMatte, frameIndex: frameIndex) else { return raw }
+        }
         var image = CIImage(cvPixelBuffer: chainOutput).cropped(to: CGRect(origin: .zero, size: outputFormat.size))
         if layer.opacity < 0.999 {
             image = image.applyingFilter("CIColorMatrix", parameters: [

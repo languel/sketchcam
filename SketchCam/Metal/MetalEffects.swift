@@ -77,6 +77,10 @@ final class MetalEffects {
     private let stripesPSO: MTLComputePipelineState
     private let pixelatePSO: MTLComputePipelineState
     private var opticalFlowStates: [UUID: OpticalFlowState] = [:]
+    /// Non-nil while a single effect chain is being encoded. Kernels in the
+    /// chain are ordered by Metal, so one commit/wait replaces one commit/wait
+    /// per effect without changing the ping-pong semantics.
+    private var activeCommandBuffer: MTLCommandBuffer?
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -312,21 +316,36 @@ final class MetalEffects {
 
     /// Apply an ordered effect chain to `input`, leaving the result in `output`.
     /// `scratch` is a same-size working buffer for ping-ponging. Unknown/disabled
-    /// effects are skipped; an empty chain copies input→output.
+    /// effects are skipped; an empty chain leaves the caller's output untouched
+    /// so the compositor can alias the input without a copy kernel.
     func applyChain(input: CVPixelBuffer, output: CVPixelBuffer, scratch: CVPixelBuffer,
                     effects: [EffectConfig], matte: CVPixelBuffer? = nil,
                     frameIndex: Int? = nil) -> Bool {
         let enabled = effects.filter { $0.enabled }
-        guard !enabled.isEmpty else { return copy(input: input, output: output) }
+        guard !enabled.isEmpty else { return true }
+        guard let commandBuffer = queue.makeCommandBuffer() else { return false }
+        activeCommandBuffer = commandBuffer
+        defer { activeCommandBuffer = nil }
         var src = input
         for (i, e) in enabled.enumerated() {
             let dst: CVPixelBuffer = (i % 2 == 0) ? scratch : output
-            guard apply(e, input: src, output: dst, matte: matte, frameIndex: frameIndex) else { return false }
+            guard apply(e, input: src, output: dst, matte: matte, frameIndex: frameIndex) else {
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+                return false
+            }
             src = dst
         }
         // If the last write landed in scratch, mirror it into output.
-        if src !== output { return copy(input: src, output: output) }
-        return true
+        if src !== output, !copy(input: src, output: output) {
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            return false
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        CVMetalTextureCacheFlush(textureCache, 0)
+        return commandBuffer.status == .completed
     }
 
     private func apply(_ e: EffectConfig, input: CVPixelBuffer, output: CVPixelBuffer,
@@ -449,7 +468,8 @@ final class MetalEffects {
     // MARK: - Dispatch
 
     private func run(_ pso: MTLComputePipelineState, textures: [MTLTexture], bytes: UnsafeRawPointer?, length: Int, grid: MTLTexture) -> Bool {
-        guard let commandBuffer = queue.makeCommandBuffer(),
+        let isBatch = activeCommandBuffer != nil
+        guard let commandBuffer = activeCommandBuffer ?? queue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else { return false }
         encoder.setComputePipelineState(pso)
         for (i, tex) in textures.enumerated() { encoder.setTexture(tex, index: i) }
@@ -457,12 +477,12 @@ final class MetalEffects {
         let tg = MTLSize(width: 16, height: 16, depth: 1)
         encoder.dispatchThreads(MTLSize(width: grid.width, height: grid.height, depth: 1), threadsPerThreadgroup: tg)
         encoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        // The GPU is done; let the cache release the CVMetalTextures it's holding.
-        // Without a periodic flush the cache pins IOSurfaces and GPU scheduling
-        // degrades over a long session (textures still referenced aren't flushed).
-        CVMetalTextureCacheFlush(textureCache, 0)
+        guard isBatch else {
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            CVMetalTextureCacheFlush(textureCache, 0)
+            return commandBuffer.status == .completed
+        }
         return true
     }
 

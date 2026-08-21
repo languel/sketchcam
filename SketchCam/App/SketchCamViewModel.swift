@@ -956,30 +956,31 @@ final class SketchCamViewModel: ObservableObject {
             let webLayer = settings.web.enabled ? self.webController.currentImage() : nil
             do {
                 let frameIndex = self.nextFrameIndex()
+                let analysisEnabled = settings.resolvedLiveAnalysisEnabled
                 // Segmentation runs when keying OR a silhouette contour is
                 // needed. Portrait's Body outline owns the request too, so
                 // enabling that one Portrait control produces a real line
                 // contour without requiring a separate Marks toggle.
-                let portraitOutlineWanted = settings.landmarks.resolvedPortraitEnabled
+                let portraitOutlineWanted = analysisEnabled && settings.landmarks.resolvedPortraitEnabled
                     && settings.landmarks.resolvedPortraitOutlineEnabled
-                let contourWanted = settings.landmarks.enabled
+                let contourWanted = analysisEnabled && settings.landmarks.enabled
                     && (settings.landmarks.trackContour || portraitOutlineWanted)
                 // v2: a Person Key effect anywhere in the layer stack needs the matte.
-                let personKeyWanted = settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
+                let personKeyWanted = analysisEnabled && settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
                 var segSettings = settings.segmentation
-                segSettings.enabled = settings.segmentation.enabled || contourWanted || personKeyWanted
+                segSettings.enabled = analysisEnabled && (settings.segmentation.enabled || contourWanted || personKeyWanted)
                 let rawMatte = self.segmentationService.currentMatte(
                     pixelBuffer: originalPixelBuffer,
                     settings: segSettings
                 )
-                let matte = (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
+                let matte = analysisEnabled && (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
                 let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 let drawingInput = self.drawingAnalysisBinding(graph: graph)
                 // Landmark analysis remains shared infrastructure: routing the
                 // Drawing producer to Mouse must not starve control fields or
                 // other future landmark consumers.
-                let landmarkDrawingWanted = settings.landmarks.enabled
+                let landmarkDrawingWanted = analysisEnabled && settings.landmarks.enabled
                 let detectionWanted = landmarkDrawingWanted
                 let drawingDetection: LandmarkDetection? = {
                     guard detectionWanted else { return nil }
@@ -1040,7 +1041,7 @@ final class SketchCamViewModel: ObservableObject {
                     mirrored: settings.mirror
                 )
                 let overlay: CIImage? = {
-                    guard settings.landmarks.enabled else { return nil }
+                    guard analysisEnabled && settings.landmarks.enabled else { return nil }
                     let routedDetection: LandmarkDetection?
                     var routedSettings = settings
                     switch drawingInput {
@@ -1369,7 +1370,8 @@ final class SketchCamViewModel: ObservableObject {
                                 inkLayers: [UUID: CIImage],
                                 clockSource: FrameSource,
                                 destination: MetalLayerCompositor.Destination = .program) -> ProcessedFrame? {
-        let outputRect = CGRect(origin: .zero, size: outputFormat.size)
+        let processingFormat = Self.gpuProcessingFormat(for: outputFormat, quality: settings.processingQuality)
+        let outputRect = CGRect(origin: .zero, size: processingFormat.size)
         let sourceFrames = sourceFrames(clockFrame: pixelBuffer, clockSource: clockSource)
         let cameraImage: CIImage? = sourceFrames.camera.map {
             CoreImageFrameProcessor.aspectFill(CIImage(cvPixelBuffer: $0), in: outputRect, mirrored: settings.mirror)
@@ -1386,14 +1388,21 @@ final class SketchCamViewModel: ObservableObject {
             return CoreImageFrameProcessor.aspectFill(inSrc, in: outputRect, mirrored: settings.mirror)
         }
 
+        let scaledOverlay = Self.scaleImage(overlay, from: outputFormat.size, to: processingFormat.size)
+        let scaledWebLayer = Self.scaleImage(webLayer, from: outputFormat.size, to: processingFormat.size)
+        let scaledInkLayer = Self.scaleImage(inkLayer, from: outputFormat.size, to: processingFormat.size)
+        let scaledInkLayers = inkLayers.mapValues {
+            Self.scaleImage($0, from: outputFormat.size, to: processingFormat.size) ?? $0
+        }
+
         let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
-        let needsPersonMatte = graph.layers.contains { layer in
+        let needsPersonMatte = settings.resolvedLiveAnalysisEnabled && graph.layers.contains { layer in
             layer.visible &&
             (layer.effects.contains { $0.enabled && $0.kind.needsPersonMatte } ||
              layer.mask?.source == .source(.personMatte))
         }
         var sourceSegmentation = settings.segmentation
-        sourceSegmentation.enabled = sourceSegmentation.enabled || needsPersonMatte
+        sourceSegmentation.enabled = settings.resolvedLiveAnalysisEnabled && (sourceSegmentation.enabled || needsPersonMatte)
         let cameraPersonMatteImage = sourceFrames.camera.flatMap {
             sourcePersonMatteImage(
                 pixelBuffer: $0,
@@ -1427,13 +1436,13 @@ final class SketchCamViewModel: ObservableObject {
                 case .personMatte:
                     return personMatteImage
                 case .overlay, .marks, .drawing:
-                    return overlay
+                    return scaledOverlay
                 case .ink:
-                    return inkLayers[node.id] ?? inkLayer
+                    return scaledInkLayers[node.id] ?? scaledInkLayer
                 case .acrylic(let config):
-                    return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: outputFormat.size)
+                    return self.acrylicCompositor.layer(nodeID: node.id, config: config, outputSize: processingFormat.size)
                 case .web:
-                    return webLayer
+                    return scaledWebLayer
                 case .image(let config):
                     return self.imageMaterial(config)
                 case .effect:
@@ -1453,13 +1462,55 @@ final class SketchCamViewModel: ObservableObject {
             }
         )
         let workspace = settings.workspace.map { workspace in
-            var resolved = workspace
-            resolved.outputViewport.frame = CGRect(origin: workspace.outputViewport.frame.origin, size: outputFormat.size)
-            return resolved
+            Self.scaledWorkspace(workspace, from: outputFormat.size, to: processingFormat.size)
         }
         return gpu.composite(graph: graph, streams: streams, outputFormat: outputFormat,
                              workspace: workspace, destination: destination,
-                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror)
+                             frameIndex: frameIndex, timestamp: timestamp, mirror: settings.mirror,
+                             processingFormat: processingFormat)
+    }
+
+    private static func gpuProcessingFormat(for outputFormat: FrameFormat, quality: ProcessingQuality) -> FrameFormat {
+        guard let maxHeight = quality.maxHeight,
+              outputFormat.height > maxHeight else { return outputFormat }
+        let scale = Double(maxHeight) / Double(outputFormat.height)
+        let width = max(2, Int((Double(outputFormat.width) * scale).rounded()))
+        let height = max(2, Int((Double(outputFormat.height) * scale).rounded()))
+        return FrameFormat(id: "gpu-\(outputFormat.id)-\(width)x\(height)", width: width, height: height,
+                           frameRate: outputFormat.frameRate, pixelFormat: outputFormat.pixelFormat)
+    }
+
+    private static func scaleImage(_ image: CIImage?, from sourceSize: CGSize, to targetSize: CGSize) -> CIImage? {
+        guard let image else { return nil }
+        guard sourceSize != targetSize else { return image }
+        return image
+            .transformed(by: CGAffineTransform(scaleX: targetSize.width / max(1, sourceSize.width),
+                                               y: targetSize.height / max(1, sourceSize.height)))
+            .cropped(to: CGRect(origin: .zero, size: targetSize))
+    }
+
+    private static func scaledWorkspace(_ workspace: CollageWorkspace, from sourceSize: CGSize,
+                                        to targetSize: CGSize) -> CollageWorkspace {
+        guard sourceSize != targetSize else { return workspace }
+        let sx = targetSize.width / max(1, sourceSize.width)
+        let sy = targetSize.height / max(1, sourceSize.height)
+        let ss = min(sx, sy)
+        func scaleRect(_ rect: CGRect) -> CGRect {
+            CGRect(x: rect.origin.x * sx, y: rect.origin.y * sy,
+                   width: rect.size.width * sx, height: rect.size.height * sy)
+        }
+        var resolved = workspace
+        resolved.outputViewport.frame = scaleRect(workspace.outputViewport.frame)
+        resolved.frames = workspace.frames.map { frame in
+            var scaled = frame
+            scaled.localBounds = scaleRect(frame.localBounds)
+            scaled.transform.tx *= sx
+            scaled.transform.ty *= sy
+            scaled.bleed *= ss
+            return scaled
+        }
+        resolved.viewCenter = CGPoint(x: workspace.viewCenter.x * sx, y: workspace.viewCenter.y * sy)
+        return resolved
     }
 
     private func sourcePersonMatteImage(

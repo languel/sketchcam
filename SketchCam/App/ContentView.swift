@@ -3061,6 +3061,12 @@ struct ContentView: View {
         Toggle("GPU compositor (experimental)", isOn: $model.settings.useGPUCompositor)
             .help("Composite every layer (camera/solid/paper/drawing/ink/web) from the graph on the GPU — per-layer Metal effect chain + mask. Off = legacy CoreImage path. The camera becomes a real, reorderable/maskable layer.")
 
+        SectionHeader("Analysis")
+        Toggle("Live feature analysis", isOn: liveAnalysisBinding)
+            .help("When off, skips MediaPipe landmark detection and automatic Vision person-matte work. Feature-driven layers pass through, so you can tune image effects without paying for analysis.")
+        Toggle("Segmentation / person matte", isOn: $model.settings.segmentation.enabled)
+            .help("Request Vision person segmentation when live analysis is enabled. Person Key and contour features can still request it automatically; turn Live feature analysis off for a complete bypass.")
+
         SectionHeader("Ink Undo")
         HStack {
             Text("GPU states")
@@ -3225,6 +3231,13 @@ struct ContentView: View {
         let simHeight = max(1, Int((Double(height) * simScale).rounded()))
         // Dye fields use 26 bytes/pixel; solver fields use 6 bytes/pixel.
         return Double(dyeWidth * dyeHeight * 26 + simWidth * simHeight * 6)
+    }
+
+    private var liveAnalysisBinding: Binding<Bool> {
+        Binding(
+            get: { model.settings.resolvedLiveAnalysisEnabled },
+            set: { model.settings.liveAnalysisEnabled = $0 }
+        )
     }
 
     private var inkUndoMaximumStateCount: Int {
