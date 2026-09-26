@@ -110,6 +110,36 @@ public enum DrawingAlgorithm: String, Codable, Sendable, CaseIterable {
     case yarn, wrap, lineWalk, portrait
 }
 
+/// Source regions an explicit Drawing layer may include. These filter a
+/// shared landmark detection at render time; they do not disable tracking for
+/// other Drawing layers.
+public enum DrawingRegion: String, Codable, Sendable, CaseIterable {
+    case jaw, nose, mouth, leftBrow, rightBrow, leftEye, rightEye
+    case head, torso, leftArm, rightArm, leftLeg, rightLeg, hands
+    case contour, bodyHull
+
+    public var title: String {
+        switch self {
+        case .jaw: return "Jaw"
+        case .nose: return "Nose"
+        case .mouth: return "Mouth"
+        case .leftBrow: return "L Brow"
+        case .rightBrow: return "R Brow"
+        case .leftEye: return "L Eye"
+        case .rightEye: return "R Eye"
+        case .head: return "Head joints"
+        case .torso: return "Torso / neck"
+        case .leftArm: return "L Arm"
+        case .rightArm: return "R Arm"
+        case .leftLeg: return "L Leg"
+        case .rightLeg: return "R Leg"
+        case .hands: return "Hands"
+        case .contour: return "Person outline"
+        case .bodyHull: return "Body hull"
+        }
+    }
+}
+
 /// Per-node config payloads (the start of moving feature config into the graph).
 public struct SolidConfig: Codable, Sendable, Equatable {
     public var color: RGBAColor
@@ -727,17 +757,22 @@ public struct Node: Identifiable, Codable, Sendable, Equatable {
     /// One binding per `kind.ports`, same order.
     public var inputs: [PortBinding]
     public var inkConfig: InkFrameConfig?
+    /// Nil means all tracked regions (for older saved graphs). Explicit
+    /// Drawing nodes use this list to choose their own source categories.
+    public var drawingRegions: [DrawingRegion]?
     /// true = derived from the legacy feature flags (reconciliation owns it);
     /// false = user-created in the Layers panel (preserved across reconcile).
     public var managed: Bool
 
     public init(id: UUID = UUID(), name: String, kind: NodeKind, inputs: [PortBinding]? = nil,
-                inkConfig: InkFrameConfig? = nil, managed: Bool = true) {
+                inkConfig: InkFrameConfig? = nil, drawingRegions: [DrawingRegion]? = nil,
+                managed: Bool = true) {
         self.id = id
         self.name = name
         self.kind = kind
         self.inputs = inputs ?? kind.defaultBindings
         self.inkConfig = inkConfig
+        self.drawingRegions = drawingRegions
         self.managed = managed
     }
 }
@@ -800,6 +835,20 @@ public struct LayerGraph: Codable, Sendable, Equatable {
     }
 
     public func node(_ id: UUID) -> Node? { nodes.first { $0.id == id } }
+
+    /// Match the compositing stack to a workspace frame reorder. IDs absent
+    /// from the workspace retain their original relative order at the end.
+    public func reorderedLayers(matching layerIDs: [UUID]) -> LayerGraph {
+        var result = self
+        let byID = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0) })
+        var seen = Set<UUID>()
+        let ordered = layerIDs.compactMap { id -> Layer? in
+            guard seen.insert(id).inserted else { return nil }
+            return byID[id]
+        }
+        result.layers = ordered + layers.filter { !seen.contains($0.id) }
+        return result
+    }
 }
 
 // MARK: - Validation + scheduling

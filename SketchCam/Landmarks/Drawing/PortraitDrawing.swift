@@ -41,7 +41,15 @@ struct PortraitDrawing: DrawingAlgorithm {
     }
 
     func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
-        semanticRouteModels(groups: groups, landmarks: landmarks).enumerated().flatMap { index, model in
+        if landmarks.resolvedPortraitApproach == .gesture {
+            return GesturePortrait.paths(groups: groups, settings: landmarks).enumerated().flatMap { index, path in
+                DrawingSupport.ribbonStrokes(path, color: landmarks.resolvedPortraitColor,
+                    baseWidth: CGFloat(max(0.4, landmarks.resolvedPortraitWidth)),
+                    widthVariation: landmarks.resolvedPortraitWidthVariation,
+                    halo: landmarks.resolvedPortraitHalo, seed: landmarks.resolvedPortraitSeed &+ index)
+            }
+        }
+        return semanticRouteModels(groups: groups, landmarks: landmarks).enumerated().flatMap { index, model in
             let isOutline = model.kind == .outline
             var color = landmarks.resolvedPortraitColor
             if isOutline {
@@ -79,7 +87,10 @@ struct PortraitDrawing: DrawingAlgorithm {
     /// unified mode intentionally returns one connected itinerary. Any route
     /// may be absent when its markers are unavailable.
     func semanticRoutes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [[CGPoint]] {
-        semanticRouteModels(groups: groups, landmarks: landmarks).map(\.points)
+        if landmarks.resolvedPortraitApproach == .gesture {
+            return GesturePortrait.paths(groups: groups, settings: landmarks)
+        }
+        return semanticRouteModels(groups: groups, landmarks: landmarks).map(\.points)
     }
 
     private func semanticRouteModels(groups: [MappedGroup], landmarks: LandmarkSettings) -> [SemanticRoute] {
@@ -119,19 +130,25 @@ struct PortraitDrawing: DrawingAlgorithm {
                 faceFeatures.append(first)
             }
         }
-        if landmarks.resolvedPortraitHairEnabled,
-           let hair = PortraitPathBuilder.hairComponent(
+        let hair = landmarks.resolvedPortraitHairEnabled
+            ? PortraitPathBuilder.hairComponent(
                from: groups,
                style: landmarks.resolvedPortraitHairStyle,
                amount: landmarks.resolvedPortraitHairAmount,
                seed: landmarks.resolvedPortraitSeed &+ 71
-           ) {
+            ) : nil
+        if let hair {
             faceFeatures.append(hair)
         }
-        let bodyFeatures = PortraitPathBuilder.orderedBodyFeatures(components)
-        let outline = landmarks.resolvedPortraitOutlineEnabled
-            ? PortraitPathBuilder.outlineComponent(from: groups)
-            : nil
+        let bodyFeatures = PortraitPathBuilder.orderedBodyFeatures(components).filter {
+            !landmarks.resolvedPortraitPoseBodyEnabled ||
+                ![LandmarkRegion.head, .torso, .leftArm, .rightArm].contains($0.region)
+        }
+        let outline = landmarks.resolvedPortraitPoseBodyEnabled
+            ? PortraitPathBuilder.poseBodyComponent(from: groups, scalp: hair,
+                                                    seed: landmarks.resolvedPortraitSeed &+ 113)
+            : (landmarks.resolvedPortraitOutlineEnabled
+                ? PortraitPathBuilder.outlineComponent(from: groups, scalp: hair) : nil)
         // Unified mode keeps topology fixed while landmarks move. Variety is
         // supplied by the editable seed, nose/pupil selection, and explicit
         // subsampling; the legacy route-variation control remains for the
@@ -302,7 +319,7 @@ struct PortraitDrawing: DrawingAlgorithm {
                     toward: from
                 )
             }
-            let points = PortraitPathBuilder.stylize(
+            var points = PortraitPathBuilder.stylize(
                 sourcePoints,
                 closed: feature.closed,
                 style: style,
@@ -312,6 +329,11 @@ struct PortraitDrawing: DrawingAlgorithm {
                 scale: scale,
                 seed: seed &+ index &* 31
             )
+            if (feature.isCrown || feature.region == .jaw || feature.region == .contour), !feature.closed,
+               points.count >= 2, let first = sourcePoints.first, let last = sourcePoints.last {
+                points[0] = first
+                points[points.count - 1] = last
+            }
             guard !points.isEmpty else { continue }
             if let from = result.last, let to = points.first {
                 let bridge = PortraitPathBuilder.bridge(
@@ -390,6 +412,9 @@ enum PortraitPathBuilder {
         var handedness: Handedness
         var isCrown: Bool = false
         var isPupil: Bool = false
+        /// Geometry reference for joining an optional person contour. Wild
+        /// hair need not draw a smooth roof just to supply its apex.
+        var scalpApex: CGPoint? = nil
     }
 
     static func isArticulatedBodyRegion(_ region: LandmarkRegion) -> Bool {
@@ -429,11 +454,109 @@ enum PortraitPathBuilder {
         return result
     }
 
+    /// An intentionally drawn bust, derived from the stable pose joints. The
+    /// person matte is never consulted: shoulders articulate the neck, arms
+    /// form tapered sleeves, and hips establish a gently rounded lower edge.
+    /// Scalp/jaw ear anchors make this meet the moving face in screen space.
+    static func poseBodyComponent(from groups: [MappedGroup], scalp: Component?, seed: Int) -> Component? {
+        let torso = groups.first { $0.region == .torso }
+        func joint(_ label: String) -> CGPoint? {
+            guard let torso else { return nil }
+            return zip(torso.labels, torso.points).first { $0.0 == label }?.1
+        }
+        guard let leftShoulder = joint("Lsho"), let rightShoulder = joint("Rsho") else { return nil }
+        let jaw = groups.first { $0.region == .jaw && $0.points.count >= 3 }
+        guard let endpoints = scalp.flatMap({ component -> (CGPoint, CGPoint)? in
+            guard let first = component.points.first, let last = component.points.last else { return nil }
+            return (first, last)
+        }) ?? jaw.flatMap({ group -> (CGPoint, CGPoint)? in
+            guard let first = group.points.first, let last = group.points.last else { return nil }
+            return (first, last)
+        }) else { return nil }
+
+        // Vision labels describe anatomy, not screen position. Pair each ear
+        // with its nearest shoulder so camera mirroring and yaw cannot swap the
+        // two sides of the silhouette.
+        let same = hypot(endpoints.0.x - leftShoulder.x, endpoints.0.y - leftShoulder.y)
+                 + hypot(endpoints.1.x - rightShoulder.x, endpoints.1.y - rightShoulder.y)
+        let crossed = hypot(endpoints.0.x - rightShoulder.x, endpoints.0.y - rightShoulder.y)
+                    + hypot(endpoints.1.x - leftShoulder.x, endpoints.1.y - leftShoulder.y)
+        let shoulders = same <= crossed
+            ? (leftShoulder, rightShoulder) : (rightShoulder, leftShoulder)
+        let earSpan = max(10, hypot(endpoints.1.x - endpoints.0.x, endpoints.1.y - endpoints.0.y))
+        let shoulderSpan = max(earSpan, hypot(shoulders.1.x - shoulders.0.x, shoulders.1.y - shoulders.0.y))
+        let midShoulder = CGPoint(x: (shoulders.0.x + shoulders.1.x) * 0.5,
+                                  y: (shoulders.0.y + shoulders.1.y) * 0.5)
+        let neck = joint("neck") ?? midShoulder
+        let root = joint("root") ?? CGPoint(x: midShoulder.x, y: midShoulder.y - shoulderSpan * 0.8)
+        let downDelta = CGPoint(x: root.x - neck.x, y: root.y - neck.y)
+        let downLength = max(1, hypot(downDelta.x, downDelta.y))
+        let down = CGPoint(x: downDelta.x / downLength, y: downDelta.y / downLength)
+        let across = CGPoint(x: -down.y, y: down.x)
+        let orientation: CGFloat = (shoulders.1.x - shoulders.0.x) * across.x
+            + (shoulders.1.y - shoulders.0.y) * across.y >= 0 ? 1 : -1
+        let side = CGPoint(x: across.x * orientation, y: across.y * orientation)
+        let leftHip = joint(same <= crossed ? "Lhip" : "Rhip")
+        let rightHip = joint(same <= crossed ? "Rhip" : "Lhip")
+        let waistDepth = max(shoulderSpan * 0.65, min(shoulderSpan * 1.45, downLength))
+        let leftWaist = leftHip ?? CGPoint(x: root.x - side.x * shoulderSpan * 0.37,
+                                          y: root.y - side.y * shoulderSpan * 0.37)
+        let rightWaist = rightHip ?? CGPoint(x: root.x + side.x * shoulderSpan * 0.37,
+                                            y: root.y + side.y * shoulderSpan * 0.37)
+        let lower = CGPoint(x: midShoulder.x + down.x * waistDepth,
+                            y: midShoulder.y + down.y * waistDepth)
+        var random = PortraitPRNG(seed: seed)
+        let bow = (random.unit() - 0.5) * shoulderSpan * 0.08
+        func mix(_ a: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
+            CGPoint(x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t)
+        }
+        func displaced(_ p: CGPoint, along v: CGPoint, by d: CGFloat) -> CGPoint {
+            CGPoint(x: p.x + v.x * d, y: p.y + v.y * d)
+        }
+        func armPoints(_ region: LandmarkRegion, shoulder: CGPoint, outward: CGFloat) -> [CGPoint] {
+            guard let group = groups.first(where: { $0.region == region }) else { return [] }
+            let labeled = Dictionary(uniqueKeysWithValues: zip(group.labels, group.points).compactMap {
+                label, point -> (String, CGPoint)? in label.map { ($0, point) }
+            })
+            let prefix = region == .leftArm ? "L" : "R"
+            guard let elbow = labeled["\(prefix)elb"] else { return [] }
+            let wrist = labeled["\(prefix)wri"] ?? displaced(elbow, along: down, by: shoulderSpan * 0.28)
+            let upperWidth = shoulderSpan * 0.105, lowerWidth = shoulderSpan * 0.055
+            // A sleeve is one out-and-back stroke, not a line down the bone.
+            // Width tapers towards the wrist; both arcs share the pose joints.
+            return [displaced(mix(shoulder, elbow, 0.45), along: side, by: outward * upperWidth),
+                    displaced(elbow, along: side, by: outward * upperWidth * 0.8),
+                    displaced(mix(elbow, wrist, 0.52), along: side, by: outward * lowerWidth),
+                    displaced(wrist, along: down, by: lowerWidth * 0.55),
+                    displaced(mix(elbow, wrist, 0.52), along: side, by: -outward * lowerWidth),
+                    displaced(elbow, along: side, by: -outward * upperWidth * 0.68)]
+        }
+        let firstRegion: LandmarkRegion = same <= crossed ? .leftArm : .rightArm
+        let secondRegion: LandmarkRegion = same <= crossed ? .rightArm : .leftArm
+        var points = [endpoints.0,
+                      mix(endpoints.0, neck, 0.38),
+                      mix(endpoints.0, shoulders.0, 0.76), shoulders.0]
+        points += armPoints(firstRegion, shoulder: shoulders.0, outward: -1)
+        points += [displaced(mix(shoulders.0, leftWaist, 0.48), along: side,
+                             by: -shoulderSpan * 0.04 + bow),
+                   leftWaist,
+                   displaced(mix(leftWaist, lower, 0.5), along: down, by: shoulderSpan * 0.08),
+                   lower,
+                   displaced(mix(lower, rightWaist, 0.5), along: down, by: shoulderSpan * 0.08),
+                   rightWaist,
+                   displaced(mix(rightWaist, shoulders.1, 0.48), along: side,
+                             by: shoulderSpan * 0.04 + bow), shoulders.1]
+        points += armPoints(secondRegion, shoulder: shoulders.1, outward: 1)
+        points += [mix(shoulders.1, endpoints.1, 0.24),
+                   mix(neck, endpoints.1, 0.38), endpoints.1]
+        return Component(region: .torso, points: points, closed: false, handedness: .unknown)
+    }
+
     /// Prefer an explicit segmentation contour, then an explicit hull. When
     /// neither is available, make a lightweight hull from the detected face
     /// and body markers so Portrait can add a scalp/shoulder silhouette without
     /// changing the shared detection groups used by the other algorithms.
-    static func outlineComponent(from groups: [MappedGroup]) -> Component? {
+    static func outlineComponent(from groups: [MappedGroup], scalp: Component? = nil) -> Component? {
         let explicit = groups
             .filter { $0.region == .contour || $0.region == .bodyHull }
             .sorted {
@@ -441,6 +564,11 @@ enum PortraitPathBuilder {
                 return $0.points.count > $1.points.count
             }
         if let group = explicit.first, group.points.count >= 3 {
+            if group.region == .contour, let scalp,
+               let bodyArc = bodyContourJoinedToScalp(group.points, scalp: scalp) {
+                return Component(region: .contour, points: bodyArc, closed: false,
+                                 handedness: .unknown)
+            }
             var points = group.points
             if points.first != points.last, let first = points.first { points.append(first) }
             return Component(region: group.region, points: points, closed: true, handedness: .unknown)
@@ -490,6 +618,54 @@ enum PortraitPathBuilder {
             closed: true,
             handedness: .unknown
         )
+    }
+
+    /// Keep the lower/person side of the segmentation boundary and replace
+    /// its head arc with the face-anchored scalp. Both remaining ends are the
+    /// exact ear points, so the two drawn components meet as the head turns.
+    private static func bodyContourJoinedToScalp(_ contour: [CGPoint], scalp: Component) -> [CGPoint]? {
+        guard let leftEar = scalp.points.first, let rightEar = scalp.points.last,
+              let crownPoint = scalp.scalpApex ?? (scalp.points.count > 8 ? scalp.points[8] : nil)
+        else { return nil }
+        var ring = contour
+        if ring.first == ring.last { ring.removeLast() }
+        guard ring.count >= 8 else { return nil }
+        let earMiddle = CGPoint(x: (leftEar.x + rightEar.x) * 0.5,
+                                y: (leftEar.y + rightEar.y) * 0.5)
+        let crownDelta = CGPoint(x: crownPoint.x - earMiddle.x,
+                                 y: crownPoint.y - earMiddle.y)
+        let crownLength = hypot(crownDelta.x, crownDelta.y)
+        let earSpan = hypot(rightEar.x - leftEar.x, rightEar.y - leftEar.y)
+        guard crownLength > 8, earSpan > 8 else { return nil }
+        let up = CGPoint(x: crownDelta.x / crownLength, y: crownDelta.y / crownLength)
+        func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
+        guard let leftIndex = ring.indices.min(by: { distance(ring[$0], leftEar) < distance(ring[$1], leftEar) }),
+              let rightIndex = ring.indices.min(by: { distance(ring[$0], rightEar) < distance(ring[$1], rightEar) }),
+              leftIndex != rightIndex,
+              distance(ring[leftIndex], leftEar) < earSpan * 0.5,
+              distance(ring[rightIndex], rightEar) < earSpan * 0.5 else { return nil }
+        func arc(step: Int) -> [CGPoint] {
+            var result = [ring[leftIndex]]
+            var index = leftIndex
+            while index != rightIndex && result.count <= ring.count {
+                index = (index + step + ring.count) % ring.count
+                result.append(ring[index])
+            }
+            return result
+        }
+        func rise(_ point: CGPoint) -> CGFloat {
+            (point.x - earMiddle.x) * up.x + (point.y - earMiddle.y) * up.y
+        }
+        let forward = arc(step: 1), backward = arc(step: -1)
+        guard forward.count >= 3, backward.count >= 3 else { return nil }
+        let forwardMean = forward.map(rise).reduce(0, +) / CGFloat(forward.count)
+        let backwardMean = backward.map(rise).reduce(0, +) / CGFloat(backward.count)
+        let headArc = forwardMean > backwardMean ? forward : backward
+        let bodyArc = forwardMean > backwardMean ? backward : forward
+        guard bodyArc.count >= 4,
+              (headArc.map(rise).max() ?? 0) > earSpan * 0.2,
+              abs(forwardMean - backwardMean) > earSpan * 0.1 else { return nil }
+        return [leftEar] + bodyArc + [rightEar]
     }
 
     /// Split compound landmark groups (outer/inner lips, eye/pupil, hands) into
@@ -614,16 +790,10 @@ enum PortraitPathBuilder {
         }
         guard !crowns.isEmpty else { return result }
 
-        // Keep the extrapolated crown in the face's unicursal itinerary. A
-        // seeded placement near the brows/jaw gives the line a deliberate
-        // entry/exit while still allowing different portraits to shuffle it.
-        let insertionChoices = result.indices.filter { index in
-            let region = result[index].region
-            return region == .leftBrow || region == .leftEye || region == .rightBrow || region == .rightEye
-        }
-        if !insertionChoices.isEmpty {
-            let offset = Int(random.unit() * CGFloat(insertionChoices.count))
-            let insertion = insertionChoices[min(insertionChoices.count - 1, offset)]
+        // The crown ends at the same ear points as the jaw contour. Keep the
+        // two adjacent in the route; the seed may choose either handoff.
+        if let jawIndex = result.firstIndex(where: { $0.region == .jaw }) {
+            let insertion = random.unit() < 0.5 ? jawIndex : jawIndex + 1
             result.insert(contentsOf: crowns, at: insertion)
         } else {
             result.append(contentsOf: crowns)
@@ -645,13 +815,27 @@ enum PortraitPathBuilder {
         seed: Int
     ) -> [Component] {
         let faceItinerary = faceItinerary(face, variation: variation, seed: seed)
-        var pool = faceItinerary + body
+        let crowns = faceItinerary.filter { $0.isCrown && $0.points.count >= 2 }
+        let faceWithoutCrown = faceItinerary.filter { !$0.isCrown }
+        func attachCrown(to planned: [Component]) -> [Component] {
+            guard !crowns.isEmpty else { return planned }
+            var result = planned
+            if let jawIndex = result.firstIndex(where: { $0.region == .jaw }) {
+                result.insert(contentsOf: crowns, at: jawIndex + (seed & 1))
+            } else {
+                result.append(contentsOf: crowns)
+            }
+            return result
+        }
+        // Plan other parts first, then attach the scalp to its matching jaw
+        // endpoint. Detail priority must not pull the crown into an eye or brow.
+        var pool = faceWithoutCrown + body
         if let outline,
            !body.contains(where: { $0.region == outline.region && $0.points == outline.points }) {
             pool.append(outline)
         }
         pool = pool.filter { $0.points.count >= 2 }
-        guard pool.count > 1 else { return pool }
+        guard pool.count > 1 else { return attachCrown(to: pool) }
 
         let priority = CGFloat(max(0, min(1, detailPriority)))
         let clampedVariation = CGFloat(max(0, min(1, variation)))
@@ -660,7 +844,7 @@ enum PortraitPathBuilder {
         let bounds = allPoints.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
         let scale = max(8, max(bounds.width, bounds.height))
         var random = PortraitPRNG(seed: seed &+ 0x6B)
-        let initialJitter = (0..<max(1, faceItinerary.count)).map { _ in random.unit() }
+        let initialJitter = (0..<max(1, faceWithoutCrown.count)).map { _ in random.unit() }
 
         func detailScore(_ component: Component) -> CGFloat {
             if component.isPupil { return 1.35 }
@@ -678,7 +862,7 @@ enum PortraitPathBuilder {
 
         // Start from a face detail anchor when requested. At zero priority we
         // retain the first semantic face component, preserving the old look.
-        let faceCount = min(faceItinerary.count, pool.count)
+        let faceCount = min(faceWithoutCrown.count, pool.count)
         let initialIndex: Int
         if faceCount > 0 {
             initialIndex = (0..<faceCount).min { lhs, rhs in
@@ -720,7 +904,7 @@ enum PortraitPathBuilder {
             route.append(pool.remove(at: nextIndex))
             candidateJitter.remove(at: nextIndex)
         }
-        return route
+        return attachCrown(to: route)
     }
 
     private static func canonicalFaceOrder(_ features: [Component]) -> [Component] {
@@ -730,8 +914,8 @@ enum PortraitPathBuilder {
         let byRegion = Dictionary(grouping: features, by: \.region)
         var result = order.flatMap { byRegion[$0] ?? [] }
         let crowns = features.filter(\.isCrown)
-        if let firstBrow = result.firstIndex(where: { $0.region == .leftBrow || $0.region == .rightBrow }) {
-            result.insert(contentsOf: crowns, at: firstBrow)
+        if let jawIndex = result.firstIndex(where: { $0.region == .jaw }) {
+            result.insert(contentsOf: crowns, at: jawIndex)
         } else {
             result.append(contentsOf: crowns)
         }
@@ -786,7 +970,8 @@ enum PortraitPathBuilder {
         if pair == Set([.leftBrow, .leftEye]) || pair == Set([.rightBrow, .rightEye]) { return 0.94 }
         if pair.contains(.nose) && (pair.contains(.leftEye) || pair.contains(.rightEye) || pair.contains(.leftBrow) || pair.contains(.rightBrow)) { return 0.82 }
         if pair == Set([.mouth, .jaw]) { return 0.9 }
-        if lhs.isCrown || rhs.isCrown { return 0.68 }
+        if (lhs.isCrown || rhs.isCrown) && pair.contains(.jaw) { return 0.97 }
+        if lhs.isCrown || rhs.isCrown { return 0.5 }
         return 0.38
     }
 
@@ -893,9 +1078,9 @@ enum PortraitPathBuilder {
         return lastDistance < firstDistance ? Array(points.reversed()) : points
     }
 
-    /// A face-only crown route. Its local coordinate frame comes from the
-    /// brow/eye line and lower-face direction, so it follows head roll while
-    /// remaining isolated from hands and body joints.
+    /// A scalp arc between the two ends of Vision's open face contour (the
+    /// cheek/ear junctions). The face frame moves those anchors with head roll
+    /// and yaw; the person contour can lend shape without owning the position.
     static func hairComponent(
         from groups: [MappedGroup],
         style: PortraitHairStyle,
@@ -907,8 +1092,7 @@ enum PortraitPathBuilder {
         ]
         let faceGroups = groups.filter { faceRegions.contains($0.region) }
         let facePoints = faceGroups.flatMap(\.points)
-        let bounds = facePoints.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
-        guard !bounds.isNull, bounds.width > 8, bounds.height > 8 else { return nil }
+        guard facePoints.count >= 3 else { return nil }
 
         func center(of regions: Set<LandmarkRegion>) -> CGPoint? {
             let points = faceGroups.filter { regions.contains($0.region) }.flatMap(\.points)
@@ -919,6 +1103,11 @@ enum PortraitPathBuilder {
             return CGPoint(x: sum.x / CGFloat(points.count), y: sum.y / CGFloat(points.count))
         }
 
+        let jaw = faceGroups.first { $0.region == .jaw && $0.points.count >= 3 }
+        let jawEnds = jaw.flatMap { group -> (CGPoint, CGPoint)? in
+            guard let first = group.points.first, let last = group.points.last else { return nil }
+            return (first, last)
+        }
         let leftAnchor = center(of: [.leftBrow, .leftEye])
         let rightAnchor = center(of: [.rightBrow, .rightEye])
         let browCenter = center(of: [.leftBrow, .rightBrow])
@@ -929,15 +1118,20 @@ enum PortraitPathBuilder {
         let axisDelta: CGPoint
         if let leftAnchor, let rightAnchor {
             axisDelta = CGPoint(x: rightAnchor.x - leftAnchor.x, y: rightAnchor.y - leftAnchor.y)
+        } else if let jawEnds {
+            axisDelta = CGPoint(x: jawEnds.1.x - jawEnds.0.x, y: jawEnds.1.y - jawEnds.0.y)
         } else {
             axisDelta = CGPoint(x: 1, y: 0)
         }
         let axisLength = max(0.001, hypot(axisDelta.x, axisDelta.y))
         let across = CGPoint(x: axisDelta.x / axisLength, y: axisDelta.y / axisLength)
         let perpendicular = CGPoint(x: -across.y, y: across.x)
+        let roughEarMiddle = jawEnds.map {
+            CGPoint(x: ($0.0.x + $0.1.x) * 0.5, y: ($0.0.y + $0.1.y) * 0.5)
+        }
         let lowerDirection = lowerCenter.flatMap { lower -> CGPoint? in
-            guard let upperCenter else { return nil }
-            return CGPoint(x: lower.x - upperCenter.x, y: lower.y - upperCenter.y)
+            guard let reference = upperCenter ?? roughEarMiddle else { return nil }
+            return CGPoint(x: lower.x - reference.x, y: lower.y - reference.y)
         }
         let down: CGPoint
         if let lowerDirection, lowerDirection.x * perpendicular.x + lowerDirection.y * perpendicular.y < 0 {
@@ -946,7 +1140,7 @@ enum PortraitPathBuilder {
             down = perpendicular
         }
         let up = CGPoint(x: -down.x, y: -down.y)
-        let origin = upperCenter ?? CGPoint(x: bounds.midX, y: bounds.minY)
+        let origin = roughEarMiddle ?? upperCenter ?? facePoints[0]
         let projected = facePoints.map { point in
             let offset = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
             return (across: offset.x * across.x + offset.y * across.y,
@@ -954,60 +1148,147 @@ enum PortraitPathBuilder {
         }
         let faceWidth = (projected.map(\.across).max() ?? 0) - (projected.map(\.across).min() ?? 0)
         let faceHeight = (projected.map(\.down).max() ?? 0) - (projected.map(\.down).min() ?? 0)
+        guard faceWidth > 8, faceHeight > 8 else { return nil }
         let faceScale = max(12, faceWidth, faceHeight)
 
         let clamped = CGFloat(max(0, min(1, amount)))
-        let width = max(axisLength * 1.35, faceWidth * 0.86, faceScale * 0.62)
-        // Keep the silhouette shallow. A tall sine arch above the brows reads
-        // as a cone; a broad cap reads as hair even before it gains texture.
-        let baselineLift = faceScale * 0.025
-        let lift = max(8, faceScale * (style == .clean ? 0.09 : 0.11 + clamped * 0.10))
-        var random = PortraitPRNG(seed: seed)
-        let phase = random.unit() * .pi * 2
-        func point(at t: CGFloat, height: CGFloat, weave: CGFloat = 0) -> CGPoint {
-            let arch = sin(t * .pi)
-            let side = (t - 0.5) * width
-            let crownLift = baselineLift + arch * height
-            var point = CGPoint(
-                x: origin.x + across.x * side + up.x * crownLift,
-                y: origin.y + across.y * side + up.y * crownLift
-            )
-            if weave > 0 {
-                let wiggle = sin(t * (.pi * 3.5) + phase) * faceScale * weave * arch
-                let sideways = cos(t * (.pi * 2.2) + phase * 0.7) * faceScale * weave * 0.28
-                point.x += up.x * wiggle + across.x * sideways
-                point.y += up.y * wiggle + across.y * sideways
-            }
-            return point
+        let fallbackSpan = max(axisLength * 1.4, faceWidth * 0.86)
+        let fallbackMiddle = CGPoint(
+            x: (upperCenter ?? origin).x + down.x * faceHeight * 0.08,
+            y: (upperCenter ?? origin).y + down.y * faceHeight * 0.08
+        )
+        let fallbackLeft = CGPoint(x: fallbackMiddle.x - across.x * fallbackSpan * 0.5,
+                                   y: fallbackMiddle.y - across.y * fallbackSpan * 0.5)
+        let fallbackRight = CGPoint(x: fallbackMiddle.x + across.x * fallbackSpan * 0.5,
+                                    y: fallbackMiddle.y + across.y * fallbackSpan * 0.5)
+        let earPair = jawEnds ?? (fallbackLeft, fallbackRight)
+        let earDelta = CGPoint(x: earPair.1.x - earPair.0.x, y: earPair.1.y - earPair.0.y)
+        let ordered = earDelta.x * across.x + earDelta.y * across.y >= 0
+            ? earPair : (earPair.1, earPair.0)
+        let leftEar = ordered.0, rightEar = ordered.1
+        let earMiddle = CGPoint(x: (leftEar.x + rightEar.x) * 0.5,
+                                y: (leftEar.y + rightEar.y) * 0.5)
+        let earSpan = max(8, abs((rightEar.x - leftEar.x) * across.x
+                                 + (rightEar.y - leftEar.y) * across.y))
+        let chinDepth = jaw?.points.map { point in
+            (point.x - earMiddle.x) * down.x + (point.y - earMiddle.y) * down.y
+        }.max() ?? faceHeight * 0.7
+        let browRise = upperCenter.map { point in
+            max(0, (point.x - earMiddle.x) * up.x + (point.y - earMiddle.y) * up.y)
+        } ?? 0
+        // A scalp occupies substantial space above the eyes. The old crown
+        // rose only ~10% of face size and read as another brow.
+        let geometricLift = max(earSpan * 0.44, chinDepth * 0.72,
+                                browRise + faceScale * 0.28)
+        // Hair amount controls fill density, not skull size. Keep the dome
+        // linked to facial proportions and optional contour guidance.
+        let lift = min(faceScale * 0.95, max(faceScale * 0.30, geometricLift * 0.98))
+        // Read only the head-sized upper region of the person silhouette.
+        // Its two side extents can widen the visible back of a turned head.
+        let contour = groups.filter { $0.region == .contour }.max { $0.points.count < $1.points.count }
+        let outlineSamples: [(side: CGFloat, rise: CGFloat)] = (contour?.points ?? []).compactMap { point in
+            let dx = point.x - earMiddle.x, dy = point.y - earMiddle.y
+            let side = dx * across.x + dy * across.y
+            let rise = dx * up.x + dy * up.y
+            guard abs(side) < faceScale * 0.85,
+                  rise > lift * 0.2, rise < lift * 1.6 else { return nil }
+            return (side, rise)
+        }
+        let contourTop = outlineSamples.map(\.rise).max() ?? 0
+        let useContour = outlineSamples.count >= 5
+            && contourTop > lift * 0.58 && contourTop < lift * 1.45
+        let leftExcess = useContour
+            ? max(0, -earSpan * 0.5 - (outlineSamples.map(\.side).min() ?? 0)) : 0
+        let rightExcess = useContour
+            ? max(0, (outlineSamples.map(\.side).max() ?? 0) - earSpan * 0.5) : 0
+        let defaultExpansion = max(earSpan * 0.05, (faceWidth - earSpan) * 0.16)
+        let leftExpansion = min(faceScale * 0.22, max(defaultExpansion, leftExcess * 0.7))
+        let rightExpansion = min(faceScale * 0.22, max(defaultExpansion, rightExcess * 0.7))
+        let noseSide = center(of: [.nose]).map { point in
+            (point.x - earMiddle.x) * across.x + (point.y - earMiddle.y) * across.y
+        } ?? 0
+        let skew = max(-faceScale * 0.12, min(faceScale * 0.12, -noseSide * 0.3))
+
+        func dome(_ t: CGFloat) -> CGFloat {
+            let turn = max(0, min(1, t + (skew / faceScale) * sin(.pi * t)))
+            return sqrt(max(0, 1 - pow(2 * turn - 1, 2)))
+        }
+        func side(_ t: CGFloat) -> CGFloat {
+            let expansion = t < 0.5 ? leftExpansion : rightExpansion
+            return -expansion * sin(2 * .pi * t) + skew * sin(.pi * t)
+        }
+        func scalpPoint(_ t: CGFloat, rise: CGFloat) -> CGPoint {
+            let base = CGPoint(x: leftEar.x + (rightEar.x - leftEar.x) * t,
+                               y: leftEar.y + (rightEar.y - leftEar.y) * t)
+            return CGPoint(x: base.x + across.x * side(t) + up.x * rise,
+                           y: base.y + across.y * side(t) + up.y * rise)
         }
 
+        // The contour's upper envelope lends broad shape, within a bounded
+        // range. The face tracker still owns the exact ear endpoints.
+        let count = 16
+        let unsmoothed: [CGFloat] = (0...count).map { index in
+            guard index > 0, index < count else { return 0 }
+            let t = CGFloat(index) / CGFloat(count)
+            let ideal = lift * dome(t)
+            guard useContour else { return ideal }
+            let target = (scalpPoint(t, rise: 0).x - earMiddle.x) * across.x
+                + (scalpPoint(t, rise: 0).y - earMiddle.y) * across.y
+            let nearby = outlineSamples.filter { abs($0.side - target) < max(8, faceScale * 0.075) }
+            guard let observed = nearby.map(\.rise).max() else { return ideal }
+            let bounded = max(ideal * 0.72, min(ideal * 1.3, observed))
+            return ideal * 0.42 + bounded * 0.58
+        }
+        let heights: [CGFloat] = unsmoothed.indices.map { index in
+            guard index > 0, index < count else { return 0 }
+            return unsmoothed[index - 1] * 0.18 + unsmoothed[index] * 0.64
+                + unsmoothed[index + 1] * 0.18
+        }
+        var random = PortraitPRNG(seed: seed)
+        let roof = (0...count).map { index -> CGPoint in
+            guard index > 0, index < count else { return index == 0 ? leftEar : rightEar }
+            let t = CGFloat(index) / CGFloat(count)
+            return scalpPoint(t, rise: heights[index])
+        }
         let points: [CGPoint]
         switch style {
         case .clean:
-            points = (0..<9).map { index in
-                point(at: CGFloat(index) / 8, height: lift)
-            }
+            points = roof
         case .wild:
-            // A compact boustrophedon weave fills the scalp region rather than
-            // tracing one tall outline. It stays one open component, so the
-            // portrait planner can still position it in the unicursal shuffle.
-            let rowCounts = [7, 6, 6]
-            let rowHeights: [CGFloat] = [lift * 0.22, lift * 0.58, lift]
-            var woven: [CGPoint] = []
-            for row in rowCounts.indices {
-                let count = rowCounts[row]
-                let values = (0..<count).map { index -> CGFloat in
-                    let t = CGFloat(index) / CGFloat(count - 1)
-                    return row.isMultiple(of: 2) ? t : 1 - t
-                }
-                let weave = 0.012 + clamped * 0.036
-                woven.append(contentsOf: values.map { t in
-                    point(at: t, height: rowHeights[row], weave: weave)
-                })
+            // Sample the cap as an AREA, then take a seeded proximity walk.
+            // No concentric rows or complete perimeter: the result is a
+            // face-like web of short turns, crossings, and local squiggles.
+            // A few roof samples anchor the implied scalp without outlining
+            // a helmet. The apex remains metadata for contour joining.
+            let sampleCount = 32 + Int((clamped * 100).rounded())
+            // Sample in the rotating face coordinate frame rather than the
+            // image's axis-aligned bounds. A head turn/roll must move existing
+            // strands, not re-randomize their route.
+            let interior = (0..<sampleCount).map { _ -> CGPoint in
+                let t = 0.045 + random.unit() * 0.91
+                let depth = 0.16 + random.unit() * 0.78
+                return scalpPoint(t, rise: lift * dome(t) * depth)
             }
-            points = woven
+            let impliedRoof = [2, 5, 8, 11, 14].map { roof[$0] }
+            let ordered = WrapDrawing.nearestNeighborOrder([leftEar] + interior + impliedRoof)
+            var walk: [CGPoint] = []
+            walk.reserveCapacity(ordered.count + sampleCount / 4 + 1)
+            for (index, point) in ordered.enumerated() {
+                walk.append(point)
+                guard index > 0, index.isMultiple(of: 7),
+                      !impliedRoof.contains(point) else { continue }
+                let radius = min(faceScale * 0.017, lift * 0.038)
+                walk.append(CGPoint(x: point.x + across.x * radius + up.x * radius,
+                                    y: point.y + across.y * radius + up.y * radius))
+                walk.append(CGPoint(x: point.x - across.x * radius + up.x * radius,
+                                    y: point.y - across.y * radius + up.y * radius))
+                walk.append(point)
+            }
+            walk.append(rightEar)
+            points = walk
         }
-        return Component(region: .head, points: points, closed: false, handedness: .unknown, isCrown: true)
+        return Component(region: .head, points: points, closed: false,
+                         handedness: .unknown, isCrown: true, scalpApex: roof[8])
     }
 
     private static func handedness(_ group: MappedGroup) -> Handedness {

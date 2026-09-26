@@ -11,6 +11,51 @@ it suddenly choose a different set of connections.
 This note describes the implementation as it exists today, including the parts
 that are deliberately provisional and useful targets for artistic iteration.
 
+## Layering portraits with other drawing passes
+
+Use **Layers → + → Drawing pass → Portrait** to add an independent Portrait
+layer. The expanded layer has landmark-category checkboxes. For example, one
+Portrait pass can use face regions while a Wrap pass uses hands and arms; each
+pass receives only its selected regions and renders as its own compositing
+layer. Their tracking requests are combined before the shared Vision detection,
+so hiding a category in one pass does not remove it from another pass. A newly
+added pass selects face, torso, arms, and hands by default; head joints, legs,
+person outline, and body hull are opt-in. The original merged Drawing layer and
+the main Portrait controls remain available for existing scenes.
+
+## Gesture approach
+
+Portrait → Style → Approach switches between the original **Landmarks** route
+algorithm and the **Gesture** drawing grammar. Landmarks remains the default.
+Gesture uses an authored pen itinerary to connect smoothed eye, brow, nose,
+lip, and jaw contours from the corresponding semantic trackers. It completes
+missing anatomy with drawn curves for the scalp, neck, and shoulders. Because
+the local axes come from the eye line and the lower face, the invented curves
+rotate with the tracked face. No segmentation mask is required.
+
+The pen passes from a live brow and eye contour around a seeded scalp shape,
+then continues through the opposite temple, neck, and a shoulder line fitted to
+the live torso/upper arms when present. It returns along a jaw contour, follows
+outer and inner lip loops, then traces the nose and opposite eye/brow. Seed
+changes the proportions and character of the completed forms while preserving
+the feature connections. Motion changes measured contours and positions; it
+does not reroll the route. Segments 1–3 split the gesture at pauses between the
+bust, mouth, and nose/eye passages.
+
+**Abstraction** blends measured contours toward authored strokes. **Shape
+variation** changes head, feature, and shoulder proportions; changing Seed
+browses deterministic character shapes. **Expression** follows or exaggerates
+eye and inner-lip opening. Width, nib variation, and halo use the existing
+stroke renderer. This mode draws a stylized character head and shoulders; it
+does not infer hands or animate a complete body skeleton. The original
+articulated Landmarks approach remains available for that.
+
+The current implementation is a lightweight geometric grammar, not a learned
+portrait model. Face contours are smoothed and resampled to a fixed point count
+so their changing shape does not alter the seeded route. Its fixture preview
+and geometry checks are in `GesturePortraitTests`; the feel during a real head
+turn, varied expressions, and varied faces still needs a local visual pass.
+
 ## What goes in and what comes out
 
 ```text
@@ -89,25 +134,28 @@ the main reason changing the seed changes the face's connection order today.
 
 ### Hair / crown
 
-The optional crown is a synthetic, open component derived **only from face
-landmarks**. Its local axis comes from the left/right brow or eye anchors; its
-up direction is the perpendicular pointing away from the nose, mouth, and jaw.
-It therefore follows face roll instead of staying horizontal in screen space,
-and it cannot consume hand or body points. Clean mode draws a shallow scalp
-contour; Wild mode makes a small, seeded boustrophedon weave through that cap,
-so it fills a hair mass while remaining one component in the unicursal planner.
+The optional crown is an open scalp component whose endpoints are the two
+cheek/ear ends of Vision's face contour. Its frame follows the eye or brow line
+and points away from the lower face, so the endpoints, width, and roll change
+with the projected head. A full dome rises above the brows; it no longer uses
+the brow line as its base. If the person contour is present, its upper envelope
+guides the broad dome height and asymmetry within a bounded range. The face
+anchors still own the position, so the outline tracker cannot pull the crown
+off the ears. Hands and body joints never become scalp anchors.
 
-- Clean: a 9-point shallow scalp contour.
-- Wild: a 19-point, three-row boustrophedon/Yarn-like scalp weave with seeded
-  lateral and vertical texture.
+- Clean: a 17-point ear-to-ear scalp outline.
+- Wild: seeded samples across the scalp area, ordered by a short-step Wrap-like
+  walk with local turns. It implies the roof with a few anchor points rather
+  than drawing concentric dome lines. Hair fill changes sample density, not
+  skull height; the hidden scalp apex is retained for contour attachment.
 
-The crown is inserted into the face itinerary near a brow/eye when possible.
-It is therefore part of the same seeded unicursal shuffle, rather than a
-separate decorative stroke.
+The crown stays in the unicursal face planner next to the jaw component. Seeds
+can choose which side of the jaw to connect first; both open paths retain their
+ear endpoints after stylization.
 
 ### Body
 
-The body order is currently fixed and anatomical:
+The original articulated body order is fixed and anatomical:
 
 ```text
 head -> left arm -> left hand -> torso -> right arm -> right hand
@@ -118,6 +166,12 @@ This is deliberately more conservative than the face planner. Its job is to
 avoid the previous visually wrong hand-to-head or left-hand-to-right-arm jumps.
 If no articulated body route is present, Portrait falls back to one body hull,
 then one contour.
+
+**Pose body shape** is an alternative to the segmentation-derived outline.
+It infers a neck, shoulder/bust boundary, and tapered arm sleeves from the
+tracked pose joints, joining the head at the face-contour ear points. It does
+not require the person matte; when enabled, it replaces the skeleton's torso
+and arm centerlines in Portrait and takes precedence over Body outline.
 
 ### Outline
 
@@ -136,6 +190,13 @@ hugs concavities. For the hull fallback, a small synthetic scalp cap is added
 if no head group is available; otherwise the silhouette tends to read as
 jaw/skeleton only. The outline is rendered lighter and narrower than normal
 Portrait strokes.
+
+When both the person contour and Top-of-head line are available, the upper
+segmentation arc is removed from the body outline. Its remaining body path
+starts and ends at the scalp's face-contour ear anchors. This avoids rendering
+two independently moving head tops while retaining the shoulder and torso
+boundary. If the contour cannot be joined reliably, the original closed
+outline remains as a fallback.
 
 It is not yet a semantically modelled body boundary. A convex hull is cheap and
 stable, but it loses concavities and can make a poor outline in expressive
@@ -156,7 +217,7 @@ The seed influences:
 - face-itinerary template;
 - optional face-region omission at higher Route variation;
 - seeded nose interior selection and isolated pupil-ring promotion;
-- crown insertion point;
+- whether the crown joins before or after the jaw;
 - which landmark samples survive inside a component;
 - open-component reversal;
 - closed-loop starting point;
@@ -177,6 +238,8 @@ dominate. Higher values pull those detail regions earlier in the shared route
 while preserving the same seed and deterministic output. Unified mode keeps
 topology variation at zero while live landmarks move; changing the seed is the
 intentional way to choose another topology.
+The crown is attached beside the jaw after the unified planner chooses the
+other components, so detail weighting cannot strand the scalp near an eye.
 
 `Subsample` is an explicit percentage of source points retained by the route.
 It is deterministic for a given seed, preserves open endpoints and detail
@@ -203,7 +266,7 @@ without turning into unrelated random geometry.
 
 Legal cuts are ranked by low semantic affinity plus a small seeded jitter.
 Current high-affinity pairs include brow-eye, nose-eye/brow, mouth-jaw, and
-crown-neighbour; unrelated parts are lower affinity and are more likely to be
+crown-jaw; unrelated parts are lower affinity and are more likely to be
 separated.
 
 When two consecutive components are in the same landmark region, their bridge
@@ -267,10 +330,11 @@ changing the semantic itinerary to solve a performance problem.
 | Detail priority | 0.65 | Bias the unified planner toward eyes, nose, and mouth |
 | Subsample | 1.0 | Percentage of source points retained by the seeded sampler |
 | Body outline | off | Integrated line-based contour/hull silhouette; requests Person contour when enabled |
+| Pose body shape | off | Stylized neck, torso, and arm boundary from pose joints; no segmentation |
 | Outline weight | 0.68 | Outline opacity |
-| Top-of-head line | off | Add face-derived crown |
+| Top-of-head line | off | Connect the ear-side face contour through a full scalp dome; person contour guides its shape when present |
 | Hair | Clean | Clean or Wild crown geometry |
-| Hair amount | 0.45 | Crown lift/wiggle amount |
+| Hair fill | 0.45 | Wild interior line-walk density; scalp height stays face-proportional (no height increase from this slider) |
 | Width | 2.8 | Main ribbon width |
 | Width variation | 0.45 | Calligraphic taper/swell |
 | Halo | off | Glow behind ribbons |
@@ -287,12 +351,11 @@ The key limitations to keep in mind when evaluating output are:
   semantically valid single-line drawings.
 - Feature entry and exit points are sampled/rotated, but not optimized for pen
   economy, visual balance, or a specific drawing vocabulary.
-- The body is an ordered skeleton route rather than a body-aware contour or a
-  designed gesture line.
+- The default body is an ordered skeleton route; Pose body shape adds a
+  stylized boundary, but does not yet model clothing, occlusion, or hands.
 - The hull outline is semantically weak for arms, shoulders, and occlusion.
-- Hair follows face roll through a brow/eye-derived local coordinate frame, but
-  it is still an expressive arch rather than a fitted scalp contour or a full
-  3D head-pose model.
+- The scalp uses face-contour ear anchors and an optional bounded person-contour
+  guide; it is still a 2-D estimate rather than a full 3-D head-pose model.
 - The default mode keeps face, body, and outline as separate routes. Unified
   mode is the single rendered-stroke alternative, but its semantic order still
   needs more authored pose/occlusion knowledge for every expressive pose.
@@ -309,7 +372,7 @@ When proposing changes, it is useful to name which stage should own them:
 | “Different seed should make a genuinely new drawing” | Route planner, sampling policy, and segment partitioning |
 | “Do not attach hand to head” | Region/component constraints and body order |
 | “A better silhouette / shoulders / scalp” | Outline generator, replacing convex-hull fallback |
-| “Hair should respond to yaw/pitch or fit the scalp” | Crown generator, adding a scalp contour and full 3D head pose |
+| “Hair should respond to pitch or hidden-side occlusion” | Crown generator, adding full 3-D head pose and visibility cues |
 | “Make it look more cubist / ornate” | Style transform and bridge grammar |
 | “Make it more like the performer” | Follow policy, face/body canonical templates, temporal model |
 | “Make it feel like one pen drawing” | Global planner across face/body segments and transition costs |

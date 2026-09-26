@@ -4,9 +4,11 @@ import SwiftUI
 
 struct SystemInputMappingPanel: View {
     @ObservedObject private var pointer: SystemPointerController
+    private let prepareCanvas: () -> Bool
 
     init(model: SketchCamViewModel) {
         _pointer = ObservedObject(wrappedValue: model.systemPointer)
+        prepareCanvas = { model.prepareMotionCanvas() }
     }
 
     var body: some View {
@@ -14,7 +16,7 @@ struct SystemInputMappingPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("SYSTEM POINTER").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text("MOTION CONTROL").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Text(pointer.live.status)
                             .font(.caption2).foregroundStyle(pointer.isArmed ? Color.accentColor : Color.secondary)
                     }
@@ -23,14 +25,27 @@ struct SystemInputMappingPanel: View {
                         if pointer.isArmed {
                             pointer.disarm()
                         } else {
-                            _ = pointer.arm()
+                            if pointer.mapping.destination == .canvas && !prepareCanvas() {
+                                pointer.showCanvasUnavailable()
+                            } else {
+                                _ = pointer.arm()
+                            }
                         }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(pointer.isArmed ? .red : .accentColor)
                 }
 
-                if !pointer.isTrusted {
+                Picker("Destination", selection: Binding(
+                    get: { pointer.mapping.destination ?? .computer },
+                    set: { pointer.usePreset($0) }
+                )) {
+                    ForEach(MotionControlDestination.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("Canvas paints into the active Ink frame without Accessibility access. Computer sends system mouse and keyboard events. Switching or editing rules disarms control.")
+
+                if !pointer.isTrusted && pointer.mapping.destination != .canvas {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "hand.raised.fill")
                             .foregroundStyle(.orange)
@@ -66,27 +81,63 @@ struct SystemInputMappingPanel: View {
                 }
 
                 section("BEHAVIOR") {
+                    if pointer.mapping.destination != .canvas {
                     Picker("Drive", selection: $pointer.mapping.driveMode) {
-                        ForEach(SystemPointerDriveMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        ForEach(SystemPointerDriveMode.allCases) { mode in
+                            Text(mode == .whilePinching && pointer.mapping.gestureRules != nil ? "While gesturing" : mode.title).tag(mode)
+                        }
                     }
                     .pickerStyle(.segmented)
+                    }
+                    if pointer.mapping.gestureRules == nil {
                     Toggle("Pinch controls primary button", isOn: $pointer.mapping.clickWithPinch)
                         .help("Pinch closes the button; release opens it. A quick pinch clicks, while holding the pinch drags.")
+                    }
                     valueSlider("Smoothing", value: $pointer.mapping.smoothing, range: 0...0.9, defaultValue: 0.55)
                     valueSlider("Camera width", value: $pointer.mapping.horizontalCoverage, range: 0.2...1, defaultValue: 0.75)
                     valueSlider("Camera height", value: $pointer.mapping.verticalCoverage, range: 0.2...1, defaultValue: 0.75)
                     valueSlider("Pinch", value: $pointer.mapping.pinchThreshold, range: 0.15...0.65, defaultValue: 0.35)
                 }
 
+                section("GESTURE → ACTION") {
+                    if let rules = pointer.mapping.gestureRules {
+                        ForEach(rules) { rule in
+                            Picker(rule.gesture.title, selection: actionBinding(rule.gesture)) {
+                                ForEach(MotionAction.choices(for: pointer.mapping.destination ?? .computer)) {
+                                    Text($0.title).tag($0)
+                                }
+                            }
+                            if rule.action == .key {
+                                Picker("Key", selection: shortcutBinding(rule.gesture)) {
+                                    ForEach(MotionShortcut.allCases) { Text($0.title).tag($0) }
+                                }
+                            }
+                        }
+                        valueSlider("Hold to engage", value: Binding(
+                            get: { pointer.mapping.gestureDwell ?? 0.12 },
+                            set: { pointer.mapping.gestureDwell = $0 }
+                        ), range: 0.04...0.6, defaultValue: 0.12)
+                        .help("Seconds a gesture must remain recognized before firing. Keys and right-click fire once per gesture; draw, erase, drag, and scroll continue while held.")
+                    } else {
+                        Button("Use gesture rules") { pointer.usePreset(pointer.mapping.destination ?? .computer) }
+                    }
+                    Button("Reset gesture preset") { pointer.usePreset(pointer.mapping.destination ?? .computer) }
+                        .help("Canvas: pinch draws, fist dissolves ink. Computer: pinch clicks/drags, fist right-clicks. Open palm has no action until assigned.")
+                    Text("Escape disarms. Lost tracking releases held actions.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+
                 section("LIVE") {
                     HStack {
                         liveValue("Pointer", pointer.live.normalizedPoint.map { String(format: "%.3f, %.3f", $0.x, $0.y) } ?? "—")
                         liveValue("Pinch", pointer.live.pinchValue.map { String(format: "%.3f", $0) } ?? "—")
-                        liveValue("Button", pointer.live.pinching ? "down" : "up")
+                        liveValue("Pinching", pointer.live.pinching ? "yes" : "no")
                     }
-                    Text(pointer.mapping.driveMode == .always
+                    Text(pointer.mapping.destination == .canvas
+                         ? "Gestures draw into the selected Ink frame, or the first enabled Ink frame. The camera region maps across that frame. Fist dissolves ink; it does not delete layers."
+                         : pointer.mapping.driveMode == .always
                          ? "Always continuously maps the selected landmark to the main display and can override physical mouse movement."
-                         : "While pinching leaves the physical mouse alone until the gesture engages, then moves and drags from the selected landmark.")
+                         : "The physical mouse is left alone until a gesture engages. The selected landmark then positions the pointer; its assigned action controls clicking or other input.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -96,6 +147,22 @@ struct SystemInputMappingPanel: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             pointer.refreshTrust()
         }
+    }
+
+    private func actionBinding(_ gesture: HandGesture) -> Binding<MotionAction> {
+        Binding(get: { pointer.mapping.gestureRules?.first { $0.gesture == gesture }?.action ?? .none },
+                set: { action in
+                    guard let i = pointer.mapping.gestureRules?.firstIndex(where: { $0.gesture == gesture }) else { return }
+                    pointer.mapping.gestureRules?[i].action = action
+                })
+    }
+
+    private func shortcutBinding(_ gesture: HandGesture) -> Binding<MotionShortcut> {
+        Binding(get: { pointer.mapping.gestureRules?.first { $0.gesture == gesture }?.shortcut ?? .space },
+                set: { shortcut in
+                    guard let i = pointer.mapping.gestureRules?.firstIndex(where: { $0.gesture == gesture }) else { return }
+                    pointer.mapping.gestureRules?[i].shortcut = shortcut
+                })
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

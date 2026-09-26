@@ -3560,6 +3560,25 @@ struct ContentView: View {
         overlayOffHint
         Group {
             SectionHeader("Style")
+            Picker("Approach", selection: Binding(
+                get: { model.settings.landmarks.resolvedPortraitApproach },
+                set: { model.settings.landmarks.portraitApproach = $0 }
+            )) {
+                ForEach(PortraitApproach.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("Gesture uses authored continuous curves and completes a scalp and bust. Landmarks retains the original route algorithms.")
+            if model.settings.landmarks.resolvedPortraitApproach == .gesture {
+                SliderRow(title: "Abstraction", value: optionalLandmarkFloatBinding(\.portraitAbstraction, defaultValue: 0.35),
+                          defaultValue: 0.35, hint: "Blend the live eye, mouth, nose, and jaw shapes toward an authored drawing. Lower values follow the tracked contours more closely.")
+                SliderRow(title: "Shape variation", value: optionalLandmarkFloatBinding(\.portraitShapeVariation, defaultValue: 0.55),
+                          defaultValue: 0.55, hint: "Seeded character proportions: head silhouette, eye shape, nose, mouth, and shoulder form. Change Seed to browse stable variations.")
+                SliderRow(title: "Expression", value: optionalLandmarkFloatBinding(\.portraitExpression, defaultValue: 0.8),
+                          range: 0...2, defaultValue: 0.8, hint: "How strongly eye and inner-lip opening follows the live contours. 0 holds the authored shape; 1 follows; values above 1 exaggerate.")
+                portraitSeedRow
+                Stepper("Segments \(model.settings.landmarks.resolvedPortraitSegments)", value: portraitSegmentsBinding, in: 1...3)
+                    .help("One continuous gesture, or separate bust, mouth, and nose/eye passages.")
+            } else {
             Picker("Hand", selection: portraitStyleBinding) {
                 ForEach(PortraitStyle.allCases) { style in
                     Text(style.title).tag(style)
@@ -3619,7 +3638,7 @@ struct ContentView: View {
 
             SectionHeader("Crown")
             Toggle("Top-of-head line", isOn: portraitHairEnabledBinding)
-                .help("Add a face-only crown extrapolation. It never uses hands or body points.")
+                .help("Connect the ear-side face contour points with a scalp line. The person outline can guide its shape, while the face anchors keep it attached during head turns.")
             Picker("Hair", selection: portraitHairStyleBinding) {
                 ForEach(PortraitHairStyle.allCases) { style in
                     Text(style.title).tag(style)
@@ -3627,15 +3646,21 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             SliderRow(
-                title: "Hair amount",
+                title: "Hair fill",
                 value: optionalLandmarkFloatBinding(\.portraitHairAmount, defaultValue: 0.45),
                 defaultValue: 0.45,
-                hint: "Clean keeps a restrained arc; Wild adds seeded squiggles and extra crown lift."
+                hint: "Wild hair: add more seeded, face-attached linework inside the scalp without making the skull taller. Clean keeps one outline."
             )
+            .disabled(model.settings.landmarks.resolvedPortraitHairStyle == .clean)
 
             SectionHeader("Silhouette")
+            Toggle("Pose body shape", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitPoseBodyEnabled },
+                set: { model.settings.landmarks.portraitPoseBodyEnabled = $0 }
+            ))
+                .help("Draw a stylized neck, torso, and tapered arms from pose joints. This takes precedence over the person outline, follows body motion, and does not require segmentation.")
             Toggle("Body outline", isOn: portraitOutlineEnabledBinding)
-                .help("Add a line-based scalp, shoulder, and body silhouette. Portrait requests the Vision contour automatically; Marks → Person can still control its detail.")
+                .help("Use the person silhouette when Pose body shape is off. This requests Vision segmentation; Marks → Person controls its detail.")
             SliderRow(
                 title: "Outline weight",
                 value: optionalLandmarkFloatBinding(\.portraitOutlineStrength, defaultValue: 0.68),
@@ -3643,6 +3668,7 @@ struct ContentView: View {
                 hint: "Opacity of the silhouette contribution; in unified mode it also scales the silhouette portion of the shared line."
             )
 
+            }
             SectionHeader("Stroke")
             ColorPicker("Ink", selection: portraitColorBinding, supportsOpacity: true)
             SliderRow(
@@ -3657,6 +3683,7 @@ struct ContentView: View {
                 defaultValue: 0.45,
                 hint: "Calligraphic taper and swell along the continuous route."
             )
+            if model.settings.landmarks.resolvedPortraitApproach == .landmarks {
             SliderRow(
                 title: "Connector width",
                 value: optionalLandmarkFloatBinding(\.portraitConnectorWidth, defaultValue: 0.42),
@@ -3664,6 +3691,7 @@ struct ContentView: View {
                 defaultValue: 0.42,
                 hint: "Relative width of bridges between different semantic parts. Same-part links, such as inner and outer mouth, keep the main width."
             )
+            }
             Toggle("Halo (glow)", isOn: portraitHaloBinding)
         }
         .disabled(!model.settings.landmarks.resolvedPortraitEnabled)
@@ -6612,6 +6640,12 @@ private struct WorkspaceFrameStackEditor: View {
             }
             Section("Streams") {
                 Button("Drawing") { enableStream(.drawing) }
+                Menu("Drawing pass") {
+                    Button("Portrait") { addGraphFrame(kind: .drawing(.portrait), name: "Portrait", role: .layer) }
+                    Button("Yarn") { addGraphFrame(kind: .drawing(.yarn), name: "Yarn", role: .layer) }
+                    Button("Wrap") { addGraphFrame(kind: .drawing(.wrap), name: "Wrap", role: .layer) }
+                    Button("Line walk") { addGraphFrame(kind: .drawing(.lineWalk), name: "Line walk", role: .layer) }
+                }
                 Button("Web") { enableStream(.web) }
             }
         } label: {
@@ -6669,6 +6703,24 @@ private struct WorkspaceFrameStackEditor: View {
                let node = model.settings.layerGraph?.node(nodeID),
                case .solid = node.kind {
                 SolidNodeEditor(config: solidConfigBinding(nodeID))
+            }
+            if let nodeID = linkedNodeID(frame),
+               let node = model.settings.layerGraph?.node(nodeID),
+               case .drawing = node.kind {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("LANDMARK SOURCES")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
+                                        GridItem(.flexible(), alignment: .leading)],
+                              alignment: .leading, spacing: 4) {
+                        ForEach(DrawingRegion.allCases, id: \.self) { region in
+                            Toggle(region.title, isOn: drawingRegionBinding(nodeID, region))
+                                .font(.caption)
+                                .help("Include \(region.title) only in this Drawing pass.")
+                        }
+                    }
+                }
+                .padding(.vertical, 5)
             }
             MaskEditor(mask: frameMaskBinding(frame.id),
                        personMatteQuality: $model.settings.segmentation.quality,
@@ -6932,11 +6984,16 @@ private struct WorkspaceFrameStackEditor: View {
 
     private func addGraphFrame(kind: NodeKind, name: String, role: WorkspaceFrameRole) {
         model.ensureWorkspace()
+        if case .drawing = kind { model.settings.landmarks.enabled = true }
         let frameName = nextGraphFrameName(base: name, family: kind.family)
         let node = Node(
             name: frameName,
             kind: kind,
             inkConfig: kind.family == "ink" ? InkFrameConfig(landmarks: model.settings.landmarks) : nil,
+            drawingRegions: kind.family.hasPrefix("drawing.") ? [
+                .jaw, .nose, .mouth, .leftBrow, .rightBrow, .leftEye, .rightEye,
+                .torso, .leftArm, .rightArm, .hands
+            ] : nil,
             managed: false
         )
         let layer = Layer(node: node.id)
@@ -6965,6 +7022,23 @@ private struct WorkspaceFrameStackEditor: View {
             workspace.activeFrameID = frame.id
             workspace.selectedFrameIDs = [frame.id]
         }
+    }
+
+    private func drawingRegionBinding(_ nodeID: UUID, _ region: DrawingRegion) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let node = model.settings.layerGraph?.node(nodeID) else { return false }
+                return (node.drawingRegions ?? DrawingRegion.allCases).contains(region)
+            },
+            set: { enabled in
+                guard var graph = model.settings.layerGraph,
+                      let index = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                var selected = Set(graph.nodes[index].drawingRegions ?? DrawingRegion.allCases)
+                if enabled { selected.insert(region) } else { selected.remove(region) }
+                graph.nodes[index].drawingRegions = DrawingRegion.allCases.filter(selected.contains)
+                model.settings.layerGraph = graph
+            }
+        )
     }
 
     private func nextGraphFrameName(base: String, family: String) -> String {
@@ -7035,6 +7109,7 @@ private struct WorkspaceFrameStackEditor: View {
             displayOrder.insert(moved, at: min(insertion, displayOrder.count))
             workspace.frames = Array(displayOrder.reversed())
         }
+        model.syncGraphLayerOrderFromWorkspace()
     }
 }
 
@@ -7204,6 +7279,22 @@ private struct LayerStackEditor: View {
                                 if case .solid = node.kind {
                                     SolidNodeEditor(config: solidConfigBinding(node.id))
                                 }
+                                if case .drawing = node.kind {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("LANDMARK SOURCES")
+                                            .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                                        LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
+                                                            GridItem(.flexible(), alignment: .leading)],
+                                                  alignment: .leading, spacing: 4) {
+                                            ForEach(DrawingRegion.allCases, id: \.self) { region in
+                                                Toggle(region.title, isOn: drawingRegionBinding(node.id, region))
+                                                    .font(.caption)
+                                                    .help("Include \(region.title) landmarks in this Drawing layer only. Other layers keep their own selection.")
+                                            }
+                                        }
+                                    }
+                                    .padding(.vertical, 5)
+                                }
                                 if case .acrylic = node.kind {
                                     AcrylicNodeEditor(config: acrylicConfigBinding(node.id))
                                 }
@@ -7241,6 +7332,12 @@ private struct LayerStackEditor: View {
             Section("Streams") {
                 Button("Drawing") { addStream(.drawing) }
                     .disabled(streamPresent(.drawing))
+                Menu("Drawing pass") {
+                    Button("Portrait") { addNode(.drawing(.portrait), name: "Portrait") }
+                    Button("Yarn") { addNode(.drawing(.yarn), name: "Yarn") }
+                    Button("Wrap") { addNode(.drawing(.wrap), name: "Wrap") }
+                    Button("Line walk") { addNode(.drawing(.lineWalk), name: "Line walk") }
+                }
                 Button("Web") { addStream(.web) }
                     .disabled(streamPresent(.web))
             }
@@ -7249,7 +7346,7 @@ private struct LayerStackEditor: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Add a layer. Solid and Paper support multiple independent instances; stream layers are shared sources.")
+        .help("Add a layer. Drawing passes have independent landmark-source selections and can be stacked with different algorithms.")
     }
 
     /// A signature of the flags that determine which layers exist.
@@ -7425,10 +7522,15 @@ private struct LayerStackEditor: View {
 
     /// Add a user-created (unmanaged) stream layer on top of the stack.
     private func addNode(_ kind: NodeKind, name: String) {
+        if case .drawing = kind { model.settings.landmarks.enabled = true }
         let node = Node(
             name: nextLayerName(base: name, family: kind.family),
             kind: kind,
             inkConfig: kind.family == "ink" ? InkFrameConfig(landmarks: model.settings.landmarks) : nil,
+            drawingRegions: kind.family.hasPrefix("drawing.") ? [
+                .jaw, .nose, .mouth, .leftBrow, .rightBrow, .leftEye, .rightEye,
+                .torso, .leftArm, .rightArm, .hands
+            ] : nil,
             managed: false
         )
         mutate { g in
@@ -7488,6 +7590,23 @@ private struct LayerStackEditor: View {
         model.settings.layerGraph = g
     }
 
+    private func drawingRegionBinding(_ nodeID: UUID, _ region: DrawingRegion) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let node = model.settings.layerGraph?.node(nodeID) else { return false }
+                return (node.drawingRegions ?? DrawingRegion.allCases).contains(region)
+            },
+            set: { enabled in
+                mutate { graph in
+                    guard let index = graph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+                    var selected = Set(graph.nodes[index].drawingRegions ?? DrawingRegion.allCases)
+                    if enabled { selected.insert(region) } else { selected.remove(region) }
+                    graph.nodes[index].drawingRegions = DrawingRegion.allCases.filter(selected.contains)
+                }
+            }
+        )
+    }
+
     private func mutateValidated(_ body: (inout LayerGraph) -> Void) {
         guard var g = model.settings.layerGraph else { return }
         body(&g)
@@ -7527,6 +7646,7 @@ private struct LayerStackEditor: View {
             displayOrder.insert(moved, at: min(insertion, displayOrder.count))
             g.layers = Array(displayOrder.reversed())
         }
+        model.reconcileWorkspaceWithGraph()
     }
 }
 

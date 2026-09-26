@@ -67,6 +67,12 @@ public enum CurveFit: String, CaseIterable, Identifiable, Sendable, Codable {
 /// Artistic families for the live landmark-driven portrait route. The default
 /// route remains semantic and stable; the Portrait route-variation control can
 /// deliberately choose another seeded semantic itinerary for exploration.
+public enum PortraitApproach: String, CaseIterable, Identifiable, Sendable, Codable {
+    case landmarks, gesture
+    public var id: String { rawValue }
+    public var title: String { self == .gesture ? "Gesture" : "Landmarks" }
+}
+
 public enum PortraitStyle: String, CaseIterable, Identifiable, Sendable, Codable {
     case fluid
     case cubist
@@ -571,6 +577,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     // Portrait parameters. Optional fields let older persisted settings decode
     // through synthesized Codable while resolved accessors provide defaults.
     public var portraitStyle: PortraitStyle?
+    public var portraitApproach: PortraitApproach?
+    public var portraitAbstraction: Float?
+    public var portraitShapeVariation: Float?
+    public var portraitExpression: Float?
     public var portraitFollow: Float?
     public var portraitFlourish: Float?
     public var portraitWidth: Float?
@@ -596,6 +606,9 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var portraitConnectorWidth: Float?
     /// When enabled, Portrait adds a separate contour/hull silhouette route.
     public var portraitOutlineEnabled: Bool?
+    /// Use a stylized neck, torso, and arm boundary inferred from pose joints
+    /// instead of depending on the person-segmentation silhouette.
+    public var portraitPoseBodyEnabled: Bool?
     public var portraitOutlineStrength: Float?
     /// When enabled, face, body, and silhouette components share one seeded
     /// route planner instead of rendering as separate routes.
@@ -808,6 +821,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         portraitSegments: Int? = 1,
         portraitConnectorWidth: Float? = 0.42,
         portraitOutlineEnabled: Bool? = false,
+        portraitPoseBodyEnabled: Bool? = false,
         portraitOutlineStrength: Float? = 0.68,
         portraitUnifiedRoute: Bool? = false,
         portraitDetailPriority: Float? = 0.65,
@@ -962,6 +976,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.portraitSegments = portraitSegments
         self.portraitConnectorWidth = portraitConnectorWidth
         self.portraitOutlineEnabled = portraitOutlineEnabled
+        self.portraitPoseBodyEnabled = portraitPoseBodyEnabled
         self.portraitOutlineStrength = portraitOutlineStrength
         self.portraitUnifiedRoute = portraitUnifiedRoute
         self.portraitDetailPriority = portraitDetailPriority
@@ -1045,6 +1060,10 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedInkLiveDrag: Float { inkLiveDrag ?? 0.5 }
     public var resolvedInkLiveResist: Float { inkLiveResist ?? 1 }
     public var resolvedPortraitEnabled: Bool { portraitEnabled ?? false }
+    public var resolvedPortraitApproach: PortraitApproach { portraitApproach ?? .landmarks }
+    public var resolvedPortraitAbstraction: Float { portraitAbstraction ?? 0.35 }
+    public var resolvedPortraitShapeVariation: Float { portraitShapeVariation ?? 0.55 }
+    public var resolvedPortraitExpression: Float { portraitExpression ?? 0.8 }
     public var resolvedPortraitStyle: PortraitStyle { portraitStyle ?? .fluid }
     public var resolvedPortraitFollow: Float { portraitFollow ?? 0.72 }
     public var resolvedPortraitFlourish: Float { portraitFlourish ?? 0.2 }
@@ -1058,6 +1077,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedPortraitSegments: Int { min(6, max(1, portraitSegments ?? 1)) }
     public var resolvedPortraitConnectorWidth: Float { min(1, max(0.12, portraitConnectorWidth ?? 0.42)) }
     public var resolvedPortraitOutlineEnabled: Bool { portraitOutlineEnabled ?? false }
+    public var resolvedPortraitPoseBodyEnabled: Bool { portraitPoseBodyEnabled ?? false }
     public var resolvedPortraitOutlineStrength: Float { portraitOutlineStrength ?? 0.68 }
     public var resolvedPortraitUnifiedRoute: Bool { portraitUnifiedRoute ?? false }
     public var resolvedPortraitDetailPriority: Float { min(1, max(0, portraitDetailPriority ?? 0.65)) }

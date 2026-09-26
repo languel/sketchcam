@@ -10,6 +10,12 @@ and historical measurements remain in
 The Performance panel reports both the frame cadence and the latest measured
 or cached analysis durations:
 
+Open it with **Control–Option–P** or the chart-shaped **Performance** button in
+the window controls. Its FPS is the video pipeline cadence, not a separate
+SwiftUI canvas-navigation frame counter. If zoom/pan stutters while this FPS
+stays high, investigate the UI path rather than attributing the stall to
+Vision or the compositor.
+
 - **Process** is the compositor/effect stage for the current frame.
 - **Frame total** includes the full frame-loop work, including source routing,
   overlay preparation, and publishing.
@@ -55,6 +61,9 @@ instead of turning the frame transparent.
   full-frame clear before rasterizing a layer.
 - Analysis gating happens before segmentation and landmark requests, so the
   filter-only path does not merely hide the overlay after paying its cost.
+- Session persistence now coalesces rapid settings changes for 0.4 seconds.
+  Canvas pan/zoom no longer JSON-encodes and writes the entire session for
+  every intermediate position. Processing settings still update immediately.
 
 ## Verification
 
@@ -66,9 +75,11 @@ xcodebuild -project SketchCam.xcodeproj -scheme SketchCam \
   -configuration Debug -sdk macosx test CODE_SIGNING_ALLOWED=NO
 ```
 
-The current run passed all 141 tests (95 core, 46 app) and the unsigned macOS
-build succeeded. Xcode still prints the pre-existing out-of-date CoreSimulator
-warning; no simulator is required for this macOS test scheme.
+That historical run passed all 141 tests (95 core, 46 app) and the unsigned
+macOS build succeeded. The expanded suite passed 156/156 on 2026-09-26 with
+`-parallel-testing-enabled NO`; a parallel run had three macOS test-host
+crashes, while those tests passed serially. No live-camera FPS improvement has
+yet been measured for the session-persistence change.
 
 The next performance check should be a manual camera run with the Performance
 panel visible. Report the before/after FPS, Process, and Frame total with the

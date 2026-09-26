@@ -4,6 +4,44 @@ import XCTest
 /// Phase 1: the layer/routing graph model, validation, scheduling, and the
 /// legacy→graph migration. No rendering yet.
 final class LayerGraphTests: XCTestCase {
+    func testDrawingNodesKeepIndependentLandmarkCategories() throws {
+        let face = Node(name: "Face", kind: .drawing(.portrait),
+                        drawingRegions: [.jaw, .nose, .mouth, .leftEye, .rightEye], managed: false)
+        let body = Node(name: "Body", kind: .drawing(.lineWalk),
+                        drawingRegions: [.torso, .leftArm, .rightArm, .hands], managed: false)
+        let graph = LayerGraph(nodes: [face, body], layers: [Layer(node: face.id), Layer(node: body.id)])
+        let decoded = try JSONDecoder().decode(LayerGraph.self, from: JSONEncoder().encode(graph))
+        XCTAssertEqual(decoded, graph)
+        XCTAssertNotEqual(decoded.node(face.id)?.drawingRegions, decoded.node(body.id)?.drawingRegions)
+        XCTAssertEqual(decoded.node(face.id)?.drawingRegions, [.jaw, .nose, .mouth, .leftEye, .rightEye])
+
+        // Graphs saved before this field was added still decode as all regions.
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(graph)) as? [String: Any])
+        var nodes = try XCTUnwrap(legacy["nodes"] as? [[String: Any]])
+        nodes[0].removeValue(forKey: "drawingRegions")
+        legacy["nodes"] = nodes
+        let migrated = try JSONDecoder().decode(LayerGraph.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(migrated.node(face.id)?.drawingRegions)
+    }
+
+    func testWorkspaceReorderPersistsSolidBelowDrawingThroughReconcile() {
+        var settings = ProcessingSettings()
+        settings.landmarks.enabled = true
+        settings.landmarks.showStick = true
+        var graph = LayerGraph.defaultGraph(from: settings)
+        let solid = Node(name: "Solid", kind: .solid(SolidConfig()), managed: false)
+        let solidLayer = Layer(node: solid.id)
+        graph.nodes.append(solid)
+        graph.layers.append(solidLayer)
+        let drawing = graph.layers.first { graph.node($0.node)?.kind.family == "overlay" }!
+        let camera = graph.layers.first { graph.node($0.node)?.kind.family == "video" }!
+
+        graph = graph.reorderedLayers(matching: [camera.id, solidLayer.id, drawing.id])
+        XCTAssertEqual(graph.layers.map(\.id), [camera.id, solidLayer.id, drawing.id])
+        XCTAssertEqual(graph.reconciled(with: settings).layers.map(\.id),
+                       [camera.id, solidLayer.id, drawing.id])
+    }
+
     func testInkCanvasStateCommandRevisionsRoundTrip() throws {
         var settings = ProcessingSettings()
         XCTAssertEqual(settings.landmarks.inkFixRevision, 0)

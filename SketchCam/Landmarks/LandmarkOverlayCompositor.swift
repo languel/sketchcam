@@ -27,7 +27,17 @@ final class LandmarkOverlayCompositor {
         var landmarks: LandmarkSettings
         var mirror: Bool
         var outputSize: CGSize
+        var regions: [String]?
     }
+
+    enum Mode {
+        case shared
+        case drawing(SketchCamCore.DrawingAlgorithm)
+    }
+
+    private let mode: Mode
+
+    init(mode: Mode = .shared) { self.mode = mode }
 
     // The vector render happens OFF the frame hot path: when the cache key
     // changes, a render is scheduled on a low-priority queue and the hot
@@ -52,7 +62,22 @@ final class LandmarkOverlayCompositor {
     /// Independent drawing modules. Every enabled one renders per frame, layered
     /// back-to-front in this order. Register new algorithms here; nothing else
     /// needs to change.
-    private let algorithms: [DrawingAlgorithm] = [WrapDrawing(), YarnDrawing(), LineWalkDrawing(), PortraitDrawing()]
+    private var algorithms: [any DrawingAlgorithm] {
+        switch mode {
+        case .shared: return [WrapDrawing(), YarnDrawing(), LineWalkDrawing(), PortraitDrawing()]
+        case .drawing(.wrap): return [WrapDrawing()]
+        case .drawing(.yarn): return [YarnDrawing()]
+        case .drawing(.lineWalk): return [LineWalkDrawing()]
+        case .drawing(.portrait): return [PortraitDrawing()]
+        }
+    }
+
+    private func shouldDraw(_ algorithm: any DrawingAlgorithm, landmarks: LandmarkSettings) -> Bool {
+        switch mode {
+        case .shared: return algorithm.isEnabled(landmarks)
+        case .drawing: return true
+        }
+    }
 
     // GPU drawing path (opt-in via settings.landmarks.useMetalDrawing). Created
     // lazily on the render queue; double-buffered output so the hot path can
@@ -65,7 +90,8 @@ final class LandmarkOverlayCompositor {
     func overlay(
         detection: LandmarkDetection?,
         settings: ProcessingSettings,
-        outputSize: CGSize
+        outputSize: CGSize,
+        allowedRegions: Set<LandmarkRegion>? = nil
     ) -> CIImage? {
         guard settings.landmarks.enabled, let detection, !detection.groups.isEmpty else {
             return lock.withLock {
@@ -79,22 +105,26 @@ final class LandmarkOverlayCompositor {
             detectionID: detection.detectionID,
             landmarks: settings.landmarks,
             mirror: settings.mirror,
-            outputSize: outputSize
+            outputSize: outputSize,
+            regions: allowedRegions.map { $0.map(\.rawValue).sorted() }
         )
         return lock.withLock {
             if key != cachedKey, renderingKey == nil {
                 renderingKey = key
                 renderQueue.async { [weak self] in
-                    self?.renderAsync(detection: detection, settings: settings, outputSize: outputSize, key: key)
+                    self?.renderAsync(detection: detection, settings: settings, outputSize: outputSize,
+                                      allowedRegions: allowedRegions, key: key)
                 }
             }
             return cachedImage
         }
     }
 
-    private func renderAsync(detection: LandmarkDetection, settings: ProcessingSettings, outputSize: CGSize, key: CacheKey) {
+    private func renderAsync(detection: LandmarkDetection, settings: ProcessingSettings, outputSize: CGSize,
+                             allowedRegions: Set<LandmarkRegion>?, key: CacheKey) {
         let start = CFAbsoluteTimeGetCurrent()
-        let image = render(detection: detection, settings: settings, outputSize: outputSize)
+        let image = render(detection: detection, settings: settings, outputSize: outputSize,
+                           allowedRegions: allowedRegions)
         let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
         lock.withLock {
             cachedImage = image
@@ -107,7 +137,8 @@ final class LandmarkOverlayCompositor {
     private func render(
         detection: LandmarkDetection,
         settings: ProcessingSettings,
-        outputSize: CGSize
+        outputSize: CGSize,
+        allowedRegions: Set<LandmarkRegion>?
     ) -> CIImage? {
         // Labels are text: render the canvas at full output resolution when
         // they're on so they stay crisp (the 720p cap + GPU upscale is what
@@ -120,7 +151,9 @@ final class LandmarkOverlayCompositor {
         )
 
         let landmarks = settings.landmarks
-        let mappedGroups = detection.groups.map { group -> MappedGroup in
+        let sourceGroups = detection.groups.filter { allowedRegions?.contains($0.region) ?? true }
+        guard !sourceGroups.isEmpty else { return nil }
+        let mappedGroups = sourceGroups.map { group -> MappedGroup in
             let points = group.points.map {
                 LandmarkCoordinateMapper.map(
                     $0.point,
@@ -142,7 +175,7 @@ final class LandmarkOverlayCompositor {
         // long, self-crossing route is particularly expensive as one CPU fill.
         // Render it separately, then composite it over the CPU Marks layer to
         // preserve the existing visual order (Marks first, art second).
-        let drawingEnabled = algorithms.contains { $0.isEnabled(landmarks) }
+        let drawingEnabled = algorithms.contains { shouldDraw($0, landmarks: landmarks) }
         let metalDrawing: CIImage? = if landmarks.useMetalDrawing, drawingEnabled, let metal = metalRenderer {
             renderMetalOverlay(
                 groups: mappedGroups,
@@ -155,7 +188,10 @@ final class LandmarkOverlayCompositor {
         } else {
             nil
         }
-        let marksEnabled = landmarks.showDots || landmarks.showStick || landmarks.showIDs
+        let marksEnabled: Bool = {
+            if case .shared = mode { return landmarks.showDots || landmarks.showStick || landmarks.showIDs }
+            return false
+        }()
         if let metalDrawing, !marksEnabled { return metalDrawing }
 
         contextIndex = (contextIndex + 1) % 2
@@ -176,7 +212,7 @@ final class LandmarkOverlayCompositor {
         cgContext.setAllowsAntialiasing(true)
         cgContext.setShouldAntialias(true)
 
-        for (group, mappedGroup) in zip(detection.groups, mappedGroups) {
+        for (group, mappedGroup) in zip(sourceGroups, mappedGroups) where marksEnabled {
             let mapped = mappedGroup.points
             // Marks renderers (raw sensor data) are independent of the drawing
             // style and can stack freely.
@@ -194,7 +230,7 @@ final class LandmarkOverlayCompositor {
         // Metal failure retains the existing CPU fallback. Otherwise this
         // context contains only raw Marks, avoiding the costly ribbon fill.
         if metalDrawing == nil {
-            for algorithm in algorithms where algorithm.isEnabled(landmarks) {
+            for algorithm in algorithms where shouldDraw(algorithm, landmarks: landmarks) {
                 algorithm.render(groups: mappedGroups, landmarks: landmarks, into: cgContext)
             }
         }
@@ -221,7 +257,7 @@ final class LandmarkOverlayCompositor {
         metal: MetalLineRenderer
     ) -> CIImage? {
         var strokes: [StrokeTessellator.Stroke] = []
-        for algorithm in algorithms where algorithm.isEnabled(landmarks) {
+        for algorithm in algorithms where shouldDraw(algorithm, landmarks: landmarks) {
             strokes += algorithm.strokes(groups: groups, landmarks: landmarks)
         }
 

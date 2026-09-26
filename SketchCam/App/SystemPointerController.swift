@@ -87,6 +87,10 @@ enum SystemPointerDriveMode: String, Codable, CaseIterable, Identifiable {
 }
 
 struct SystemPointerMapping: Codable, Equatable {
+    // Optional additions preserve the original mapping when loading v1 data.
+    var destination: MotionControlDestination?
+    var gestureRules: [GestureRule]?
+    var gestureDwell: Double?
     var pointer = MediaPipeHandFeature.rightIndexTip
     var driveMode = SystemPointerDriveMode.whilePinching
     var clickWithPinch = true
@@ -113,6 +117,12 @@ enum SystemPointerEvent: Equatable {
     case leftDown(CGPoint)
     case leftDrag(CGPoint)
     case leftUp(CGPoint)
+    case rightClick(CGPoint)
+    case scroll(Int32)
+    case shortcut(MotionShortcut)
+    case canvas(MotionAction, CGPoint)
+    case canvasEnd
+    case disarm
 }
 
 /// Pure mapping state machine. Keeping Quartz event posting outside this type
@@ -133,7 +143,8 @@ final class SystemPointerEngine {
     ) -> (events: [SystemPointerEvent], live: SystemPointerLiveState) {
         let points = Self.pointsByLabel(detection)
         guard let pointer = points[mapping.pointer.trackerLabel],
-              pointer.confidence >= mapping.minimumConfidence else {
+              pointer.confidence >= mapping.minimumConfidence,
+              pointer.point.x.isFinite, pointer.point.y.isFinite else {
             let stale = lastAvailableAt.map { now - $0 >= mapping.missingGraceSeconds } ?? true
             var events: [SystemPointerEvent] = []
             if stale {
@@ -244,6 +255,9 @@ final class SystemPointerEngine {
 final class SystemPointerController: ObservableObject, @unchecked Sendable {
     @Published var mapping: SystemPointerMapping {
         didSet {
+            // A changed mapping must release old buttons/strokes before a new
+            // destination or rule can take ownership.
+            if isArmed { disarm() }
             stateLock.withLock { runtimeMapping = mapping }
             if let data = try? JSONEncoder().encode(mapping) {
                 defaults.set(data, forKey: Self.mappingDefaultsKey)
@@ -258,6 +272,13 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     private let defaults: UserDefaults
     private let stateLock = NSLock()
     private let engine = SystemPointerEngine()
+    private let gestureEngine = GestureMappingEngine()
+    var onCanvasEvent: ((MotionAction?, CGPoint?) -> Void)?
+    private var localEscapeMonitor: Any?
+    private var globalEscapeMonitor: Any?
+    private var armGeneration: UInt64 = 0
+    private var lastFrameAt: TimeInterval = 0
+    private var watchdog: Timer?
     private var runtimeMapping: SystemPointerMapping
     private var runtimeArmed = false
     private var lastLivePublish: TimeInterval = 0
@@ -271,6 +292,31 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
         mapping = saved
         runtimeMapping = saved
         isTrusted = AXIsProcessTrusted()
+        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53, self?.isArmed == true { self?.disarm(); return nil }
+            return event
+        }
+        globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { DispatchQueue.main.async { self?.disarm() } }
+        }
+    }
+
+    deinit {
+        watchdog?.invalidate()
+        if let localEscapeMonitor { NSEvent.removeMonitor(localEscapeMonitor) }
+        if let globalEscapeMonitor { NSEvent.removeMonitor(globalEscapeMonitor) }
+    }
+
+    func usePreset(_ destination: MotionControlDestination) {
+        var next = mapping
+        next.destination = destination
+        next.gestureRules = destination == .canvas ? GestureRule.canvas : GestureRule.computer
+        next.driveMode = destination == .computer ? .always : .whilePinching
+        mapping = next
+    }
+
+    func showCanvasUnavailable() {
+        live.status = "Show an Ink layer before drawing"
     }
 
     var isRuntimeArmed: Bool { stateLock.withLock { runtimeArmed } }
@@ -278,25 +324,38 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     @discardableResult
     func arm() -> Bool {
         refreshTrust()
-        guard isTrusted else {
+        guard mapping.destination == .canvas || isTrusted else {
             // Do not unexpectedly reopen System Settings every time Arm is
             // pressed. The panel exposes an explicit Request access action;
             // once the user approves it, Refresh/activation updates trust.
             live.status = "Accessibility permission required"
             return false
         }
-        stateLock.withLock { runtimeArmed = true }
+        stateLock.withLock {
+            armGeneration &+= 1; runtimeArmed = true
+            lastFrameAt = ProcessInfo.processInfo.systemUptime
+        }
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let stalled = self.stateLock.withLock {
+                self.runtimeArmed && ProcessInfo.processInfo.systemUptime - self.lastFrameAt > 0.6
+            }
+            if stalled { self.disarm(); self.live.status = "Disarmed: camera stopped" }
+        }
         isArmed = true
         live.status = "Waiting for \(mapping.pointer.title)"
         return true
     }
 
     func disarm() {
-        let events = stateLock.withLock { () -> [SystemPointerEvent] in
+        watchdog?.invalidate(); watchdog = nil
+        stateLock.withLock {
             runtimeArmed = false
-            return engine.stop()
+            armGeneration &+= 1
+            post(engine.stop() + gestureEngine.stop())
         }
-        post(events)
+        onCanvasEvent?(nil, nil)
         isArmed = false
         live = SystemPointerLiveState()
     }
@@ -304,8 +363,8 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     func refreshTrust() {
         isTrusted = AXIsProcessTrusted()
         if !isTrusted {
-            if isArmed { disarm() }
-            live.status = "Accessibility unavailable"
+            if isArmed && mapping.destination != .canvas { disarm() }
+            if mapping.destination != .canvas { live.status = "Accessibility unavailable" }
         } else if !isArmed {
             live.status = "Ready to arm"
         }
@@ -335,7 +394,11 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     func update(detection: LandmarkDetection?, mirrored: Bool, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         let result: (events: [SystemPointerEvent], live: SystemPointerLiveState, shouldPublish: Bool)? = stateLock.withLock {
             guard runtimeArmed else { return nil }
-            let result = engine.update(
+            lastFrameAt = now
+            let result = runtimeMapping.gestureRules != nil ? gestureEngine.update(
+                detection: detection, mapping: runtimeMapping,
+                screen: CGDisplayBounds(CGMainDisplayID()), mirrored: mirrored, now: now
+            ) : engine.update(
                 detection: detection,
                 mapping: runtimeMapping,
                 screenBounds: CGDisplayBounds(CGMainDisplayID()),
@@ -347,12 +410,16 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
                 lastLivePublish = now
                 lastPublishedPinching = result.live.pinching
             }
+            // Serialized with disarm: no move/down can be posted after stop.
+            post(result.events)
             return (result.events, result.live, shouldPublish)
         }
         guard let result else { return }
-        post(result.events)
         if result.shouldPublish {
-            DispatchQueue.main.async { [weak self] in self?.live = result.live }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isArmed else { return }
+                self.live = result.live
+            }
         }
     }
 
@@ -361,6 +428,42 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             let type: CGEventType
             let point: CGPoint
             switch event {
+            case .canvas(let action, let p):
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.stateLock.withLock({ self.runtimeArmed && self.armGeneration == generation }) else { return }
+                    self.onCanvasEvent?(action, p)
+                }
+                continue
+            case .canvasEnd:
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.stateLock.withLock({ self.armGeneration == generation }) else { return }
+                    self.onCanvasEvent?(nil, nil)
+                }
+                continue
+            case .disarm:
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.stateLock.withLock({ self.armGeneration == generation }) else { return }
+                    self.disarm()
+                }
+                continue
+            case .rightClick(let p):
+                for kind in [CGEventType.rightMouseDown, .rightMouseUp] {
+                    CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: p, mouseButton: .right)?.post(tap: .cghidEventTap)
+                }
+                continue
+            case .scroll(let delta):
+                CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+                continue
+            case .shortcut(let shortcut):
+                for down in [true, false] {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: shortcut.keyCode, keyDown: down)
+                    event?.flags = shortcut.flags
+                    event?.post(tap: .cghidEventTap)
+                }
+                continue
             case .move(let p): type = .mouseMoved; point = p
             case .leftDown(let p): type = .leftMouseDown; point = p
             case .leftDrag(let p): type = .leftMouseDragged; point = p

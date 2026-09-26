@@ -124,6 +124,27 @@ enum RoutedPathSignalResolver {
 }
 
 extension LandmarkSettings {
+    mutating func setTracks(_ region: LandmarkRegion, enabled: Bool) {
+        switch region {
+        case .jaw: trackJaw = enabled
+        case .nose: trackNose = enabled
+        case .mouth: trackMouth = enabled
+        case .leftBrow: trackLeftBrow = enabled
+        case .rightBrow: trackRightBrow = enabled
+        case .leftEye: trackLeftEye = enabled
+        case .rightEye: trackRightEye = enabled
+        case .head: trackHead = enabled
+        case .torso: trackTorso = enabled
+        case .leftArm: trackLeftArm = enabled
+        case .rightArm: trackRightArm = enabled
+        case .leftLeg: trackLeftLeg = enabled
+        case .rightLeg: trackRightLeg = enabled
+        case .hands: trackHands = enabled
+        case .contour: trackContour = enabled
+        case .bodyHull: trackBodyHull = enabled
+        }
+    }
+
     func style(for region: LandmarkRegion) -> ElementStyle {
         switch region {
         case .jaw: return jawStyle
