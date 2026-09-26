@@ -144,14 +144,34 @@ anchors still own the position, so the outline tracker cannot pull the crown
 off the ears. Hands and body joints never become scalp anchors.
 
 - Clean: a 17-point ear-to-ear scalp outline.
-- Wild: seeded samples across the scalp area, ordered by a short-step Wrap-like
-  walk with local turns. It implies the roof with a few anchor points rather
-  than drawing concentric dome lines. Hair fill changes sample density, not
-  skull height; the hidden scalp apex is retained for contour attachment.
+- Wild: a seeded proximity walk through the cap with occasional loose flicks.
+- Wrap: a denser proximity route with angular turns around selected samples.
+- Hatch: alternating irregular temple-to-temple passes for a combed or shaded
+  texture.
+
+Every filled mode draws the scalp arc first and then carries the same route
+through the hair area back to the far ear. The dropdown selects a texture;
+**Hair fill** from 0 to 4 controls sample density. Values through 1 retain the
+previous density curve, while values above 1 add many more samples. This
+parameter never increases the scalp height; the face-attached dome and hidden
+apex remain stable as density changes.
 
 The crown stays in the unicursal face planner next to the jaw component. Seeds
 can choose which side of the jaw to connect first; both open paths retain their
 ear endpoints after stylization.
+
+### Face connection anchors
+
+Face routing uses semantic endpoints before applying the seed-selected
+itinerary. Eye loops begin at the canthus nearest the nose bridge, nose curves
+begin at the bridge and travel toward the tip/nostril, and brows are oriented
+outer-to-inner so a brow-to-eye or brow-to-nose handoff favors its medial end.
+This discourages the long outer-eye-to-brow connectors marked red in the
+reference while preserving the blue inner-face routes. The two mouth loops
+share one seeded corner anchor, so an inner/outer lip connection meets at a
+corner rather than crossing the center of the mouth. Landmark motion carries
+these anchors with the face; changing the seed can select the opposite mouth
+corner without adding frame-to-frame route noise.
 
 ### Body
 
@@ -333,8 +353,8 @@ changing the semantic itinerary to solve a performance problem.
 | Pose body shape | off | Stylized neck, torso, and arm boundary from pose joints; no segmentation |
 | Outline weight | 0.68 | Outline opacity |
 | Top-of-head line | off | Connect the ear-side face contour through a full scalp dome; person contour guides its shape when present |
-| Hair | Clean | Clean or Wild crown geometry |
-| Hair fill | 0.45 | Wild interior line-walk density; scalp height stays face-proportional (no height increase from this slider) |
+| Hair | Clean | Clean, Wild, Wrap, or Hatch crown geometry |
+| Hair fill | 0.45 | Fill density for Wild/Wrap/Hatch, from 0 to 4; does not increase scalp height |
 | Width | 2.8 | Main ribbon width |
 | Width variation | 0.45 | Calligraphic taper/swell |
 | Halo | off | Glow behind ribbons |

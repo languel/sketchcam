@@ -95,6 +95,8 @@ public enum PortraitStyle: String, CaseIterable, Identifiable, Sendable, Codable
 public enum PortraitHairStyle: String, CaseIterable, Identifiable, Sendable, Codable {
     case clean
     case wild
+    case wrap
+    case hatch
 
     public var id: String { rawValue }
 
@@ -102,6 +104,8 @@ public enum PortraitHairStyle: String, CaseIterable, Identifiable, Sendable, Cod
         switch self {
         case .clean: return "Clean"
         case .wild: return "Wild"
+        case .wrap: return "Wrap"
+        case .hatch: return "Hatch"
         }
     }
 }

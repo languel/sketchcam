@@ -3644,12 +3644,13 @@ struct ContentView: View {
                     Text(style.title).tag(style)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             SliderRow(
                 title: "Hair fill",
                 value: optionalLandmarkFloatBinding(\.portraitHairAmount, defaultValue: 0.45),
+                range: 0...4,
                 defaultValue: 0.45,
-                hint: "Wild hair: add more seeded, face-attached linework inside the scalp without making the skull taller. Clean keeps one outline."
+                hint: "Adds face-attached hair fill without moving the scalp. Higher values add denser sampling; Wild, Wrap, and Hatch use different line patterns."
             )
             .disabled(model.settings.landmarks.resolvedPortraitHairStyle == .clean)
 

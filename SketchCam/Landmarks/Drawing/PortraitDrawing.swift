@@ -140,6 +140,10 @@ struct PortraitDrawing: DrawingAlgorithm {
         if let hair {
             faceFeatures.append(hair)
         }
+        faceFeatures = PortraitPathBuilder.anchorFaceConnections(
+            faceFeatures,
+            seed: landmarks.resolvedPortraitSeed &+ 29
+        )
         let bodyFeatures = PortraitPathBuilder.orderedBodyFeatures(components).filter {
             !landmarks.resolvedPortraitPoseBodyEnabled ||
                 ![LandmarkRegion.head, .torso, .leftArm, .rightArm].contains($0.region)
@@ -309,10 +313,35 @@ struct PortraitDrawing: DrawingAlgorithm {
                     seed: seed &+ index &* 43
                 )
             }
-            // Let each component hand off at its closest endpoint. This keeps
-            // the unified face/body/silhouette route visually continuous even
-            // when seeded sampling reverses an open landmark chain.
-            if let from = result.last {
+            // Keep face handoffs on their semantic ports: brows end at their
+            // nose-side end, eyes begin/end at the inner canthus, nose begins
+            // at the bridge, and both lip loops begin at one mouth corner.
+            // This prevents proximity-only routing from drawing across the
+            // outer eye corners or across the middle of the lips.
+            if feature.closed && (feature.region == .leftEye || feature.region == .rightEye),
+               !feature.isPupil, let anchor = feature.points.first {
+                sourcePoints = PortraitPathBuilder.closedPathStartingNear(sourcePoints, anchor: anchor)
+            } else if feature.closed && feature.region == .mouth, let anchor = feature.points.first {
+                sourcePoints = PortraitPathBuilder.closedPathStartingNear(sourcePoints, anchor: anchor)
+            } else if feature.region == .nose, !feature.closed, let bridge = feature.points.first {
+                sourcePoints = PortraitPathBuilder.openPathStartingNear(sourcePoints, anchor: bridge)
+            } else if feature.region == .leftBrow || feature.region == .rightBrow,
+                      !feature.closed, let inner = feature.points.last {
+                let nextFeature = index + 1 < usable.count ? usable[index + 1] : nil
+                func isMedialNeighbor(_ other: PortraitPathBuilder.Component?) -> Bool {
+                    guard let other else { return false }
+                    if other.region == .nose { return true }
+                    return (feature.region == .leftBrow && other.region == .leftEye)
+                        || (feature.region == .rightBrow && other.region == .rightEye)
+                }
+                if isMedialNeighbor(nextFeature) || previousFeature == nil {
+                    sourcePoints = PortraitPathBuilder.openPathEndingNear(sourcePoints, anchor: inner)
+                } else {
+                    sourcePoints = PortraitPathBuilder.openPathStartingNear(sourcePoints, anchor: inner)
+                }
+            } else if let from = result.last {
+                // Other components can still choose the nearer endpoint; the
+                // face-specific features above deliberately use their anchors.
                 sourcePoints = PortraitPathBuilder.connectedStart(
                     sourcePoints,
                     closed: feature.closed,
@@ -801,6 +830,109 @@ enum PortraitPathBuilder {
         return result
     }
 
+    /// Prepares stable entry points for the meaningful face-to-face links.
+    /// Vision's loop starts are arbitrary, so geometric proximity alone can
+    /// attach brows to the outer eye corners or put the two lip loops on
+    /// opposite sides. The chosen anchors move with the tracked face.
+    static func anchorFaceConnections(_ features: [Component], seed: Int) -> [Component] {
+        func center(_ components: [Component]) -> CGPoint? {
+            let points = components.filter { !$0.isPupil }.flatMap(\.points)
+            guard !points.isEmpty else { return nil }
+            return CGPoint(x: points.reduce(0) { $0 + $1.x } / CGFloat(points.count),
+                           y: points.reduce(0) { $0 + $1.y } / CGFloat(points.count))
+        }
+        func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+            hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+        }
+
+        let noseCenter = center(features.filter { $0.region == .nose })
+        let leftEyeCenter = center(features.filter { $0.region == .leftEye })
+        let rightEyeCenter = center(features.filter { $0.region == .rightEye })
+        let bridge = noseCenter ?? {
+            guard let leftEyeCenter, let rightEyeCenter else { return nil }
+            return CGPoint(x: (leftEyeCenter.x + rightEyeCenter.x) * 0.5,
+                           y: (leftEyeCenter.y + rightEyeCenter.y) * 0.5)
+        }()
+
+        let eyeAxis: CGPoint? = {
+            guard let leftEyeCenter, let rightEyeCenter else { return nil }
+            let dx = rightEyeCenter.x - leftEyeCenter.x
+            let dy = rightEyeCenter.y - leftEyeCenter.y
+            let length = hypot(dx, dy)
+            guard length > 0.001 else { return nil }
+            return CGPoint(x: dx / length, y: dy / length)
+        }()
+        let mouthPoints = features.filter { $0.region == .mouth }.flatMap(\.points)
+        let mouthCorner: CGPoint? = {
+            guard !mouthPoints.isEmpty else { return nil }
+            guard let eyeAxis else {
+                return mouthPoints.min(by: { $0.x < $1.x })
+            }
+            let projection: (CGPoint) -> CGFloat = { $0.x * eyeAxis.x + $0.y * eyeAxis.y }
+            if seed & 1 == 0 {
+                return mouthPoints.min(by: { projection($0) < projection($1) })
+            }
+            return mouthPoints.max(by: { projection($0) < projection($1) })
+        }()
+
+        return features.map { original in
+            var feature = original
+            switch feature.region {
+            case .leftBrow, .rightBrow:
+                guard !feature.closed, feature.points.count >= 2, let bridge else { return feature }
+                let first = feature.points[0], last = feature.points[feature.points.count - 1]
+                // Store every brow outer-to-inner. route() enters at the inner
+                // endpoint when another face feature precedes it.
+                if distance(first, bridge) < distance(last, bridge) {
+                    feature.points.reverse()
+                }
+            case .nose:
+                guard !feature.closed, feature.points.count >= 2,
+                      let target = leftEyeCenter.flatMap({ left in
+                          rightEyeCenter.map { CGPoint(x: (left.x + $0.x) * 0.5, y: (left.y + $0.y) * 0.5) }
+                      }) ?? bridge else { return feature }
+                let first = feature.points[0], last = feature.points[feature.points.count - 1]
+                // The eye-line end is the bridge; keep it as the route entry.
+                if distance(last, target) < distance(first, target) {
+                    feature.points.reverse()
+                }
+            case .leftEye, .rightEye:
+                guard feature.closed, !feature.isPupil, let bridge else { return feature }
+                feature.points = closedPathStartingNear(feature.points, anchor: bridge)
+            case .mouth:
+                guard feature.closed, let mouthCorner else { return feature }
+                feature.points = closedPathStartingNear(feature.points, anchor: mouthCorner)
+            default:
+                break
+            }
+            return feature
+        }
+    }
+
+    static func closedPathStartingNear(_ points: [CGPoint], anchor: CGPoint) -> [CGPoint] {
+        guard points.count >= 4 else { return points }
+        let unique = points.first == points.last ? Array(points.dropLast()) : points
+        guard unique.count >= 3,
+              let start = unique.indices.min(by: { distance(unique[$0], anchor) < distance(unique[$1], anchor) })
+        else { return points }
+        let rotated = Array(unique[start...]) + Array(unique[..<start])
+        return rotated + [rotated[0]]
+    }
+
+    static func openPathStartingNear(_ points: [CGPoint], anchor: CGPoint) -> [CGPoint] {
+        guard let first = points.first, let last = points.last else { return points }
+        return distance(last, anchor) < distance(first, anchor) ? Array(points.reversed()) : points
+    }
+
+    static func openPathEndingNear(_ points: [CGPoint], anchor: CGPoint) -> [CGPoint] {
+        guard let first = points.first, let last = points.last else { return points }
+        return distance(first, anchor) < distance(last, anchor) ? Array(points.reversed()) : points
+    }
+
+    private static func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+
     /// Build one seeded itinerary across face, articulated body, and optional
     /// silhouette components. Candidate cost balances geometric travel,
     /// semantic affinity, and a detail bias so eyes, nose, and mouth can be
@@ -1151,7 +1283,10 @@ enum PortraitPathBuilder {
         guard faceWidth > 8, faceHeight > 8 else { return nil }
         let faceScale = max(12, faceWidth, faceHeight)
 
-        let clamped = CGFloat(max(0, min(1, amount)))
+        // Hair fill is intentionally allowed above the slider's old 0...1
+        // range. The first unit preserves the previous density; additional
+        // units add samples without changing the face-proportional scalp.
+        let clamped = CGFloat(max(0, min(4, amount)))
         let fallbackSpan = max(axisLength * 1.4, faceWidth * 0.86)
         let fallbackMiddle = CGPoint(
             x: (upperCenter ?? origin).x + down.x * faceHeight * 0.08,
@@ -1215,7 +1350,7 @@ enum PortraitPathBuilder {
         }
         func side(_ t: CGFloat) -> CGFloat {
             let expansion = t < 0.5 ? leftExpansion : rightExpansion
-            return -expansion * sin(2 * .pi * t) + skew * sin(.pi * t)
+            return -expansion * 0.75 * sin(2 * .pi * t) + skew * sin(.pi * t)
         }
         func scalpPoint(_ t: CGFloat, rise: CGFloat) -> CGPoint {
             let base = CGPoint(x: leftEar.x + (rightEar.x - leftEar.x) * t,
@@ -1254,38 +1389,79 @@ enum PortraitPathBuilder {
         switch style {
         case .clean:
             points = roof
-        case .wild:
-            // Sample the cap as an AREA, then take a seeded proximity walk.
-            // No concentric rows or complete perimeter: the result is a
-            // face-like web of short turns, crossings, and local squiggles.
-            // A few roof samples anchor the implied scalp without outlining
-            // a helmet. The apex remains metadata for contour joining.
-            let sampleCount = 32 + Int((clamped * 100).rounded())
-            // Sample in the rotating face coordinate frame rather than the
-            // image's axis-aligned bounds. A head turn/roll must move existing
-            // strands, not re-randomize their route.
+        case .wild, .wrap, .hatch:
+            // Always draw the scalp arc first so dense hair supplements the
+            // head shape instead of replacing it. The route then fills the
+            // cap and returns to the far ear, keeping both face anchors.
+            let sampleCount = 32 + Int((min(clamped, 1) * 100
+                + max(0, clamped - 1) * 220).rounded())
             let interior = (0..<sampleCount).map { _ -> CGPoint in
                 let t = 0.045 + random.unit() * 0.91
-                let depth = 0.16 + random.unit() * 0.78
+                let depth = 0.12 + random.unit() * 0.82
                 return scalpPoint(t, rise: lift * dome(t) * depth)
             }
-            let impliedRoof = [2, 5, 8, 11, 14].map { roof[$0] }
-            let ordered = WrapDrawing.nearestNeighborOrder([leftEar] + interior + impliedRoof)
-            var walk: [CGPoint] = []
-            walk.reserveCapacity(ordered.count + sampleCount / 4 + 1)
-            for (index, point) in ordered.enumerated() {
-                walk.append(point)
-                guard index > 0, index.isMultiple(of: 7),
-                      !impliedRoof.contains(point) else { continue }
-                let radius = min(faceScale * 0.017, lift * 0.038)
-                walk.append(CGPoint(x: point.x + across.x * radius + up.x * radius,
-                                    y: point.y + across.y * radius + up.y * radius))
-                walk.append(CGPoint(x: point.x - across.x * radius + up.x * radius,
-                                    y: point.y - across.y * radius + up.y * radius))
-                walk.append(point)
+
+            let fill: [CGPoint]
+            switch style {
+            case .clean:
+                fill = []
+            case .wild:
+                // Loose proximity walk with occasional hand-drawn flicks.
+                let ordered = WrapDrawing.nearestNeighborOrder([rightEar] + interior)
+                var walk: [CGPoint] = []
+                walk.reserveCapacity(ordered.count + sampleCount / 7 * 3 + 1)
+                for (index, point) in ordered.enumerated() {
+                    walk.append(point)
+                    guard index > 0, index.isMultiple(of: 7) else { continue }
+                    let radius = min(faceScale * 0.017, lift * 0.038)
+                    walk.append(CGPoint(x: point.x + across.x * radius + up.x * radius,
+                                        y: point.y + across.y * radius + up.y * radius))
+                    walk.append(CGPoint(x: point.x - across.x * radius + up.x * radius,
+                                        y: point.y - across.y * radius + up.y * radius))
+                    walk.append(point)
+                }
+                walk.append(rightEar)
+                fill = walk
+            case .wrap:
+                // A tighter linewalk: sample the whole cap, then interrupt
+                // the proximity route with angular wraps around selected
+                // anchors rather than adding the same repeated curl everywhere.
+                let ordered = WrapDrawing.nearestNeighborOrder([rightEar] + interior)
+                var walk: [CGPoint] = []
+                walk.reserveCapacity(ordered.count + sampleCount / 5 * 4 + 1)
+                for (index, point) in ordered.enumerated() {
+                    walk.append(point)
+                    guard index > 0, index.isMultiple(of: 5) else { continue }
+                    let radius = min(faceScale * 0.024, lift * 0.052)
+                    let offsets: [(CGFloat, CGFloat)] = [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 0)]
+                    for (x, y) in offsets {
+                        walk.append(CGPoint(x: point.x + across.x * radius * x + up.x * radius * y,
+                                            y: point.y + across.y * radius * x + up.y * radius * y))
+                    }
+                }
+                walk.append(rightEar)
+                fill = walk
+            case .hatch:
+                // Alternating, gently irregular temple-to-temple passes form
+                // a comb/hatching texture. An even row count ends at the right
+                // ear, so the fill flows back into the face contour cleanly.
+                let rows = 6 + Int((min(clamped, 3) * 2).rounded())
+                let stepsPerRow = max(5, sampleCount / rows)
+                var walk: [CGPoint] = [rightEar]
+                walk.reserveCapacity(rows * (stepsPerRow + 1) + 1)
+                for row in 0..<rows {
+                    let depth = 0.12 + 0.78 * CGFloat(row) / CGFloat(max(1, rows - 1))
+                    for step in 0...stepsPerRow {
+                        let progress = CGFloat(step) / CGFloat(stepsPerRow)
+                        let t = row.isMultiple(of: 2) ? 0.96 - progress * 0.92 : 0.04 + progress * 0.92
+                        let jitter = (random.unit() - 0.5) * 0.025
+                        walk.append(scalpPoint(t, rise: lift * dome(t) * min(1, max(0.05, depth + jitter))))
+                    }
+                }
+                walk.append(rightEar)
+                fill = walk
             }
-            walk.append(rightEar)
-            points = walk
+            points = roof + fill
         }
         return Component(region: .head, points: points, closed: false,
                          handedness: .unknown, isCrown: true, scalpApex: roof[8])
