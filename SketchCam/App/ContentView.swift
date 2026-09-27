@@ -3633,7 +3633,7 @@ struct ContentView: View {
                 value: optionalLandmarkFloatBinding(\.portraitSubsample, defaultValue: 1),
                 range: 0.05...1,
                 defaultValue: 1,
-                hint: "Percentage of source landmark points retained by the seeded drawing route. Lower values make simpler, more varied portraits while preserving detail anchors."
+                hint: "Percentage of source points retained. Hand joints always keep full source resolution; lower values simplify denser face and outline paths."
             )
 
             SectionHeader("Crown")
@@ -3650,9 +3650,26 @@ struct ContentView: View {
                 value: optionalLandmarkFloatBinding(\.portraitHairAmount, defaultValue: 0.45),
                 range: 0...4,
                 defaultValue: 0.45,
-                hint: "Adds face-attached hair fill without moving the scalp. Higher values add denser sampling; Wild, Wrap, and Hatch use different line patterns."
+                hint: "Adds denser fill above the brow line without moving the scalp. Wild, Wrap, and horizontal/vertical Hatch use different line patterns."
             )
             .disabled(model.settings.landmarks.resolvedPortraitHairStyle == .clean)
+
+            SectionHeader("Mouth")
+            Picker("Lip connections", selection: Binding(
+                get: { model.settings.landmarks.resolvedPortraitMouthConnection },
+                set: { model.settings.landmarks.portraitMouthConnection = $0 }
+            )) {
+                ForEach(PortraitMouthConnection.allCases) { connection in
+                    Text(connection.title).tag(connection)
+                }
+            }
+            .pickerStyle(.menu)
+            .help("Connect the inner and outer lip rings at one shared corner, or weave upper and lower lips together at both corners.")
+            Toggle("Inner mouth ring", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitInnerMouthEnabled },
+                set: { model.settings.landmarks.portraitInnerMouthEnabled = $0 }
+            ))
+                .help("Hide the inner lip contour while keeping the outer mouth shape.")
 
             SectionHeader("Silhouette")
             Toggle("Pose body shape", isOn: Binding(

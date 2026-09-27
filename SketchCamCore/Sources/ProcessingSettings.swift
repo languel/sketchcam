@@ -97,6 +97,7 @@ public enum PortraitHairStyle: String, CaseIterable, Identifiable, Sendable, Cod
     case wild
     case wrap
     case hatch
+    case hatchVertical
 
     public var id: String { rawValue }
 
@@ -105,7 +106,22 @@ public enum PortraitHairStyle: String, CaseIterable, Identifiable, Sendable, Cod
         case .clean: return "Clean"
         case .wild: return "Wild"
         case .wrap: return "Wrap"
-        case .hatch: return "Hatch"
+        case .hatch: return "Hatch Horizontal"
+        case .hatchVertical: return "Hatch Vertical"
+        }
+    }
+}
+
+public enum PortraitMouthConnection: String, CaseIterable, Identifiable, Sendable, Codable {
+    case sharedCorner
+    case pairedCorners
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .sharedCorner: return "Single corner"
+        case .pairedCorners: return "Both corners"
         }
     }
 }
@@ -628,6 +644,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var portraitHairEnabled: Bool?
     public var portraitHairStyle: PortraitHairStyle?
     public var portraitHairAmount: Float?
+    public var portraitMouthConnection: PortraitMouthConnection?
+    public var portraitInnerMouthEnabled: Bool?
     public var inkPaths: [InkEditorPath]
     /// New stroke model: captured gesture data + active render recipe. Nil
     /// means this preset predates the split and should be migrated from
@@ -833,6 +851,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         portraitHairEnabled: Bool? = false,
         portraitHairStyle: PortraitHairStyle? = .clean,
         portraitHairAmount: Float? = 0.45,
+        portraitMouthConnection: PortraitMouthConnection? = .sharedCorner,
+        portraitInnerMouthEnabled: Bool? = true,
         inkPaths: [InkEditorPath] = [],
         inkStrokeRecords: [InkStrokeRecord]? = nil,
         inkColor: RGBAColor = .ink,
@@ -988,6 +1008,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
         self.portraitHairEnabled = portraitHairEnabled
         self.portraitHairStyle = portraitHairStyle
         self.portraitHairAmount = portraitHairAmount
+        self.portraitMouthConnection = portraitMouthConnection
+        self.portraitInnerMouthEnabled = portraitInnerMouthEnabled
         self.inkPaths = inkPaths
         self.inkStrokeRecords = inkStrokeRecords
         self.inkColor = inkColor
@@ -1089,6 +1111,8 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedPortraitHairEnabled: Bool { portraitHairEnabled ?? false }
     public var resolvedPortraitHairStyle: PortraitHairStyle { portraitHairStyle ?? .clean }
     public var resolvedPortraitHairAmount: Float { portraitHairAmount ?? 0.45 }
+    public var resolvedPortraitMouthConnection: PortraitMouthConnection { portraitMouthConnection ?? .sharedCorner }
+    public var resolvedPortraitInnerMouthEnabled: Bool { portraitInnerMouthEnabled ?? true }
 }
 
 /// Plain-value color (no AppKit dependency in Core).

@@ -120,7 +120,13 @@ struct PortraitDrawing: DrawingAlgorithm {
         for region in faceOrder {
             let candidates = (componentsByRegion[region] ?? []).sorted { $0.points.count > $1.points.count }
             if region == .mouth {
-                faceFeatures.append(contentsOf: candidates.prefix(2))
+                faceFeatures.append(contentsOf: PortraitPathBuilder.mouthFeatures(
+                    candidates,
+                    connection: landmarks.resolvedPortraitMouthConnection,
+                    innerEnabled: landmarks.resolvedPortraitInnerMouthEnabled,
+                    leftEye: componentsByRegion[.leftEye] ?? [],
+                    rightEye: componentsByRegion[.rightEye] ?? []
+                ))
             } else if region == .leftEye || region == .rightEye {
                 // Eye rings and isolated pupil marks are separate semantic
                 // components. Keep both so the pupil cannot disappear when
@@ -298,11 +304,15 @@ struct PortraitDrawing: DrawingAlgorithm {
         var previousFeature: PortraitPathBuilder.Component?
 
         for (index, feature) in usable.enumerated() {
+            // Hand graphs are already sparse (roughly one point per joint),
+            // so keep every detected joint while allowing the global
+            // subsampling control to simplify denser face/outline sources.
+            let featureSubsample: Float = feature.region == .hands ? 1 : subsample
             var sourcePoints = PortraitPathBuilder.sampledLandmarks(
                 feature.points,
                 closed: feature.closed,
                 variation: routeVariation,
-                subsample: subsample,
+                subsample: featureSubsample,
                 minimumCount: feature.isPupil || feature.region == .nose ? 4 : 2,
                 seed: seed &+ index &* 31
             )
@@ -834,6 +844,123 @@ enum PortraitPathBuilder {
     /// Vision's loop starts are arbitrary, so geometric proximity alone can
     /// attach brows to the outer eye corners or put the two lip loops on
     /// opposite sides. The chosen anchors move with the tracked face.
+    static func mouthFeatures(
+        _ components: [Component],
+        connection: PortraitMouthConnection,
+        innerEnabled: Bool,
+        leftEye: [Component],
+        rightEye: [Component]
+    ) -> [Component] {
+        let ranked = components.sorted {
+            let lhsArea = enclosedArea($0)
+            let rhsArea = enclosedArea($1)
+            if abs(lhsArea - rhsArea) > 0.001 { return lhsArea > rhsArea }
+            return $0.points.count > $1.points.count
+        }
+        guard let outer = ranked.first else { return [] }
+        guard innerEnabled, let inner = ranked.dropFirst().first else { return [outer] }
+        guard outer.closed, inner.closed else { return [outer, inner] }
+        guard connection == .pairedCorners else { return [outer, inner] }
+        guard let paired = pairedMouthContour(
+            outer: outer,
+            inner: inner,
+            leftEye: leftEye,
+            rightEye: rightEye
+        ) else { return [outer, inner] }
+        return [paired]
+    }
+
+    private static func enclosedArea(_ component: Component) -> CGFloat {
+        guard component.closed, component.points.count >= 4 else { return 0 }
+        let ring = component.points.first == component.points.last
+            ? Array(component.points.dropLast()) : component.points
+        guard ring.count >= 3 else { return 0 }
+        let twiceArea = ring.indices.reduce(CGFloat.zero) { total, index in
+            let next = ring[(index + 1) % ring.count]
+            return total + ring[index].x * next.y - next.x * ring[index].y
+        }
+        return abs(twiceArea) * 0.5
+    }
+
+    /// Weaves the upper/lower arcs of inner and outer lip rings together at
+    /// both mouth corners. One closed semantic path lets the existing route
+    /// planner treat this as a single feature without adding cross-mouth jumps.
+    private static func pairedMouthContour(
+        outer: Component,
+        inner: Component,
+        leftEye: [Component],
+        rightEye: [Component]
+    ) -> Component? {
+        func ring(_ component: Component) -> [CGPoint] {
+            component.points.first == component.points.last
+                ? Array(component.points.dropLast()) : component.points
+        }
+        func center(_ components: [Component]) -> CGPoint? {
+            let points = components.filter { !$0.isPupil }.flatMap(\.points)
+            guard !points.isEmpty else { return nil }
+            return CGPoint(x: points.reduce(0) { $0 + $1.x } / CGFloat(points.count),
+                           y: points.reduce(0) { $0 + $1.y } / CGFloat(points.count))
+        }
+        let outerRing = ring(outer), innerRing = ring(inner)
+        guard outerRing.count >= 4, innerRing.count >= 4 else { return nil }
+        let leftCenter = center(leftEye), rightCenter = center(rightEye)
+        let axisDelta: CGPoint
+        if let leftCenter, let rightCenter {
+            axisDelta = CGPoint(x: rightCenter.x - leftCenter.x, y: rightCenter.y - leftCenter.y)
+        } else {
+            axisDelta = CGPoint(x: 1, y: 0)
+        }
+        let axisLength = max(0.001, hypot(axisDelta.x, axisDelta.y))
+        let axis = CGPoint(x: axisDelta.x / axisLength, y: axisDelta.y / axisLength)
+        let mouthCenter = CGPoint(x: outerRing.reduce(0) { $0 + $1.x } / CGFloat(outerRing.count),
+                                  y: outerRing.reduce(0) { $0 + $1.y } / CGFloat(outerRing.count))
+        let eyeMid: CGPoint
+        if let leftCenter, let rightCenter {
+            eyeMid = CGPoint(x: (leftCenter.x + rightCenter.x) * 0.5,
+                             y: (leftCenter.y + rightCenter.y) * 0.5)
+        } else {
+            eyeMid = leftCenter ?? rightCenter
+                ?? CGPoint(x: mouthCenter.x, y: mouthCenter.y - 1)
+        }
+        let downDelta = CGPoint(x: mouthCenter.x - eyeMid.x, y: mouthCenter.y - eyeMid.y)
+        let downLength = max(0.001, hypot(downDelta.x, downDelta.y))
+        let up = CGPoint(x: -downDelta.x / downLength, y: -downDelta.y / downLength)
+
+        func arcs(_ points: [CGPoint]) -> (upper: [CGPoint], lower: [CGPoint])? {
+            let projection: (CGPoint) -> CGFloat = { $0.x * axis.x + $0.y * axis.y }
+            guard let left = points.indices.min(by: { projection(points[$0]) < projection(points[$1]) }),
+                  let right = points.indices.max(by: { projection(points[$0]) < projection(points[$1]) }),
+                  left != right else { return nil }
+            func walk(step: Int) -> [CGPoint] {
+                var result = [points[left]]
+                var index = left
+                while index != right {
+                    index = (index + step + points.count) % points.count
+                    result.append(points[index])
+                }
+                return result
+            }
+            let forward = walk(step: 1)
+            let backward = walk(step: -1)
+            func height(_ arc: [CGPoint]) -> CGFloat {
+                arc.reduce(CGFloat.zero) { $0 + $1.x * up.x + $1.y * up.y }
+                    / CGFloat(max(1, arc.count))
+            }
+            return height(forward) >= height(backward)
+                ? (upper: forward, lower: backward)
+                : (upper: backward, lower: forward)
+        }
+        guard let outerArcs = arcs(outerRing), let innerArcs = arcs(innerRing) else { return nil }
+
+        var points = outerArcs.upper
+        points.append(contentsOf: innerArcs.upper.reversed().dropFirst())
+        points.append(contentsOf: innerArcs.lower.dropFirst())
+        points.append(contentsOf: outerArcs.lower.reversed().dropFirst())
+        if let first = points.first, points.last != first { points.append(first) }
+        guard points.count >= 5 else { return nil }
+        return Component(region: .mouth, points: points, closed: true, handedness: .unknown)
+    }
+
     static func anchorFaceConnections(_ features: [Component], seed: Int) -> [Component] {
         func center(_ components: [Component]) -> CGPoint? {
             let points = components.filter { !$0.isPupil }.flatMap(\.points)
@@ -1358,6 +1485,12 @@ enum PortraitPathBuilder {
             return CGPoint(x: base.x + across.x * side(t) + up.x * rise,
                            y: base.y + across.y * side(t) + up.y * rise)
         }
+        func hairPoint(_ t: CGFloat, depth: CGFloat) -> CGPoint {
+            let roofRise = lift * dome(t)
+            let browClearance = browRise + faceScale * 0.07
+            let minimumRise = min(roofRise * 0.94, max(roofRise * 0.42, browClearance))
+            return scalpPoint(t, rise: max(minimumRise, roofRise * depth))
+        }
 
         // The contour's upper envelope lends broad shape, within a bounded
         // range. The face tracker still owns the exact ear endpoints.
@@ -1389,7 +1522,7 @@ enum PortraitPathBuilder {
         switch style {
         case .clean:
             points = roof
-        case .wild, .wrap, .hatch:
+        case .wild, .wrap, .hatch, .hatchVertical:
             // Always draw the scalp arc first so dense hair supplements the
             // head shape instead of replacing it. The route then fills the
             // cap and returns to the far ear, keeping both face anchors.
@@ -1397,8 +1530,9 @@ enum PortraitPathBuilder {
                 + max(0, clamped - 1) * 220).rounded())
             let interior = (0..<sampleCount).map { _ -> CGPoint in
                 let t = 0.045 + random.unit() * 0.91
-                let depth = 0.12 + random.unit() * 0.82
-                return scalpPoint(t, rise: lift * dome(t) * depth)
+                // Keep the low edge of the fill well above the brow shelf.
+                let depth = 0.42 + random.unit() * 0.52
+                return hairPoint(t, depth: depth)
             }
 
             let fill: [CGPoint]
@@ -1450,12 +1584,34 @@ enum PortraitPathBuilder {
                 var walk: [CGPoint] = [rightEar]
                 walk.reserveCapacity(rows * (stepsPerRow + 1) + 1)
                 for row in 0..<rows {
-                    let depth = 0.12 + 0.78 * CGFloat(row) / CGFloat(max(1, rows - 1))
+                    let depth = 0.42 + 0.52 * CGFloat(row) / CGFloat(max(1, rows - 1))
                     for step in 0...stepsPerRow {
                         let progress = CGFloat(step) / CGFloat(stepsPerRow)
                         let t = row.isMultiple(of: 2) ? 0.96 - progress * 0.92 : 0.04 + progress * 0.92
                         let jitter = (random.unit() - 0.5) * 0.025
-                        walk.append(scalpPoint(t, rise: lift * dome(t) * min(1, max(0.05, depth + jitter))))
+                        walk.append(hairPoint(t, depth: min(1, max(0.05, depth + jitter))))
+                    }
+                }
+                walk.append(rightEar)
+                fill = walk
+            case .hatchVertical:
+                // Vertical comb strokes run from the upper scalp down toward
+                // (but not into) the eyebrow zone. The serpentine order keeps
+                // them in one face-attached line while permitting crossings.
+                let columns = 6 + Int((min(clamped, 3) * 2).rounded())
+                let stepsPerColumn = max(6, sampleCount / columns)
+                var walk: [CGPoint] = [rightEar]
+                walk.reserveCapacity(columns * (stepsPerColumn + 1) + 1)
+                for column in 0..<columns {
+                    let position = CGFloat(column) / CGFloat(max(1, columns - 1))
+                    let baseT = 0.96 - position * 0.92
+                    let t = min(0.97, max(0.03, baseT + (random.unit() - 0.5) * 0.018))
+                    for step in 0...stepsPerColumn {
+                        let progress = CGFloat(step) / CGFloat(stepsPerColumn)
+                        let depth = column.isMultiple(of: 2)
+                            ? 0.42 + progress * 0.52
+                            : 0.94 - progress * 0.52
+                        walk.append(hairPoint(t, depth: depth))
                     }
                 }
                 walk.append(rightEar)

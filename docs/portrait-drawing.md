@@ -146,15 +146,16 @@ off the ears. Hands and body joints never become scalp anchors.
 - Clean: a 17-point ear-to-ear scalp outline.
 - Wild: a seeded proximity walk through the cap with occasional loose flicks.
 - Wrap: a denser proximity route with angular turns around selected samples.
-- Hatch: alternating irregular temple-to-temple passes for a combed or shaded
-  texture.
+- Hatch Horizontal: alternating irregular temple-to-temple passes.
+- Hatch Vertical: alternating upper-to-lower scalp strands.
 
 Every filled mode draws the scalp arc first and then carries the same route
 through the hair area back to the far ear. The dropdown selects a texture;
 **Hair fill** from 0 to 4 controls sample density. Values through 1 retain the
 previous density curve, while values above 1 add many more samples. This
 parameter never increases the scalp height; the face-attached dome and hidden
-apex remain stable as density changes.
+apex remain stable as density changes. The fill's lower boundary is held above
+the eyebrow shelf so strands do not obscure the brows.
 
 The crown stays in the unicursal face planner next to the jaw component. Seeds
 can choose which side of the jaw to connect first; both open paths retain their
@@ -172,6 +173,14 @@ share one seeded corner anchor, so an inner/outer lip connection meets at a
 corner rather than crossing the center of the mouth. Landmark motion carries
 these anchors with the face; changing the seed can select the opposite mouth
 corner without adding frame-to-frame route noise.
+
+The Mouth controls can keep the current shared-corner handoff or build one
+paired-corner path: outer upper lip → inner upper lip → inner lower lip → outer
+lower lip, joining corresponding arcs at both corners. **Inner mouth ring**
+can disable the inner contour entirely. Hand routes keep every available
+MediaPipe joint even when the global Subsample control simplifies denser face
+or outline sources; this preserves the maximum hand detail present in the live
+input.
 
 ### Body
 
@@ -348,13 +357,15 @@ changing the semantic itinerary to solve a performance problem.
 | Connector width | 0.42 | Relative width for cross-part bridges |
 | Unify face, body, and outline | off | One seeded planner for face, body, and optional silhouette |
 | Detail priority | 0.65 | Bias the unified planner toward eyes, nose, and mouth |
-| Subsample | 1.0 | Percentage of source points retained by the seeded sampler |
+| Subsample | 1.0 | Percentage of non-hand source points retained by the seeded sampler; hand joints keep full input resolution |
 | Body outline | off | Integrated line-based contour/hull silhouette; requests Person contour when enabled |
 | Pose body shape | off | Stylized neck, torso, and arm boundary from pose joints; no segmentation |
 | Outline weight | 0.68 | Outline opacity |
 | Top-of-head line | off | Connect the ear-side face contour through a full scalp dome; person contour guides its shape when present |
-| Hair | Clean | Clean, Wild, Wrap, or Hatch crown geometry |
+| Hair | Clean | Clean, Wild, Wrap, Hatch Horizontal, or Hatch Vertical crown geometry |
 | Hair fill | 0.45 | Fill density for Wild/Wrap/Hatch, from 0 to 4; does not increase scalp height |
+| Lip connections | Single corner | Shared-corner rings or paired upper/lower lip arcs joined at both corners |
+| Inner mouth ring | on | Show/hide the inner lip landmarks |
 | Width | 2.8 | Main ribbon width |
 | Width variation | 0.45 | Calligraphic taper/swell |
 | Halo | off | Glow behind ribbons |
