@@ -54,6 +54,12 @@ public final class CoreImageFrameProcessor: FrameProcessor {
     }
 
     public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?, webAboveDrawing: Bool) throws -> ProcessedFrame {
+        try process(pixelBuffer: pixelBuffer, settings: settings, outputFormat: outputFormat,
+                    frameIndex: frameIndex, timestamp: timestamp, overlay: overlay, drawingLayers: [:],
+                    matte: matte, webLayer: webLayer, inkLayer: inkLayer, webAboveDrawing: webAboveDrawing)
+    }
+
+    public func process(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings, outputFormat: FrameFormat, frameIndex: Int, timestamp: CMTime, overlay: CIImage?, drawingLayers: [UUID: CIImage], matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?, webAboveDrawing: Bool) throws -> ProcessedFrame {
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let outputRect = CGRect(origin: .zero, size: outputFormat.size)
         var finalImage: CIImage
@@ -229,7 +235,8 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             let graph = (settings.layerGraph ?? LayerGraph.defaultGraph(from: settings)).reconciled(with: settings)
             finalImage = Self.compositeMovableLayers(
                 base: finalImage, graph: graph,
-                overlay: overlay, inkLayer: inkLayer, webLayer: webLayer, outputRect: outputRect
+                overlay: overlay, drawingLayers: drawingLayers,
+                inkLayer: inkLayer, webLayer: webLayer, outputRect: outputRect
             )
         } else {
             // Legacy: web-behind → ink-behind → overlay → ink-above → web-above.
@@ -275,6 +282,7 @@ public final class CoreImageFrameProcessor: FrameProcessor {
     /// the single merged `overlay` (composited at the first such layer); ink/web
     /// map to their pre-rendered images.
     static func compositeMovableLayers(base: CIImage, graph: LayerGraph, overlay: CIImage?,
+                                       drawingLayers: [UUID: CIImage] = [:],
                                        inkLayer: CIImage?, webLayer: CIImage?, outputRect: CGRect) -> CIImage {
         var result = base
         var overlayDone = false
@@ -288,9 +296,11 @@ public final class CoreImageFrameProcessor: FrameProcessor {
                 image = inkLayer
             case .acrylic:
                 image = nil
-            case .overlay, .marks, .drawing:
+            case .overlay, .marks:
                 image = overlayDone ? nil : overlay   // the one merged overlay, once
                 overlayDone = true
+            case .drawing:
+                image = drawingLayers[node.id]
             case .solid(let cfg):
                 // User-created solid fills render here; the managed background
                 // solid is part of the base already.

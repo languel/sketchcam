@@ -23,6 +23,43 @@ final class SourcePreviewReadouts: ObservableObject {
     @Published var movieSize: CGSize = .zero
 }
 
+/// Navigation is display-only. Keeping it out of ProcessingSettings while a
+/// gesture is active avoids rebuilding every control and copying the full
+/// compositor configuration for each trackpad event.
+struct WorkspaceNavigationSnapshot: Equatable {
+    var zoom: Double
+    var viewCenter: CGPoint
+}
+
+final class WorkspaceNavigationState: ObservableObject {
+    @Published private(set) var snapshot = WorkspaceNavigationSnapshot(zoom: 1, viewCenter: .zero)
+    private(set) var hasPendingEdit = false
+
+    func sync(from workspace: CollageWorkspace?) {
+        guard !hasPendingEdit, let workspace else { return }
+        let next = WorkspaceNavigationSnapshot(zoom: workspace.zoom, viewCenter: workspace.viewCenter)
+        if snapshot != next { snapshot = next }
+    }
+
+    @discardableResult
+    func update(zoom: Double, viewCenter: CGPoint) -> Bool {
+        let next = WorkspaceNavigationSnapshot(zoom: zoom, viewCenter: viewCenter)
+        guard next != snapshot else { return false }
+        hasPendingEdit = true
+        snapshot = next
+        return true
+    }
+
+    func applied(to workspace: CollageWorkspace?) -> CollageWorkspace? {
+        guard var workspace else { return nil }
+        workspace.zoom = snapshot.zoom
+        workspace.viewCenter = snapshot.viewCenter
+        return workspace
+    }
+
+    func finishEdit() { hasPendingEdit = false }
+}
+
 final class SketchCamViewModel: ObservableObject {
     enum FrameSource: String, CaseIterable, Identifiable, Codable {
         case camera
@@ -81,10 +118,12 @@ final class SketchCamViewModel: ObservableObject {
             persistSession()
         }
     }
+    let workspaceNavigation = WorkspaceNavigationState()
     @Published var settings = ProcessingSettings() {
         didSet {
             store.settings = settings
-            persistSession()
+            workspaceNavigation.sync(from: settings.workspace)
+            scheduleSessionSave()
         }
     }
     @Published var outputFormat = SketchCamFormats.defaultFormat {
@@ -133,6 +172,8 @@ final class SketchCamViewModel: ObservableObject {
     /// arming an input map from changing the Marks/Drawing landmark source.
     private let systemPointerLandmarkService = LandmarkDetectionService(context: SketchCamViewModel.sharedCIContext)
     private let overlayCompositor = LandmarkOverlayCompositor()
+    /// Explicit Drawing nodes have separate caches and source-region filters.
+    private var drawingCompositors: [UUID: LandmarkOverlayCompositor] = [:]
     private let inkCompositor = InkLayerCompositor()
     private let acrylicCompositor = AcrylicLayerCompositor()
     private let controlFieldCoordinator = ControlFieldCoordinator()
@@ -140,6 +181,12 @@ final class SketchCamViewModel: ObservableObject {
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
     let inkLiveStroke = InkLiveStroke()
+    private let motionInkLiveStroke = InkLiveStroke()
+    private var motionPath: InkEditorPath?
+    private var motionAction: MotionAction?
+    private var motionRuleID: UUID?
+    private var motionFrameID: UUID?
+    private var motionStart: TimeInterval = 0
     private let canvasActions = CanvasActionHistory()
     @Published private(set) var canvasHistoryRevision = 0
     private var workspaceUndoStack: [CollageWorkspace] = []
@@ -199,6 +246,13 @@ final class SketchCamViewModel: ObservableObject {
         isRestoringSession = false
         store.settings = settings
         store.outputFormat = outputFormat
+
+        systemPointer.onCanvasEvent = { [weak self] action, point in
+            self?.handleMotionCanvas(action: action, point: point)
+        }
+        systemPointer.onCanvasPaint = { [weak self] command in
+            self?.handleMotionPaint(command)
+        }
 
         captureService.onConfigurationChanged = { [weak self] size in
             DispatchQueue.main.async {
@@ -266,7 +320,59 @@ final class SketchCamViewModel: ObservableObject {
         return URL(fileURLWithPath: string)
     }
 
+    private var pendingSessionSave: DispatchWorkItem?
+    private var pendingNavigationCommit: DispatchWorkItem?
+
+    func updateWorkspaceNavigation(zoom: Double, viewCenter: CGPoint) {
+        ensureWorkspace()
+        guard settings.workspace != nil else { return }
+        guard workspaceNavigation.update(zoom: max(0.05, min(16, zoom)), viewCenter: viewCenter) else { return }
+        pendingNavigationCommit?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.commitWorkspaceNavigation() }
+        pendingNavigationCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    func zoomWorkspaceNavigation(by factor: Double) {
+        ensureWorkspace()
+        guard let workspace = workspaceNavigation.applied(to: settings.workspace) else { return }
+        updateWorkspaceNavigation(zoom: workspace.zoom * factor, viewCenter: workspace.viewCenter)
+    }
+
+    func resetWorkspaceNavigation() {
+        ensureWorkspace()
+        guard let workspace = settings.workspace else { return }
+        updateWorkspaceNavigation(
+            zoom: 1,
+            viewCenter: CGPoint(x: workspace.outputViewport.frame.midX, y: workspace.outputViewport.frame.midY)
+        )
+    }
+
+    private func commitWorkspaceNavigation() {
+        pendingNavigationCommit = nil
+        guard workspaceNavigation.hasPendingEdit, var workspace = settings.workspace else { return }
+        let navigation = workspaceNavigation.snapshot
+        workspaceNavigation.finishEdit()
+        guard workspace.zoom != navigation.zoom || workspace.viewCenter != navigation.viewCenter else { return }
+        workspace.zoom = navigation.zoom
+        workspace.viewCenter = navigation.viewCenter
+        settings.workspace = workspace
+    }
+
+    /// Pan/zoom and sliders publish many settings snapshots per second. Keep
+    /// the processing mirror immediate but coalesce the expensive full JSON
+    /// encode + UserDefaults write until the interaction quiets down.
+    private func scheduleSessionSave() {
+        guard !isRestoringSession else { return }
+        pendingSessionSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.persistSession() }
+        pendingSessionSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
     private func persistSession() {
+        pendingSessionSave?.cancel()
+        pendingSessionSave = nil
         guard !isRestoringSession else { return }
         let bookmark: Data?
         if let movieURL, movieURL.isFileURL {
@@ -473,6 +579,124 @@ final class SketchCamViewModel: ObservableObject {
     func endInkLiveStroke() { inkLiveStroke.end() }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
 
+    func prepareMotionCanvas() -> Bool {
+        var graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        if inkLayerEntries(graph: graph).isEmpty {
+            settings.landmarks.inkEnabled = true
+            reconcileWorkspaceWithGraph()
+            graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        }
+        let visible = inkLayerEntries(graph: graph).filter(\.layer.visible)
+        guard !visible.isEmpty else { return false }
+        if let active = activeInkFrameID(graph: graph, settings: settings), visible.contains(where: { $0.layer.id == active }) {
+            return true
+        }
+        // A hidden active Ink frame cannot receive camera strokes. Select a
+        // visible Ink target once when the user explicitly arms Canvas mode.
+        guard let target = visible.first,
+              var workspace = settings.workspace,
+              let frame = workspace.frames.first(where: { $0.material == .layer(target.layer.id) }) else { return false }
+        workspace.activeFrameID = frame.id
+        workspace.selectedFrameIDs = [frame.id]
+        settings.workspace = workspace
+        return true
+    }
+
+    /// Main-thread adapter from normalized hand motion to the existing Ink
+    /// channel and persisted undo ledger. Gesture strokes own a separate live
+    /// channel so they cannot overwrite a physical mouse stroke's identity.
+    private func handleMotionCanvas(action: MotionAction?, point: CGPoint?) {
+        if motionRuleID != nil { finishMotionPath() }
+        let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        let frameID = activeInkFrameID(graph: graph, settings: settings)
+        if motionAction != action || motionFrameID != frameID || point == nil || (motionPath?.points.count ?? 0) >= 8192 {
+            finishMotionPath()
+        }
+        guard let action, action == .draw || action == .erase, let point else { return }
+        guard let frameID,
+              let entry = inkLayerEntries(graph: graph).first(where: { $0.layer.id == frameID }),
+              entry.layer.visible else { return }
+        let l = (entry.node.inkConfig ?? InkFrameConfig(landmarks: settings.landmarks)).applying(to: settings).landmarks
+        let now = ProcessInfo.processInfo.systemUptime
+        if motionPath == nil {
+            motionStart = now; motionAction = action; motionFrameID = frameID
+            motionPath = InkEditorPath(points: [], sampleTimes: [], strokeSeed: UInt64.random(in: 0...UInt64.max),
+                brushMode: action == .erase ? .brush : .pen,
+                inkKind: action == .erase ? .white : (l.inkKind ?? .black),
+                width: action == .erase ? (l.inkWashWidth ?? 0.5) : l.inkWidth,
+                flow: l.inkFlow, bleed: l.inkBleed, dry: l.inkDry,
+                colorSeparation: l.inkColorSeparation, brushInk: action == .erase ? 1 : (l.inkBrushInk ?? 0), color: l.inkColor)
+        }
+        motionPath?.points.append(point)
+        motionPath?.sampleTimes?.append(now - motionStart)
+        guard let path = motionPath else { return }
+        motionInkLiveStroke.update(InkLiveStrokeSample(id: path.id, seed: path.strokeSeed ?? 0,
+            point: point, time: now - motionStart, brushMode: path.brushMode ?? .pen,
+            inkKind: path.inkKind ?? .black, width: path.width ?? 0.5, flow: path.flow ?? 0.9,
+            brushInk: path.brushInk ?? 0, color: path.color ?? .ink, smoothBoost: false,
+            destructive: false, wetOnly: false, charge: 1))
+    }
+
+    private func finishMotionPath() {
+        if let path = motionPath {
+            motionInkLiveStroke.end()
+            if path.points.count >= 2 {
+                var record = InkStrokeRecord.legacy(path: path, isEditable: false)
+                record.frameID = motionFrameID
+                commitImmediateCanvasStroke(record)
+            }
+        }
+        motionPath = nil
+        motionAction = nil
+        motionRuleID = nil
+        motionFrameID = nil
+    }
+
+    private func handleMotionPaint(_ command: MotionPaintCommand?) {
+        guard let command else { finishMotionPath(); return }
+        let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        guard let frameID = activeInkFrameID(graph: graph, settings: settings),
+              let entry = inkLayerEntries(graph: graph).first(where: { $0.layer.id == frameID }),
+              entry.layer.visible else { finishMotionPath(); return }
+        let l = (entry.node.inkConfig ?? InkFrameConfig(landmarks: settings.landmarks))
+            .applying(to: settings).landmarks
+        let mode: InkBrushMode = command.mode == .pen ? .pen : .brush
+        let width = command.parameters[command.mode == .pen ? .penSize : .washSize]
+            ?? (command.mode == .pen ? l.inkWidth : (l.inkWashWidth ?? 0.5))
+        let flow = command.parameters[.flow] ?? l.inkFlow
+        let brushInk = command.intent == .erase ? Float(1) : (command.parameters[.brushInk] ?? (l.inkBrushInk ?? 0))
+        let kind: InkKind = command.intent == .erase ? .white : (l.inkKind ?? .black)
+        let changed = motionRuleID != command.ruleID || motionFrameID != frameID
+            || motionPath?.brushMode != mode || motionPath?.inkKind != kind
+            || abs((motionPath?.width ?? width) - width) > 0.035
+            || abs((motionPath?.flow ?? flow) - flow) > 0.05
+            || abs((motionPath?.brushInk ?? brushInk) - brushInk) > 0.05
+            || (motionPath?.points.count ?? 0) >= 8192
+        let carry = changed ? motionPath?.points.last : nil
+        if changed { finishMotionPath() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if motionPath == nil {
+            motionStart = now
+            motionRuleID = command.ruleID
+            motionFrameID = frameID
+            motionPath = InkEditorPath(points: carry.map { [$0] } ?? [],
+                sampleTimes: carry == nil ? [] : [0],
+                strokeSeed: UInt64.random(in: 0...UInt64.max),
+                brushMode: mode, inkKind: kind, width: width, flow: flow,
+                bleed: l.inkBleed, dry: l.inkDry,
+                colorSeparation: l.inkColorSeparation, brushInk: brushInk, color: l.inkColor)
+        }
+        motionPath?.points.append(command.point)
+        motionPath?.sampleTimes?.append(now - motionStart)
+        guard let path = motionPath else { return }
+        motionInkLiveStroke.update(InkLiveStrokeSample(id: path.id, seed: path.strokeSeed ?? 0,
+            point: command.point, time: now - motionStart, brushMode: mode,
+            inkKind: kind, width: width, flow: flow, brushInk: brushInk,
+            color: path.color ?? .ink, smoothBoost: false,
+            destructive: command.intent == .erase && mode == .brush,
+            wetOnly: false, charge: 1))
+    }
+
     func prepareInkStrokeRecordsForCurrentSettings() {
         let records = resolvedInkStrokeRecords()
         settings.landmarks.inkStrokeRecords = records
@@ -589,10 +813,6 @@ final class SketchCamViewModel: ObservableObject {
             return (id, frame)
         })
         let graphLayerIDs = Set(graph.layers.map(\.id))
-        let nonGraphFrames = workspace.frames.filter { frame in
-            guard case .layer(let id) = frame.material else { return true }
-            return !graphLayerIDs.contains(id)
-        }
         let graphFrames = graph.layers.compactMap { layer -> WorkspaceFrame? in
             guard var frame = existingByLayerID[layer.id] ?? defaultByLayerID[layer.id],
                   let node = graph.node(layer.node) else { return nil }
@@ -603,7 +823,19 @@ final class SketchCamViewModel: ObservableObject {
             }
             return frame
         }
-        workspace.frames = graphFrames + nonGraphFrames
+        // The graph owns ordering among graph-linked frames, but other
+        // workspace frames keep their slots. Replacing the entire list with
+        // graphFrames + nonGraphFrames used to push independent frames to the
+        // top every time settings were reconciled.
+        var graphCursor = 0
+        workspace.frames = workspace.frames.compactMap { frame -> WorkspaceFrame? in
+            guard case .layer(let id) = frame.material, graphLayerIDs.contains(id) else {
+                return frame
+            }
+            guard graphFrames.indices.contains(graphCursor) else { return nil }
+            defer { graphCursor += 1 }
+            return graphFrames[graphCursor]
+        } + graphFrames.dropFirst(graphCursor)
         if workspace.activeFrameID == nil || workspace.frame(id: workspace.activeFrameID) == nil {
             workspace.activeFrameID = workspace.frames.first?.id
             workspace.selectedFrameIDs = workspace.activeFrameID.map { [$0] } ?? []
@@ -622,6 +854,19 @@ final class SketchCamViewModel: ObservableObject {
             return
         }
         settings.workspace = workspace
+    }
+
+    /// Called after an outliner drag (and its undo/redo). The workspace is the
+    /// active compositor order, so persist that same order in LayerGraph;
+    /// otherwise the next reconcile would snap Solid/Ink/Drawing back.
+    func syncGraphLayerOrderFromWorkspace() {
+        guard let workspace = settings.workspace, let graph = settings.layerGraph else { return }
+        let ids = workspace.frames.compactMap { frame -> UUID? in
+            if case .layer(let id) = frame.material { return id }
+            return nil
+        }
+        let reordered = graph.reorderedLayers(matching: ids)
+        if reordered.layers != graph.layers { settings.layerGraph = reordered }
     }
 
     func beginWorkspaceLiveEdit() {
@@ -654,6 +899,7 @@ final class SketchCamViewModel: ObservableObject {
               let previous = workspaceUndoStack.popLast() else { return }
         workspaceRedoStack.append(current)
         settings.workspace = previous
+        syncGraphLayerOrderFromWorkspace()
     }
 
     func redoWorkspaceAction() {
@@ -661,6 +907,7 @@ final class SketchCamViewModel: ObservableObject {
               let next = workspaceRedoStack.popLast() else { return }
         workspaceUndoStack.append(current)
         settings.workspace = next
+        syncGraphLayerOrderFromWorkspace()
     }
 
     private func resolvedInkStrokeRecords() -> [InkStrokeRecord] {
@@ -722,6 +969,7 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     func stop() {
+        systemPointer.disarm()
         persistSession()
         captureService.stop()
         movieSource.stop()
@@ -957,6 +1205,26 @@ final class SketchCamViewModel: ObservableObject {
             do {
                 let frameIndex = self.nextFrameIndex()
                 let analysisEnabled = settings.resolvedLiveAnalysisEnabled
+                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+                let drawingNodes: [Node] = graph.layers.compactMap { layer in
+                    guard layer.visible, let node = graph.node(layer.node),
+                          case .drawing = node.kind else { return nil }
+                    return node
+                }
+                var detectionSettings = settings
+                if settings.landmarks.resolvedPortraitEnabled &&
+                    settings.landmarks.resolvedPortraitPoseBodyEnabled {
+                    for region in [LandmarkRegion.jaw, .torso, .leftArm, .rightArm] {
+                        detectionSettings.landmarks.setTracks(region, enabled: true)
+                    }
+                }
+                for node in drawingNodes {
+                    for region in node.drawingRegions ?? DrawingRegion.allCases {
+                        if let landmarkRegion = LandmarkRegion(rawValue: region.rawValue) {
+                            detectionSettings.landmarks.setTracks(landmarkRegion, enabled: true)
+                        }
+                    }
+                }
                 // Segmentation runs when keying OR a silhouette contour is
                 // needed. Portrait's Body outline owns the request too, so
                 // enabling that one Portrait control produces a real line
@@ -964,7 +1232,7 @@ final class SketchCamViewModel: ObservableObject {
                 let portraitOutlineWanted = analysisEnabled && settings.landmarks.resolvedPortraitEnabled
                     && settings.landmarks.resolvedPortraitOutlineEnabled
                 let contourWanted = analysisEnabled && settings.landmarks.enabled
-                    && (settings.landmarks.trackContour || portraitOutlineWanted)
+                    && (detectionSettings.landmarks.trackContour || portraitOutlineWanted)
                 // v2: a Person Key effect anywhere in the layer stack needs the matte.
                 let personKeyWanted = analysisEnabled && settings.useGPUCompositor && Self.graphWantsPersonMatte(settings)
                 var segSettings = settings.segmentation
@@ -975,7 +1243,6 @@ final class SketchCamViewModel: ObservableObject {
                 )
                 let matte = analysisEnabled && (settings.segmentation.enabled || personKeyWanted) ? rawMatte : nil
                 self.timings.record(.segment, seconds: self.segmentationService.lastSegmentMillis / 1_000)
-                let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
                 let drawingInput = self.drawingAnalysisBinding(graph: graph)
                 // Landmark analysis remains shared infrastructure: routing the
                 // Drawing producer to Mouse must not starve control fields or
@@ -986,7 +1253,7 @@ final class SketchCamViewModel: ObservableObject {
                     guard detectionWanted else { return nil }
                     var detection = self.landmarkService.currentDetection(
                         pixelBuffer: originalPixelBuffer,
-                        settings: settings,
+                        settings: detectionSettings,
                         frameIndex: frameIndex
                     )
                     if landmarkDrawingWanted, contourWanted, let contour = self.segmentationService.currentContour(maxPerSecond: settings.landmarks.detectionsPerSecond, detail: settings.landmarks.contourDetail) {
@@ -1005,7 +1272,7 @@ final class SketchCamViewModel: ObservableObject {
                     // Seg-free person outline: convex hull of the detected
                     // landmarks (no segmentation). Rides the detection's id so it
                     // tracks at frame rate with the rest when predictive.
-                    if landmarkDrawingWanted, settings.landmarks.trackBodyHull, var d = detection, let hull = Self.makeHullGroup(from: d.groups) {
+                    if landmarkDrawingWanted, detectionSettings.landmarks.trackBodyHull, var d = detection, let hull = Self.makeHullGroup(from: d.groups) {
                         d.groups.append(hull)
                         detection = d
                     }
@@ -1071,14 +1338,58 @@ final class SketchCamViewModel: ObservableObject {
                     return self.overlayCompositor.overlay(
                         detection: routedDetection,
                         settings: routedSettings,
-                        outputSize: outputFormat.size
+                        outputSize: outputFormat.size,
+                        sourceFrame: originalPixelBuffer,
+                        allowedRegions: Set(LandmarkRegion.allCases.filter {
+                            settings.landmarks.tracks($0) || ($0 == .contour && portraitOutlineWanted)
+                        })
                     )
                 }()
+                var drawingLayers: [UUID: CIImage] = [:]
+                if analysisEnabled && settings.landmarks.enabled {
+                    let mouseDetection: LandmarkDetection? = drawingNodes.contains {
+                        self.analysisBinding(for: $0) == .source(.mouse)
+                    } ? {
+                        let snapshot = self.canvasActions.pathSnapshot()
+                        let live = self.inkLiveStroke.pathSnapshot()
+                        let paths = snapshot.paths + (live.points.isEmpty ? [] : [InkEditorPath(points: live.points)])
+                        return RoutedPathSignalResolver.mouseDetection(
+                            paths: paths,
+                            revision: snapshot.revision &* 0x100000001b3 ^ live.revision,
+                            sourceSize: outputFormat.size
+                        )
+                    }() : nil
+                    for node in drawingNodes {
+                        guard case .drawing(let algorithm) = node.kind else { continue }
+                        let binding = self.analysisBinding(for: node)
+                        let detection: LandmarkDetection?
+                        var nodeSettings = settings
+                        switch binding {
+                        case .none, .source(.landmarks): detection = drawingDetection
+                        case .source(.mouse):
+                            detection = mouseDetection
+                            nodeSettings.mirror = false
+                        default: detection = nil
+                        }
+                        let allowed = Set((node.drawingRegions ?? DrawingRegion.allCases).compactMap {
+                            LandmarkRegion(rawValue: $0.rawValue)
+                        })
+                        let compositor = self.drawingCompositors[node.id] ?? LandmarkOverlayCompositor(mode: .drawing(algorithm))
+                        self.drawingCompositors[node.id] = compositor
+                        if let image = compositor.overlay(detection: detection, settings: nodeSettings,
+                                                          outputSize: outputFormat.size,
+                                                          sourceFrame: originalPixelBuffer,
+                                                          allowedRegions: allowed) {
+                            drawingLayers[node.id] = image
+                        }
+                    }
+                }
                 // The inkwash engine runs synchronously (Metal commit +
                 // waitUntilCompleted + CPU readback) inline on this queue, so
                 // measure it as its own stage; otherwise its cost only showed
                 // up buried in "Frame total".
-                let liveInk = self.inkLiveStroke.consume()
+                let motionInk = self.motionInkLiveStroke.consume()
+                let liveInk = motionInk.sample != nil || motionInk.ended != nil ? motionInk : self.inkLiveStroke.consume()
                 let inkEntries = self.inkLayerEntries(graph: graph)
                 let activeInkFrameID = self.activeInkFrameID(graph: graph, settings: settings)
                 let defaultInkFrameID = inkEntries.first?.layer.id
@@ -1165,7 +1476,8 @@ final class SketchCamViewModel: ObservableObject {
                        let frame = self.compositeOnGPU(
                             gpu, pixelBuffer: pixelBuffer, settings: settings,
                             outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
-                            overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
+                            overlay: overlay, drawingLayers: drawingLayers, matte: matte,
+                            webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
                             clockSource: clockSource) {
                         return frame
                     }
@@ -1176,6 +1488,7 @@ final class SketchCamViewModel: ObservableObject {
                         frameIndex: frameIndex,
                         timestamp: timestamp,
                         overlay: overlay,
+                        drawingLayers: drawingLayers,
                         matte: matte,
                         webLayer: webLayer,
                         inkLayer: inkLayer,
@@ -1188,7 +1501,8 @@ final class SketchCamViewModel: ObservableObject {
                     return self.compositeOnGPU(
                         gpu, pixelBuffer: pixelBuffer, settings: settings,
                         outputFormat: outputFormat, frameIndex: frameIndex, timestamp: timestamp,
-                        overlay: overlay, matte: matte, webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
+                        overlay: overlay, drawingLayers: drawingLayers, matte: matte,
+                        webLayer: webLayer, inkLayer: inkLayer, inkLayers: inkLayers,
                         clockSource: clockSource, destination: .presentation
                     )
                 }()
@@ -1244,15 +1558,19 @@ final class SketchCamViewModel: ObservableObject {
         for layer in graph.layers.reversed() where layer.visible {
             guard let node = graph.node(layer.node) else { continue }
             switch node.kind {
-            case .overlay, .marks, .drawing:
-                guard let index = node.kind.ports.firstIndex(where: { $0.name == "analysis" }),
-                      node.inputs.indices.contains(index) else { return .none }
-                return node.inputs[index]
+            case .overlay, .marks:
+                return analysisBinding(for: node)
             default:
                 continue
             }
         }
         return .none
+    }
+
+    private func analysisBinding(for node: Node) -> PortBinding {
+        guard let index = node.kind.ports.firstIndex(where: { $0.name == "analysis" }),
+              node.inputs.indices.contains(index) else { return .none }
+        return node.inputs[index]
     }
 
     private func activeInkFrameID(graph: LayerGraph, settings: ProcessingSettings) -> UUID? {
@@ -1366,7 +1684,8 @@ final class SketchCamViewModel: ObservableObject {
     private func compositeOnGPU(_ gpu: MetalLayerCompositor, pixelBuffer: CVPixelBuffer,
                                 settings: ProcessingSettings, outputFormat: FrameFormat,
                                 frameIndex: Int, timestamp: CMTime,
-                                overlay: CIImage?, matte: CIImage?, webLayer: CIImage?, inkLayer: CIImage?,
+                                overlay: CIImage?, drawingLayers: [UUID: CIImage], matte: CIImage?,
+                                webLayer: CIImage?, inkLayer: CIImage?,
                                 inkLayers: [UUID: CIImage],
                                 clockSource: FrameSource,
                                 destination: MetalLayerCompositor.Destination = .program) -> ProcessedFrame? {
@@ -1389,6 +1708,9 @@ final class SketchCamViewModel: ObservableObject {
         }
 
         let scaledOverlay = Self.scaleImage(overlay, from: outputFormat.size, to: processingFormat.size)
+        let scaledDrawingLayers = drawingLayers.mapValues {
+            Self.scaleImage($0, from: outputFormat.size, to: processingFormat.size) ?? $0
+        }
         let scaledWebLayer = Self.scaleImage(webLayer, from: outputFormat.size, to: processingFormat.size)
         let scaledInkLayer = Self.scaleImage(inkLayer, from: outputFormat.size, to: processingFormat.size)
         let scaledInkLayers = inkLayers.mapValues {
@@ -1435,8 +1757,10 @@ final class SketchCamViewModel: ObservableObject {
                     return self.paperRenderer?.image(config: config, rect: outputRect)
                 case .personMatte:
                     return personMatteImage
-                case .overlay, .marks, .drawing:
+                case .overlay, .marks:
                     return scaledOverlay
+                case .drawing:
+                    return scaledDrawingLayers[node.id]
                 case .ink:
                     return scaledInkLayers[node.id] ?? scaledInkLayer
                 case .acrylic(let config):

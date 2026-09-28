@@ -212,31 +212,52 @@ preserves their previous appearance.
 
 ## Path And System-Event Routing
 
-The current Drawing producer has one typed `analysis` path input. Its runtime
-resolver preserves Landmarks as the default and can instead adapt the shared
-Mouse/canvas stroke log into `LandmarkDetection`: each authored stroke remains a
-separate connected group, and top-left canvas Y is flipped into Vision's
-bottom-left normalized coordinates. The active stroke snapshot is non-consuming,
-so routing it to Drawing does not starve the Ink engine.
+The original merged Drawing producer has one typed `analysis` path input.
+Explicit `.drawing(algorithm)` graph nodes now have independent render caches,
+layer images, and optional per-node `DrawingRegion` selections. Visible passes
+union their requested categories for one shared Vision detection, then filter
+the resulting groups for each algorithm before compositing in layer order.
+Both kinds preserve Landmarks as the default input and can instead adapt the
+shared Mouse/canvas stroke log into `LandmarkDetection`: each authored stroke
+remains a separate connected group, and top-left canvas Y is flipped into
+Vision's bottom-left normalized coordinates. The active stroke snapshot is
+non-consuming, so routing it to Drawing does not starve the Ink engine.
 
-Input Map is the first route in the opposite direction—from analyzed camera
-features to an external event sink:
+Workspace outliner reorders synchronize graph-linked frame order back to
+`LayerGraph`; reconciliation keeps non-graph frames in their existing slots.
+This prevents a subsequent settings change from moving a Solid or Drawing
+layer back to its former stack position. Rapid settings updates, including
+canvas navigation, coalesce full-session persistence rather than encoding and
+writing the entire session on every gesture update.
+
+Motion Control routes analyzed hand motion to either a canvas or external event
+sink:
 
 ```text
 camera frame
   -> independent Vision hand tracker
   -> semantic MediaPipe-style feature (L0...L20 / R0...R20)
-  -> pointer mapping + smoothing + pinch hysteresis
-  -> CGEvent mouse move/down/drag/up
-  -> macOS session
+  -> normalized gesture recognition + dwell/hysteresis
+  -> Canvas: normalized draw/erase samples -> InkLiveStroke + canvas action log
+  -> Computer: smoothed pointer + mouse/scroll/key Quartz events
+  -> canvas renderer or macOS session
 ```
 
-The pure mapping engine owns coordinate conversion and button lifecycle. A narrow
-AppKit/ApplicationServices controller owns Accessibility trust and Quartz event
-posting. SwiftUI owns the Codable mapping editor. The independent hand-only
-tracker prevents arming Input Map from changing the Marks/Drawing detector's
-source or enabled regions. See `notes/input-mapping.md` for current behavior,
-safety rules, and limitations.
+The pure gesture engine owns coordinate conversion, recognition, dwell, and
+held-action lifecycle. A narrow AppKit/ApplicationServices controller owns
+Accessibility trust and Quartz event posting. Canvas samples enter the existing
+Ink live-sample channel and are committed into the existing immediate-action
+history; they remain independent of mouse-driven Ink input. SwiftUI owns the
+Codable mapping editor. The independent hand-only tracker prevents arming
+Motion Control from changing the Marks/Drawing detector's source or enabled
+regions. See `notes/input-mapping.md` for behavior and current limits.
+
+Portrait offers two selectable approaches: the original seeded landmark routes,
+and a continuous gesture grammar that traces smoothed semantic face contours
+while adding seeded scalp and shoulder shapes. Its face-aligned coordinate frame
+and measured contours let the drawing turn and emote with the subject. It stays
+a stylized two-dimensional character drawing, separate from a future VRM avatar
+layer; that direction is described in `docs/vrm-motion-design.md`.
 
 Immediate ink is also represented by a private timestamped action log even
 when it is not exposed as an editable path. A bounded GPU checkpoint ring stores
