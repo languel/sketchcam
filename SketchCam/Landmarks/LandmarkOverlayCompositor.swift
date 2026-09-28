@@ -45,6 +45,9 @@ final class LandmarkOverlayCompositor {
     // (≤ one detection interval stale — same staleness budget as detection
     // itself). A slow render can therefore never drop published frames.
     private let renderQueue = DispatchQueue(label: "io.github.languel.sketchcam.overlay-render", qos: .utility)
+    private let colorContext = CIContext()
+    // Accessed only by the serialized overlay render queue.
+    private let portraitFillColors = PortraitFillColorTracker()
     private let lock = NSLock()
     private var cachedImage: CIImage?
     private var cachedKey: CacheKey?
@@ -91,6 +94,7 @@ final class LandmarkOverlayCompositor {
         detection: LandmarkDetection?,
         settings: ProcessingSettings,
         outputSize: CGSize,
+        sourceFrame: CVPixelBuffer? = nil,
         allowedRegions: Set<LandmarkRegion>? = nil
     ) -> CIImage? {
         guard settings.landmarks.enabled, let detection, !detection.groups.isEmpty else {
@@ -113,6 +117,7 @@ final class LandmarkOverlayCompositor {
                 renderingKey = key
                 renderQueue.async { [weak self] in
                     self?.renderAsync(detection: detection, settings: settings, outputSize: outputSize,
+                                      sourceFrame: sourceFrame,
                                       allowedRegions: allowedRegions, key: key)
                 }
             }
@@ -121,9 +126,11 @@ final class LandmarkOverlayCompositor {
     }
 
     private func renderAsync(detection: LandmarkDetection, settings: ProcessingSettings, outputSize: CGSize,
+                             sourceFrame: CVPixelBuffer?,
                              allowedRegions: Set<LandmarkRegion>?, key: CacheKey) {
         let start = CFAbsoluteTimeGetCurrent()
         let image = render(detection: detection, settings: settings, outputSize: outputSize,
+                           sourceFrame: sourceFrame,
                            allowedRegions: allowedRegions)
         let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1_000
         lock.withLock {
@@ -138,6 +145,7 @@ final class LandmarkOverlayCompositor {
         detection: LandmarkDetection,
         settings: ProcessingSettings,
         outputSize: CGSize,
+        sourceFrame: CVPixelBuffer?,
         allowedRegions: Set<LandmarkRegion>?
     ) -> CIImage? {
         // Labels are text: render the canvas at full output resolution when
@@ -192,7 +200,10 @@ final class LandmarkOverlayCompositor {
             if case .shared = mode { return landmarks.showDots || landmarks.showStick || landmarks.showIDs }
             return false
         }()
-        if let metalDrawing, !marksEnabled { return metalDrawing }
+        let fillEnabled = landmarks.resolvedPortraitFillEnabled && algorithms.contains {
+            $0 is PortraitDrawing && shouldDraw($0, landmarks: landmarks)
+        }
+        if let metalDrawing, !marksEnabled, !fillEnabled { return metalDrawing }
 
         contextIndex = (contextIndex + 1) % 2
         if contexts[contextIndex] == nil || contextSizes[contextIndex] != canvasSize {
@@ -211,6 +222,18 @@ final class LandmarkOverlayCompositor {
         cgContext.clear(CGRect(origin: .zero, size: canvasSize))
         cgContext.setAllowsAntialiasing(true)
         cgContext.setShouldAntialias(true)
+
+        if fillEnabled {
+            let field = sourceFrame.flatMap {
+                PortraitColorField.capture($0, canvasSize: canvasSize,
+                                           mirrored: settings.mirror, context: colorContext)
+            }
+            PortraitFillRenderer.paint(
+                PortraitFillRenderer.shapes(groups: mappedGroups, settings: landmarks),
+                field: field, canvasSize: canvasSize, settings: landmarks,
+                colorTracker: portraitFillColors, into: cgContext
+            )
+        }
 
         for (group, mappedGroup) in zip(sourceGroups, mappedGroups) where marksEnabled {
             let mapped = mappedGroup.points

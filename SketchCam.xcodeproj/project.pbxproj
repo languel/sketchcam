@@ -31,6 +31,7 @@
 		2D7B2AC47C24C34151961E6C /* FrameFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34C077C1A613941A722E856D /* FrameFormat.swift */; };
 		2E64E4D8A8372D03B42373B1 /* CanvasActionLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11527CED2B1176DBD497CA /* CanvasActionLedger.swift */; };
 		2E6E6F7626207F83977FDAF6 /* PixelBufferUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F8AC932B4217DD0B78E74 /* PixelBufferUtils.swift */; };
+		3233FF2862552078FCABA65D /* PortraitPresetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C44551C6615B4D8F11521D /* PortraitPresetStore.swift */; };
 		34FE163B36F97ECD02BD4C25 /* LayerGraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5219B099618056834D2AEF4C /* LayerGraphTests.swift */; };
 		383F3F26F9806952F8CA9D56 /* WorkspaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C8250D7733DBB7D334E556 /* WorkspaceModel.swift */; };
 		3ED975FE13B593A09EB83350 /* LineWalkDrawing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */; };
@@ -54,6 +55,7 @@
 		7A46446167656D52AAD61F91 /* SketchCamShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; };
 		7DBE1B0B4F002211334190A5 /* SketchCamViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168F1C5E951E3AE2478C7262 /* SketchCamViewModel.swift */; };
 		8029F5F9D50B878B8BD0E4C4 /* LineWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C5A560087A8027F400A91B /* LineWalkTests.swift */; };
+		819150323E1C3D52CE9003B5 /* PortraitPresetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B16D8A94F8FC67C017D95F1 /* PortraitPresetTests.swift */; };
 		833262C300EA850219563B22 /* OutputStreamExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE6E7B68623AE7FFDEC21DB /* OutputStreamExporter.swift */; };
 		869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B397833BF9F198A4EC0F0E6C /* CameraDeviceOption.swift */; };
 		88353E507C7E9EFF5105CF2B /* SketchCamCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C63392630883E5E55B589354 /* SketchCamCore.framework */; };
@@ -63,6 +65,7 @@
 		8C3C9756E1A610D97D793138 /* SystemInputMappingPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053F976B5BC1C183778A5E28 /* SystemInputMappingPanel.swift */; };
 		8D2A79FBB08877470C563C10 /* MetalEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F2A2598E845123A35AB7F0C /* MetalEffects.swift */; };
 		8F1378055107073359813E09 /* StrokeTessellatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4B2F69374B5A92A52BB81D /* StrokeTessellatorTests.swift */; };
+		95E13DE42D07E7DBA5872894 /* AaronPortrait.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50F1431B45ECDB66AC8DC09F /* AaronPortrait.swift */; };
 		96069A4A88A3C475C3D120BE /* GestureMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 214171FC02B8A2AB655D483E /* GestureMappingTests.swift */; };
 		96384CC5AF97136E24C514DD /* EffectShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 11D744A99E5D781B4E282BB4 /* EffectShaders.metal */; };
 		9929C7F801705C184CEFB01F /* TrackedMotionFieldProviderSelfCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */; };
@@ -110,6 +113,7 @@
 		EE699D19B6954B4AD87C6C8F /* TestPatternGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */; };
 		EE70F9B1F3B9FCE672755233 /* LandmarkOverlayCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8723E7348825324E62CDC548 /* LandmarkOverlayCompositor.swift */; };
 		EF12E9EBDC6F2B0E2BC21C80 /* ControlFieldGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B76938CF9C16060A016345E /* ControlFieldGraph.swift */; };
+		F02CDEBA2B3FEE455D9D1F11 /* PortraitFillRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C3AB6304CB2FA974B68141F /* PortraitFillRenderer.swift */; };
 		F5C081EBA0B5D53E7BC454A2 /* SketchCamShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 0C7E204A325423D92D191A3B /* SketchCamShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F7F153CEC156E1593CD068A6 /* ExportConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77D2F840C3F5155CCCC54615 /* ExportConfigurationTests.swift */; };
 		F822335D3CB063D9A8E93B7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CEAB9229D624BE20FB261892 /* Assets.xcassets */; };
@@ -221,6 +225,7 @@
 		01621129855299CA87EE7028 /* CoreImageFrameProcessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreImageFrameProcessorTests.swift; sourceTree = "<group>"; };
 		053F976B5BC1C183778A5E28 /* SystemInputMappingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemInputMappingPanel.swift; sourceTree = "<group>"; };
 		0ABB67374102E461263FC61A /* CanvasActionLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasActionLedgerTests.swift; sourceTree = "<group>"; };
+		0B16D8A94F8FC67C017D95F1 /* PortraitPresetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortraitPresetTests.swift; sourceTree = "<group>"; };
 		0C7E204A325423D92D191A3B /* SketchCamShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SketchCamShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		11D744A99E5D781B4E282BB4 /* EffectShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = EffectShaders.metal; sourceTree = "<group>"; };
 		124FBDF53D24E11C3F8E60E6 /* WebLayerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebLayerController.swift; sourceTree = "<group>"; };
@@ -255,10 +260,12 @@
 		4B2B4506DF643ACE0A831369 /* SketchCamAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SketchCamAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4F2A2598E845123A35AB7F0C /* MetalEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalEffects.swift; sourceTree = "<group>"; };
 		50E2DD1B01750DF31957F5DA /* TestPatternGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPatternGeneratorTests.swift; sourceTree = "<group>"; };
+		50F1431B45ECDB66AC8DC09F /* AaronPortrait.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AaronPortrait.swift; sourceTree = "<group>"; };
 		5219B099618056834D2AEF4C /* LayerGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerGraphTests.swift; sourceTree = "<group>"; };
 		52371D8457BDAEB18CB62986 /* GesturePortrait.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GesturePortrait.swift; sourceTree = "<group>"; };
 		52C5A560087A8027F400A91B /* LineWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineWalkTests.swift; sourceTree = "<group>"; };
 		5968245CD1D9A9D622266A1C /* TrackedMotionFieldProviderSelfCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedMotionFieldProviderSelfCheck.swift; sourceTree = "<group>"; };
+		5C3AB6304CB2FA974B68141F /* PortraitFillRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortraitFillRenderer.swift; sourceTree = "<group>"; };
 		5C69066333DBFA2348E74580 /* StrokeTessellator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeTessellator.swift; sourceTree = "<group>"; };
 		61D2BA4CD5179A6F3EB83156 /* FrameFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFormatTests.swift; sourceTree = "<group>"; };
 		629909CE9ECE96027DD07A35 /* PaperControlFieldProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperControlFieldProvider.swift; sourceTree = "<group>"; };
@@ -311,6 +318,7 @@
 		D847E7B6FF410AAA2B1CEEB6 /* FallbackTestPatternGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackTestPatternGenerator.swift; sourceTree = "<group>"; };
 		D92A8604968462AFE800148A /* LineShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = LineShaders.metal; sourceTree = "<group>"; };
 		DA7FEC4B7ED04E48321105DC /* SystemPointerControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPointerControllerTests.swift; sourceTree = "<group>"; };
+		E4C44551C6615B4D8F11521D /* PortraitPresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortraitPresetStore.swift; sourceTree = "<group>"; };
 		E5BF560B2E181B993DFA640F /* OutputStreamExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputStreamExporterTests.swift; sourceTree = "<group>"; };
 		E7E615BD42A09D38F4C8789C /* VirtualCameraFramePublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCameraFramePublisher.swift; sourceTree = "<group>"; };
 		EC60CF5ACDC8D2C20BB1ECEC /* DebugStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugStats.swift; sourceTree = "<group>"; };
@@ -401,10 +409,12 @@
 		35A1E3879D8967C4B3E3C027 /* Drawing */ = {
 			isa = PBXGroup;
 			children = (
+				50F1431B45ECDB66AC8DC09F /* AaronPortrait.swift */,
 				D34ED81C0B5B2C92E770A1B9 /* DrawingAlgorithm.swift */,
 				52371D8457BDAEB18CB62986 /* GesturePortrait.swift */,
 				CF7C24DBDFB77AA2F59F50FA /* LineWalkDrawing.swift */,
 				20FA011FE822A6D392E8DA40 /* PortraitDrawing.swift */,
+				5C3AB6304CB2FA974B68141F /* PortraitFillRenderer.swift */,
 				F34CF515CC07EE51C9B9CC98 /* WrapDrawing.swift */,
 				4087DC25AE092E9D32327B08 /* YarnDrawing.swift */,
 			);
@@ -428,6 +438,7 @@
 				959DFA3C1F951F927514331A /* GestureMappingEngine.swift */,
 				2FE6E7B68623AE7FFDEC21DB /* OutputStreamExporter.swift */,
 				ECD9035C449DC42338497DC1 /* PipelineStateStore.swift */,
+				E4C44551C6615B4D8F11521D /* PortraitPresetStore.swift */,
 				291424DBAD8774D373DAC93E /* PresetStore.swift */,
 				7B551C3BA314E1D9C3C67B3A /* SecondaryOutputWindow.swift */,
 				A65E79B32C53A91487FD51D5 /* ShortcutRegistry.swift */,
@@ -492,6 +503,7 @@
 				E5BF560B2E181B993DFA640F /* OutputStreamExporterTests.swift */,
 				8431FF6AD075BA97A6632728 /* PathSignalRoutingTests.swift */,
 				1845D995FBD80EE84F4CAB10 /* PortraitDrawingTests.swift */,
+				0B16D8A94F8FC67C017D95F1 /* PortraitPresetTests.swift */,
 				DA7FEC4B7ED04E48321105DC /* SystemPointerControllerTests.swift */,
 			);
 			path = SketchCamAppTests;
@@ -857,6 +869,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				95E13DE42D07E7DBA5872894 /* AaronPortrait.swift in Sources */,
 				281D7EF5D69094F596B81A24 /* AcrylicLayerCompositor.swift in Sources */,
 				DA652EA32812A83B2895B62C /* CameraCaptureService.swift in Sources */,
 				869D2094A9B96ECC0D0FD19D /* CameraDeviceOption.swift in Sources */,
@@ -894,6 +907,8 @@
 				D9A55FEC5108FB3D1ED18F64 /* PipelineStateStore.swift in Sources */,
 				CDEA6BFA28EBD0F7BDBDF3F7 /* PipelineTimings.swift in Sources */,
 				09CDB12BABBAF5D7DC01A571 /* PortraitDrawing.swift in Sources */,
+				F02CDEBA2B3FEE455D9D1F11 /* PortraitFillRenderer.swift in Sources */,
+				3233FF2862552078FCABA65D /* PortraitPresetStore.swift in Sources */,
 				FD3836D973381874AC5BC066 /* PresetStore.swift in Sources */,
 				0C49BC2A11E39D2A465F3062 /* PreviewRenderer.swift in Sources */,
 				88361B7E322739110EE37077 /* SampleBufferPreview.swift in Sources */,
@@ -947,6 +962,7 @@
 				1BA79B9A65718A1C9EDFDC35 /* OutputStreamExporterTests.swift in Sources */,
 				A336A55888FE1573D5F632C2 /* PathSignalRoutingTests.swift in Sources */,
 				D7B4282BF7DE02FA1E3719C6 /* PortraitDrawingTests.swift in Sources */,
+				819150323E1C3D52CE9003B5 /* PortraitPresetTests.swift in Sources */,
 				0592729EF62484DAD3C963C7 /* SystemPointerControllerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

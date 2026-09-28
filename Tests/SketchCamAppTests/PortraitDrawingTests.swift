@@ -1,8 +1,34 @@
 import CoreGraphics
+import CoreImage
+import CoreVideo
 import XCTest
 @testable import SketchCam
 import SketchCamCore
 import SketchCamShared
+
+final class WrapNearestNeighborTests: XCTestCase {
+    func testSpatialOrderMatchesOriginalGreedyOrderIncludingTies() {
+        for count in [3, 17, 96, 512] {
+            let points = (0..<count).map { index in
+                CGPoint(x: (index * 37 % 23) * 3, y: (index * 19 % 29) * 2)
+            }
+            var remaining = points
+            var expected = [remaining.removeFirst()]
+            while !remaining.isEmpty {
+                let last = expected[expected.count - 1]
+                let nearest = remaining.enumerated().min { left, right in
+                    let ldx = left.element.x - last.x, ldy = left.element.y - last.y
+                    let rdx = right.element.x - last.x, rdy = right.element.y - last.y
+                    let ld = ldx * ldx + ldy * ldy
+                    let rd = rdx * rdx + rdy * rdy
+                    return ld == rd ? left.offset < right.offset : ld < rd
+                }!.offset
+                expected.append(remaining.remove(at: nearest))
+            }
+            XCTAssertEqual(WrapDrawing.nearestNeighborOrder(points), expected)
+        }
+    }
+}
 
 final class PortraitDrawingTests: XCTestCase {
     func testPortraitStrokeGenerationPerformance() {
@@ -84,12 +110,41 @@ final class PortraitDrawingTests: XCTestCase {
         XCTAssertEqual(components.map { $0.points.count }, [outer.points.count + 1, inner.points.count + 1])
     }
 
+    func testBrowCenterlineAveragesReturningOutline() throws {
+        let brow = PortraitPathBuilder.Component(region: .leftBrow, points: [
+            CGPoint(x: 0, y: 0), CGPoint(x: 5, y: -2), CGPoint(x: 10, y: 0),
+            CGPoint(x: 5, y: 2), CGPoint(x: 0, y: 0)
+        ], closed: false, handedness: .unknown)
+        let centered = try XCTUnwrap(PortraitPathBuilder.browCenterline([brow]))
+        XCTAssertFalse(centered.closed)
+        XCTAssertEqual(centered.points.first?.x, 0)
+        XCTAssertEqual(centered.points.last?.x, 10)
+        XCTAssertEqual(centered.points[centered.points.count / 2].y, 0, accuracy: 0.01)
+    }
+
+    func testMouthCenterlineAveragesInnerAndOuterRings() throws {
+        let outer = loop(center: CGPoint(x: 100, y: 100), rx: 30, ry: 12, count: 16)
+        let inner = loop(center: CGPoint(x: 100, y: 100), rx: 16, ry: 4, count: 12)
+        let group = MappedGroup(region: .mouth, points: outer.points + inner.points,
+            edges: outer.edges + inner.edges.map { ($0.0 + outer.points.count, $0.1 + outer.points.count) })
+        let centered = PortraitPathBuilder.mouthFeatures(PortraitPathBuilder.components(group),
+            connection: .sharedCorner, innerEnabled: true, centerline: true,
+            leftEye: [], rightEye: [])
+        XCTAssertEqual(centered.count, 1)
+        let ring = try XCTUnwrap(centered.first)
+        XCTAssertTrue(ring.closed)
+        XCTAssertEqual(ring.points.first, ring.points.last)
+        XCTAssertEqual(ring.points.map(\.x).min() ?? 0, 77, accuracy: 1.5)
+        XCTAssertEqual(ring.points.map(\.x).max() ?? 0, 123, accuracy: 1.5)
+    }
+
     func testLiveLandmarkMotionMorphsStableFaceAndBodyRoutes() throws {
         var settings = LandmarkSettings()
         settings.portraitEnabled = true
         settings.portraitStyle = .fluid
         settings.portraitFollow = 0.8
         settings.portraitFlourish = 0.3
+        settings.portraitPoseBodyEnabled = false
         let drawing = PortraitDrawing()
         let firstGroups = portraitGroups(offset: .zero)
         let movedGroups = portraitGroups(offset: CGPoint(x: 24, y: -12))
@@ -220,6 +275,121 @@ final class PortraitDrawingTests: XCTestCase {
         )
     }
 
+    func testZigzagHairContinuesToGainDensityPastFour() throws {
+        let face = MappedGroup(
+            region: .jaw,
+            points: [CGPoint(x: 100, y: 130), CGPoint(x: 105, y: 175),
+                     CGPoint(x: 150, y: 260), CGPoint(x: 195, y: 175),
+                     CGPoint(x: 200, y: 130)],
+            edges: [(0, 1), (1, 2), (2, 3), (3, 4)]
+        )
+        let medium = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [face], style: .hatchVertical, amount: 4, seed: 5))
+        let dense = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [face], style: .hatchVertical, amount: 12, seed: 5))
+        XCTAssertGreaterThan(dense.points.count, medium.points.count * 2)
+        XCTAssertEqual(dense.scalpApex, medium.scalpApex)
+        XCTAssertEqual(dense.points.first, face.points.first)
+        XCTAssertEqual(dense.points.last, face.points.last)
+        // The first stroke traverses the cap diagonally, not straight down.
+        XCTAssertGreaterThan(abs(dense.points[18].x - dense.points[42].x), 2)
+    }
+
+    func testHairOverhangExtendsTextureWithoutMovingScalpOrEarAnchors() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 105, y: 175),
+            CGPoint(x: 150, y: 260), CGPoint(x: 195, y: 175),
+            CGPoint(x: 200, y: 130)
+        ])
+        let close = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+            from: [jaw], style: .wild, amount: 4, seed: 13, expansion: 0))
+        let expanded = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+            from: [jaw], style: .wild, amount: 4, seed: 13, expansion: 1.5))
+        XCTAssertEqual(Array(close.points.prefix(17)), Array(expanded.points.prefix(17)),
+                       "Overhang must not raise or replace the scalp curve")
+        XCTAssertEqual(close.scalpApex, expanded.scalpApex)
+        XCTAssertEqual(close.points.first, expanded.points.first)
+        XCTAssertEqual(close.points.last, expanded.points.last)
+        XCTAssertGreaterThan(expanded.points.count, close.points.count,
+                             "The additional hair area should receive more ink samples")
+        XCTAssertLessThan(expanded.points.map(\.y).min()!, close.points.map(\.y).min()! - 8,
+                          "Hair texture should visibly rise beyond the skull")
+
+        var settings = LandmarkSettings()
+        settings.portraitHairEnabled = true
+        settings.portraitHairStyle = .wild
+        let closePaint = try XCTUnwrap(PortraitFillRenderer.shapes(
+            groups: [jaw], settings: settings).first { $0.part == .hair })
+        settings.portraitHairExpansion = 1.5
+        let expandedPaint = try XCTUnwrap(PortraitFillRenderer.shapes(
+            groups: [jaw], settings: settings).first { $0.part == .hair })
+        XCTAssertLessThan(expandedPaint.points.map(\.y).min()!,
+                          closePaint.points.map(\.y).min()! - 8,
+                          "The flat hair color should cover the overhanging marks")
+    }
+
+    func testHairOverhangSpreadsAroundEarsAndHairdosChangeOuterMass() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 105, y: 175),
+            CGPoint(x: 150, y: 260), CGPoint(x: 195, y: 175),
+            CGPoint(x: 200, y: 130)
+        ])
+        let compact = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+            from: [jaw], style: .wild, amount: 3, seed: 12))
+        let rounded = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+            from: [jaw], style: .wild, amount: 3, seed: 12,
+            expansion: 1.5, hairdo: .rounded))
+        let swept = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+            from: [jaw], style: .wild, amount: 3, seed: 12,
+            expansion: 1.5, hairdo: .swept))
+        let compactOuter = try XCTUnwrap(compact.hairFillOutline)
+        let roundedOuter = try XCTUnwrap(rounded.hairFillOutline)
+        XCTAssertLessThan(roundedOuter.map(\.x).min()!, compactOuter.map(\.x).min()! - 8)
+        XCTAssertGreaterThan(roundedOuter.map(\.x).max()!, compactOuter.map(\.x).max()! + 8)
+        XCTAssertEqual(Array(compact.points.prefix(17)), Array(rounded.points.prefix(17)))
+        XCTAssertNotEqual(roundedOuter, swept.hairFillOutline)
+    }
+
+    func testWildAndWrapHairKeepPointCorrespondenceAsHeadMoves() throws {
+        let jaw = [CGPoint(x: 100, y: 130), CGPoint(x: 105, y: 175),
+                   CGPoint(x: 150, y: 260), CGPoint(x: 195, y: 175),
+                   CGPoint(x: 200, y: 130)]
+        let edges = [(0, 1), (1, 2), (2, 3), (3, 4)]
+        let first = MappedGroup(region: .jaw, points: jaw, edges: edges)
+        var movedJaw = jaw
+        movedJaw[4].x += 6
+        movedJaw[4].y += 3
+        let moved = MappedGroup(region: .jaw, points: movedJaw, edges: edges)
+
+        for style in [PortraitHairStyle.wild, .wrap] {
+            let before = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+                from: [first], style: style, amount: 4, seed: 23))
+            let after = try XCTUnwrap(PortraitPathBuilder.hairComponent(
+                from: [moved], style: style, amount: 4, seed: 23))
+            XCTAssertEqual(before.points.count, after.points.count)
+            let largestStep = zip(before.points, after.points).map {
+                hypot($0.x - $1.x, $0.y - $1.y)
+            }.max() ?? 0
+            XCTAssertLessThan(largestStep, 15,
+                              "A small landmark motion must deform hair, not reorder its samples")
+        }
+    }
+
+    func testHighHairFillSurvivesPortraitRouteSampling() {
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitHairEnabled = true
+        settings.portraitHairStyle = .hatchVertical
+        settings.portraitHairAmount = 4
+        let groups = portraitGroups(offset: .zero)
+        let drawing = PortraitDrawing()
+        let mediumCount = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            .reduce(0) { $0 + $1.count }
+
+        settings.portraitHairAmount = 20
+        let denseCount = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            .reduce(0) { $0 + $1.count }
+        XCTAssertGreaterThan(denseCount, mediumCount * 3 / 2)
+    }
+
     func testPoseBodyShapeConnectsEarAnchorsAndArticulatesWithArms() throws {
         let jaw = MappedGroup(region: .jaw, points: [
             CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 195),
@@ -237,8 +407,8 @@ final class PortraitDrawingTests: XCTestCase {
         ], labels: ["Rsho", "Relb", "Rwri"])
         let groups = [jaw, torso, leftArm, rightArm]
         let shape = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(from: groups, scalp: nil, seed: 7))
-        XCTAssertEqual(shape.points.first, jaw.points.first)
-        XCTAssertEqual(shape.points.last, jaw.points.last)
+        XCTAssertEqual(shape.points.first, jaw.points[1])
+        XCTAssertEqual(shape.points.last, jaw.points[3])
         XCTAssertLessThan(shape.points.map(\.x).min()!, 30)
         XCTAssertGreaterThan(shape.points.map(\.x).max()!, 270)
 
@@ -253,7 +423,331 @@ final class PortraitDrawingTests: XCTestCase {
         XCTAssertEqual(shape.points, PortraitPathBuilder.poseBodyComponent(from: groups, scalp: nil, seed: 7)?.points)
     }
 
-    func testPortraitScalpUsesOutlineShapeButFollowsFaceEarAnchors() throws {
+    func testPoseBodyShapePersistsFromFaceAndHandWhenPoseIsMissing() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 190),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190), CGPoint(x: 200, y: 130)
+        ])
+        let hand = MappedGroup(region: .hands,
+                               points: [CGPoint(x: 20, y: 310)], labels: ["L0"])
+        let body = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(
+            from: [jaw, hand], scalp: nil, seed: 5
+        ))
+        XCTAssertEqual(body.points.first, jaw.points[1])
+        XCTAssertEqual(body.points.last, jaw.points[3])
+        XCTAssertGreaterThan(body.points.count, 12)
+        XCTAssertLessThan(body.points.map(\.x).min()!, 50)
+        XCTAssertGreaterThan(body.points.map(\.y).max()!, 300)
+
+        let movedHand = MappedGroup(region: .hands,
+                                    points: [CGPoint(x: 4, y: 365)], labels: ["L0"])
+        let movedBody = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(
+            from: [jaw, movedHand], scalp: nil, seed: 5
+        ))
+        XCTAssertNotEqual(body.points, movedBody.points)
+    }
+
+    func testFigureRigInfersBothBentArmsAndNarrowNeckWithoutPose() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 190),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190),
+            CGPoint(x: 200, y: 130)
+        ])
+        let rig = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(
+            from: [jaw], scalp: nil, seed: 9))
+        XCTAssertEqual(rig.sleeveFills.count, 2,
+                       "Each missing arm should retain an inferred elbow and wrist")
+        XCTAssertTrue(rig.sleeveFills.allSatisfy { $0.count >= 7 })
+        let neck = try XCTUnwrap(rig.neckFill)
+        let torso = try XCTUnwrap(rig.torsoFill)
+        let collarWidth = hypot(neck[2].x - neck[1].x, neck[2].y - neck[1].y)
+        let shoulderWidth = hypot(torso.last!.x - torso.first!.x,
+                                  torso.last!.y - torso.first!.y)
+        XCTAssertLessThan(collarWidth, shoulderWidth * 0.65,
+                          "Face color must end at a collar, not the shoulder tips")
+    }
+
+    func testZeroConnectorWidthSeparatesLandmarkAndGestureFeatures() {
+        let groups = portraitGroups(offset: .zero)
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitPoseBodyEnabled = false
+        settings.portraitConnectorWidth = 0
+        let drawing = PortraitDrawing()
+        let landmarkRoutes = drawing.semanticRoutes(groups: groups, landmarks: settings)
+        XCTAssertGreaterThan(landmarkRoutes.count, 6)
+        var toggled = settings
+        toggled.portraitConnectorWidth = 0.42
+        toggled.portraitSeparateFeatures = true
+        XCTAssertEqual(landmarkRoutes, drawing.semanticRoutes(groups: groups, landmarks: toggled))
+
+        settings.portraitApproach = .gesture
+        let gestureRoutes = drawing.semanticRoutes(groups: groups, landmarks: settings)
+        XCTAssertGreaterThanOrEqual(gestureRoutes.count, 7)
+        XCTAssertTrue(gestureRoutes.allSatisfy { $0.count >= 2 })
+    }
+
+    func testFeatureLineTogglesKeepEyesAndHandsIndependentAcrossApproaches() {
+        let groups = portraitGroups(offset: .zero) + [sampleHandGroup()]
+        let drawing = PortraitDrawing()
+        for approach in PortraitApproach.allCases {
+            var settings = LandmarkSettings()
+            settings.portraitEnabled = true
+            settings.portraitApproach = approach
+            settings.portraitSeparateFeatures = true
+            settings.portraitPoseBodyEnabled = false
+            let all = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            XCTAssertTrue(all.contains { $0.count >= 20 }, "\(approach) should outline the tracked hand")
+
+            settings.portraitLineFeatures = [.eyes: false]
+            let noEyes = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            XCTAssertLessThan(noEyes.count, all.count, "\(approach) should hide eye outlines")
+
+            settings.portraitLineFeatures = [.hands: false]
+            let noHands = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            XCTAssertLessThan(noHands.count, all.count, "\(approach) should hide hand outlines")
+        }
+    }
+
+    func testSegmentsSubdivideAuthoredRoutesWithoutChangingTheirPoints() {
+        let groups = portraitGroups(offset: .zero)
+        let drawing = PortraitDrawing()
+        for approach in [PortraitApproach.gesture, .aaron] {
+            var settings = LandmarkSettings()
+            settings.portraitEnabled = true
+            settings.portraitApproach = approach
+            settings.portraitPoseBodyEnabled = false
+            settings.portraitSegments = 1
+            let one = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            settings.portraitSegments = 8
+            let eight = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            XCTAssertGreaterThan(eight.count, one.count)
+            XCTAssertEqual(eight.first?.first, one.first?.first)
+        }
+    }
+
+    func testRaisedHandDoesNotPullTorsoPaintIntoTriangle() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 190),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190),
+            CGPoint(x: 200, y: 130)
+        ])
+        let wrist = CGPoint(x: 18, y: 40)
+        let hand = MappedGroup(region: .hands, points: [wrist], labels: ["L0"])
+        let body = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(
+            from: [jaw, hand], scalp: nil, seed: 5))
+        let torso = try XCTUnwrap(body.torsoFill)
+        XCTAssertGreaterThan(body.sleeveFills.count, 0)
+        XCTAssertGreaterThan(torso.map(\.x).min()!, wrist.x + 20,
+                             "The raised wrist belongs to a sleeve, not the shirt fill")
+        XCTAssertTrue(body.sleeveFills.contains { sleeve in
+            sleeve.contains { hypot($0.x - wrist.x, $0.y - wrist.y) < 10 }
+        })
+    }
+
+    func testPortraitSourceDensityCanInterpolateSparseBodyCurve() {
+        let source = [CGPoint(x: 0, y: 0), CGPoint(x: 20, y: 20), CGPoint(x: 40, y: 0)]
+        let dense = PortraitPathBuilder.sampledLandmarks(
+            source, closed: false, variation: 0, subsample: 4,
+            maximumCount: 64, seed: 1
+        )
+        XCTAssertGreaterThan(dense.count, source.count)
+        XCTAssertEqual(dense.first, source.first)
+        XCTAssertEqual(dense.last, source.last)
+    }
+
+    func testTemplatePortraitKeepsAuthoredFigureWhileExpressionMovesMouth() {
+        let original = portraitGroups(offset: .zero)
+        var settings = LandmarkSettings()
+        settings.portraitApproach = .aaron
+        settings.portraitAbstraction = 0.2
+        settings.portraitExpression = 1.0
+        let first = AaronPortrait.paths(groups: original, settings: settings)
+        XCTAssertGreaterThanOrEqual(first.count, 10)
+        XCTAssertEqual(first, AaronPortrait.paths(groups: original, settings: settings))
+
+        settings.portraitExpression = 1.8
+        let expressive = AaronPortrait.paths(groups: original, settings: settings)
+        XCTAssertEqual(first.count, expressive.count)
+        XCTAssertEqual(first[1], expressive[1], "Expression must not warp the head outline")
+        XCTAssertNotEqual(first[9], expressive[9], "Mouth opening should follow expression")
+
+        settings.portraitSeed = 91
+        let reseeded = AaronPortrait.paths(groups: original, settings: settings)
+        XCTAssertNotEqual(expressive[1], reseeded[1], "Seed should explore authored head proportions")
+    }
+
+    func testGestureAndTemplateCanDrawHeadAndHandsWithoutBody() {
+        let groups = portraitGroups(offset: .zero) + [sampleHandGroup()]
+        let drawing = PortraitDrawing()
+        for approach in [PortraitApproach.gesture, .aaron] {
+            var settings = LandmarkSettings()
+            settings.portraitApproach = approach
+            settings.portraitSeparateFeatures = true
+            settings.portraitPoseBodyEnabled = true
+            settings.portraitBodyEnabled = false
+            settings.portraitOutlineEnabled = true
+            let routes = drawing.semanticRoutes(groups: groups, landmarks: settings)
+            XCTAssertGreaterThan(routes.count, 3, "\(approach) should retain head and hand lines")
+            XCTAssertTrue(routes.contains { $0.count >= 20 }, "\(approach) should retain the hand")
+            let paint = PortraitFillRenderer.shapes(groups: groups, settings: settings)
+            XCTAssertTrue(paint.contains { $0.part == .face })
+            XCTAssertTrue(paint.contains { $0.part == .hand })
+            XCTAssertFalse(paint.contains { $0.part == .body || $0.part == .neck })
+        }
+    }
+
+    func testBodyOutlineOffKeepsOnlyHeadAndHandPaint() {
+        let groups = portraitGroups(offset: .zero) + [sampleHandGroup()]
+        for approach in [PortraitApproach.landmarks, .gesture, .aaron] {
+            var settings = LandmarkSettings()
+            settings.portraitApproach = approach
+            settings.portraitPoseBodyEnabled = true
+            settings.portraitOutlineEnabled = false
+            let paint = PortraitFillRenderer.shapes(groups: groups, settings: settings)
+            XCTAssertTrue(paint.contains { $0.part == .face }, "\(approach)")
+            XCTAssertTrue(paint.contains { $0.part == .hand }, "\(approach)")
+            XCTAssertFalse(paint.contains { $0.part == .body || $0.part == .neck }, "\(approach)")
+        }
+    }
+
+    func testCenterlineOptionsReachAuthoredApproaches() {
+        let groups = portraitGroups(offset: .zero)
+        var settings = LandmarkSettings()
+        settings.portraitApproach = .gesture
+        settings.portraitSeparateFeatures = true
+        settings.portraitPoseBodyEnabled = false
+        let gestureOriginal = GesturePortrait.paths(groups: groups, settings: settings)
+        settings.portraitMouthCenterlineEnabled = true
+        let gestureCenterline = GesturePortrait.paths(groups: groups, settings: settings)
+        XCTAssertEqual(gestureCenterline.count, gestureOriginal.count - 1)
+
+        settings.portraitApproach = .aaron
+        let templateCenterline = AaronPortrait.paths(groups: groups, settings: settings)
+        settings.portraitMouthCenterlineEnabled = false
+        let templateOriginal = AaronPortrait.paths(groups: groups, settings: settings)
+        XCTAssertNotEqual(templateCenterline[9], templateOriginal[9])
+    }
+
+    func testNeckUsesLowerJawEvenWhenScalpEndsAtEyeHeight() throws {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 195),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 195), CGPoint(x: 200, y: 130)
+        ])
+        let scalp = PortraitPathBuilder.Component(region: .head, points: [
+            CGPoint(x: 100, y: 125), CGPoint(x: 150, y: 40), CGPoint(x: 200, y: 125)
+        ], closed: false, handedness: .unknown)
+        let body = try XCTUnwrap(PortraitPathBuilder.poseBodyComponent(
+            from: [jaw], scalp: scalp, seed: 9))
+        XCTAssertEqual(body.points.first, jaw.points[1])
+        XCTAssertEqual(body.points.last, jaw.points[3])
+        XCTAssertGreaterThan(body.points.first!.y, scalp.points.first!.y + 50)
+        let collar = try XCTUnwrap(body.neckFill)
+        XCTAssertLessThan(collar[1].y - jaw.points[2].y, 90,
+                          "Missing shoulders should not create an elongated neck")
+    }
+
+    func testSyntheticEarsGrowOutwardFromJawSides() {
+        let jaw = PortraitPathBuilder.Component(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 190),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190), CGPoint(x: 200, y: 130)
+        ], closed: false, handedness: .unknown)
+        let withEars = PortraitPathBuilder.jawWithEars(jaw)
+        XCTAssertLessThan(withEars.points.map(\.x).min()!, 85)
+        XCTAssertGreaterThan(withEars.points.map(\.x).max()!, 215)
+        XCTAssertTrue(withEars.points.contains(CGPoint(x: 150, y: 230)))
+    }
+
+    func testPortraitFillShapesAndCameraColorAreDeterministic() {
+        let jaw = MappedGroup(region: .jaw, points: [
+            CGPoint(x: 100, y: 130), CGPoint(x: 115, y: 190),
+            CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190), CGPoint(x: 200, y: 130)
+        ])
+        let brows = MappedGroup(region: .leftBrow, points: [
+            CGPoint(x: 115, y: 115), CGPoint(x: 140, y: 110)
+        ])
+        var settings = LandmarkSettings()
+        settings.portraitHairEnabled = true
+        settings.portraitFillEnabled = true
+        settings.portraitPoseBodyEnabled = true
+        settings.portraitOutlineEnabled = true
+        settings.portraitFillVariation = 0
+        let shapes = PortraitFillRenderer.shapes(groups: [jaw, brows], settings: settings)
+        XCTAssertTrue(shapes.contains { $0.part == .neck })
+        XCTAssertTrue(shapes.contains { $0.part == .face })
+        XCTAssertTrue(shapes.contains { $0.part == .hair })
+        let camera = RGBAColor(red: 0.31, green: 0.57, blue: 0.82)
+        let direct = PortraitFillRenderer.paintColor(camera: camera, part: .face,
+                                                     settings: settings, seed: 11)
+        XCTAssertEqual(direct.red, camera.red)
+        XCTAssertEqual(direct.green, camera.green)
+        XCTAssertEqual(direct.blue, camera.blue)
+
+        settings.portraitFillPalettized = true
+        settings.portraitFillPaletteSteps = 3
+        settings.portraitFillVariation = 0.5
+        let first = PortraitFillRenderer.paintColor(camera: camera, part: .face,
+                                                    settings: settings, seed: 11)
+        let second = PortraitFillRenderer.paintColor(camera: camera, part: .face,
+                                                     settings: settings, seed: 11)
+        XCTAssertEqual(first, second)
+        XCTAssertTrue(PortraitFillRenderer.printPalette.prefix(3).contains {
+            $0.red == first.red && $0.green == first.green && $0.blue == first.blue
+        })
+    }
+
+    func testPortraitPaletteHoldsColorAcrossShortLuminanceChanges() {
+        var settings = LandmarkSettings()
+        settings.portraitFillPalettized = true
+        settings.portraitFillPaletteSteps = 2
+        settings.portraitFillVariation = 0
+        let tracker = PortraitFillColorTracker()
+        let dark = RGBAColor(red: 0.10, green: 0.10, blue: 0.10)
+        let bright = RGBAColor(red: 0.95, green: 0.95, blue: 0.95)
+        let first = tracker.color(camera: dark, part: .face, slot: 1,
+                                  settings: settings, seed: 31, now: 0)
+        for second in 1...7 {
+            let held = tracker.color(camera: bright, part: .face, slot: 1,
+                                      settings: settings, seed: 31, now: Double(second))
+            XCTAssertEqual(held, first)
+        }
+        // A deliberately changed seed is a new artistic color decision.
+        settings.portraitSeed = 32
+        let reseeded = tracker.color(camera: bright, part: .face, slot: 1,
+                                     settings: settings, seed: 32, now: 8)
+        XCTAssertEqual(reseeded, PortraitFillRenderer.paintColor(
+            camera: bright, part: .face, settings: settings, seed: 32))
+    }
+
+    func testPortraitColorSamplingMirrorsWithOutput() throws {
+        let buffer = try PixelBufferUtils.makePixelBuffer(
+            format: FrameFormat(id: "portrait-color", width: 8, height: 4)
+        )
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let stride = CVPixelBufferGetBytesPerRow(buffer)
+        let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer))
+            .assumingMemoryBound(to: UInt8.self)
+        for y in 0..<4 {
+            for x in 0..<8 {
+                let offset = y * stride + x * 4
+                bytes[offset] = x < 4 ? 0 : 255 // blue
+                bytes[offset + 1] = 0
+                bytes[offset + 2] = x < 4 ? 255 : 0 // red
+                bytes[offset + 3] = 255
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        let canvas = CGSize(width: 8, height: 4)
+        let context = CIContext()
+        let direct = try XCTUnwrap(PortraitColorField.capture(buffer, canvasSize: canvas,
+                                                               mirrored: false, context: context))
+        let flipped = try XCTUnwrap(PortraitColorField.capture(buffer, canvasSize: canvas,
+                                                                mirrored: true, context: context))
+        XCTAssertGreaterThan(direct.sample(at: CGPoint(x: 1, y: 2), canvasSize: canvas).red, 0.8)
+        XCTAssertGreaterThan(flipped.sample(at: CGPoint(x: 1, y: 2), canvasSize: canvas).blue, 0.8)
+    }
+
+    func testPersonOutlineAddsHairMassWithoutReplacingFaceAttachedScalp() throws {
         let jaw = MappedGroup(
             region: .jaw,
             points: [CGPoint(x: 100, y: 130), CGPoint(x: 105, y: 175),
@@ -267,12 +761,16 @@ final class PortraitDrawingTests: XCTestCase {
             CGPoint(x: 175, y: 30), CGPoint(x: 195, y: 85),
             CGPoint(x: 200, y: 130)
         ])
-        let plain = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [jaw], style: .clean, amount: 0.45, seed: 7))
-        let guided = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [jaw, silhouette], style: .clean, amount: 0.45, seed: 7))
+        let plain = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [jaw], style: .wild, amount: 4, seed: 7))
+        let guided = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [jaw, silhouette], style: .wild, amount: 4, seed: 7))
+        XCTAssertEqual(Array(guided.points.prefix(17)), Array(plain.points.prefix(17)),
+                       "The face-attached scalp must not turn into a silhouette helmet")
+        let plainOuter = try XCTUnwrap(plain.hairFillOutline)
+        let guidedOuter = try XCTUnwrap(guided.hairFillOutline)
+        XCTAssertLessThan(guidedOuter.map(\.y).min()!, plainOuter.map(\.y).min()! - 4)
+        XCTAssertLessThan(guidedOuter.map(\.x).min()!, plainOuter.map(\.x).min()! - 2)
         XCTAssertLessThan(guided.points.map(\.y).min()!, plain.points.map(\.y).min()! - 4,
-                          "The person outline should guide the dome above the face")
-        XCTAssertLessThan(guided.points.map(\.x).min()!, plain.points.map(\.x).min()! - 2,
-                          "The scalp should borrow a wider visible side from the person outline")
+                          "Wild ink must sample the silhouette-derived hair area, not only the paint")
         XCTAssertEqual(guided.points.first, jaw.points.first)
         XCTAssertEqual(guided.points.last, jaw.points.last)
 
@@ -280,7 +778,7 @@ final class PortraitDrawingTests: XCTestCase {
         movedPoints[0] = CGPoint(x: 90, y: 145)
         movedPoints[movedPoints.count - 1] = CGPoint(x: 210, y: 135)
         let movedJaw = MappedGroup(region: .jaw, points: movedPoints, edges: jaw.edges)
-        let moved = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [movedJaw, silhouette], style: .clean, amount: 0.45, seed: 7))
+        let moved = try XCTUnwrap(PortraitPathBuilder.hairComponent(from: [movedJaw, silhouette], style: .wild, amount: 4, seed: 7))
         XCTAssertEqual(moved.points.first, movedJaw.points.first)
         XCTAssertEqual(moved.points.last, movedJaw.points.last)
     }
@@ -330,7 +828,7 @@ final class PortraitDrawingTests: XCTestCase {
                 XCTFail("Every route needs its jaw and crown")
                 continue
             }
-            XCTAssertEqual(abs(jawIndex - crownIndex), 1)
+            XCTAssertEqual(crownIndex, jawIndex + 1)
 
             let unified = PortraitPathBuilder.unifiedItinerary(
                 face: features + [crown], body: [], outline: nil,
@@ -340,7 +838,7 @@ final class PortraitDrawingTests: XCTestCase {
                 XCTFail("The unified route needs its jaw and crown")
                 continue
             }
-            XCTAssertEqual(abs(unifiedJaw - unifiedCrown), 1)
+            XCTAssertEqual(unifiedCrown, unifiedJaw + 1)
         }
     }
 
@@ -420,6 +918,7 @@ final class PortraitDrawingTests: XCTestCase {
         let drawing = PortraitDrawing()
         var disabled = LandmarkSettings()
         disabled.portraitEnabled = true
+        disabled.portraitPoseBodyEnabled = false
         disabled.portraitOutlineEnabled = false
         var enabled = disabled
         enabled.portraitOutlineEnabled = true
@@ -676,6 +1175,95 @@ final class PortraitDrawingTests: XCTestCase {
         XCTAssertEqual(ordered.compactMap { $0.region == .hands ? $0.handedness : nil }, [.left, .right])
     }
 
+    func testFingerContourTracesBothSidesOfEveryFingerAndReturnsToWrist() throws {
+        let hand = sampleHandGroup()
+        let narrow = try XCTUnwrap(PortraitPathBuilder.fingerContourComponent(from: hand, fullness: 0.5))
+        let wide = try XCTUnwrap(PortraitPathBuilder.fingerContourComponent(from: hand, fullness: 1.8))
+
+        XCTAssertTrue(narrow.isHandContour)
+        XCTAssertEqual(narrow.handedness, .left)
+        XCTAssertEqual(narrow.points.count, 61)
+        XCTAssertEqual(narrow.points.first, hand.points[0])
+        XCTAssertEqual(narrow.points.last, hand.points[0])
+        XCTAssertEqual(narrow.points.count, wide.points.count)
+        // Each fingertip has an outer rail, rounded cap, and returning rail.
+        for finger in 0..<5 {
+            let outerTip = 4 + finger * 12
+            let innerTip = outerTip + 4
+            let trackedTip = hand.points[4 + finger * 4]
+            XCTAssertLessThan(hypot(narrow.points[outerTip].x - trackedTip.x,
+                                    narrow.points[outerTip].y - trackedTip.y), 14)
+            XCTAssertGreaterThan(hypot(wide.points[outerTip].x - wide.points[innerTip].x,
+                                      wide.points[outerTip].y - wide.points[innerTip].y),
+                                 hypot(narrow.points[outerTip].x - narrow.points[innerTip].x,
+                                       narrow.points[outerTip].y - narrow.points[innerTip].y))
+        }
+    }
+
+    func testFingerContourFallsBackWhenTooFewFingersAreTracked() {
+        let complete = sampleHandGroup()
+        let labels = complete.labels.enumerated().map { index, label in
+            index >= 9 ? nil : label
+        }
+        let partial = MappedGroup(region: .hands, points: complete.points,
+                                  edges: complete.edges, labels: labels)
+        XCTAssertNil(PortraitPathBuilder.fingerContourComponent(from: partial, fullness: 1))
+
+        var settings = LandmarkSettings()
+        settings.portraitEnabled = true
+        settings.portraitFingerContoursEnabled = true
+        let outlined = PortraitDrawing().semanticRoutes(groups: [partial], landmarks: settings)
+        settings.portraitFingerContoursEnabled = false
+        let skeleton = PortraitDrawing().semanticRoutes(groups: [partial], landmarks: settings)
+        XCTAssertEqual(outlined, skeleton)
+    }
+
+    func testSeparateHandsDoNotAcquireAConnector() {
+        let left = PortraitPathBuilder.Component(region: .hands,
+            points: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0)],
+            closed: false, handedness: .left)
+        let right = PortraitPathBuilder.Component(region: .hands,
+            points: [CGPoint(x: 100, y: 0), CGPoint(x: 101, y: 0)],
+            closed: false, handedness: .right)
+        let torso = PortraitPathBuilder.Component(region: .torso,
+            points: [CGPoint(x: 3, y: 0), CGPoint(x: 4, y: 0)],
+            closed: false, handedness: .unknown)
+
+        XCTAssertFalse(PortraitPathBuilder.shouldBridge(left, right))
+        XCTAssertTrue(PortraitPathBuilder.shouldBridge(left, torso))
+        let crown = PortraitPathBuilder.Component(region: .head,
+            points: [CGPoint(x: 0, y: -5), CGPoint(x: 10, y: -5)],
+            closed: false, handedness: .unknown, isCrown: true)
+        XCTAssertFalse(PortraitPathBuilder.shouldBridge(torso, crown))
+        for seed in 0..<16 {
+            let itinerary = PortraitPathBuilder.unifiedItinerary(
+                face: [], body: [left, right, torso], outline: nil,
+                variation: 0, detailPriority: 0, preferNearbyBody: true, seed: seed)
+            XCTAssertEqual(itinerary.map(\.region), [.hands, .torso, .hands])
+        }
+    }
+
+    func testPoseBodyRoutingPrefersNearbyLandmarksAcrossCategories() {
+        let jaw = PortraitPathBuilder.Component(region: .jaw,
+            points: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0)],
+            closed: false, handedness: .unknown)
+        let mouth = PortraitPathBuilder.Component(region: .mouth,
+            points: [CGPoint(x: 40, y: 0), CGPoint(x: 41, y: 0)],
+            closed: false, handedness: .unknown)
+        let torso = PortraitPathBuilder.Component(region: .torso,
+            points: [CGPoint(x: 2, y: 0), CGPoint(x: 3, y: 0)],
+            closed: false, handedness: .unknown)
+
+        let normal = PortraitPathBuilder.unifiedItinerary(
+            face: [jaw, mouth], body: [torso], outline: nil,
+            variation: 0, detailPriority: 0, preferNearbyBody: false, seed: 1)
+        let bodyShape = PortraitPathBuilder.unifiedItinerary(
+            face: [jaw, mouth], body: [torso], outline: nil,
+            variation: 0, detailPriority: 0, preferNearbyBody: true, seed: 1)
+        XCTAssertEqual(normal.map(\.region), [.jaw, .mouth, .torso])
+        XCTAssertEqual(bodyShape.map(\.region), [.jaw, .torso, .mouth])
+    }
+
     private func portraitGroups(offset: CGPoint) -> [MappedGroup] {
         func shifted(_ points: [CGPoint]) -> [CGPoint] {
             points.map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) }
@@ -708,6 +1296,26 @@ final class PortraitDrawingTests: XCTestCase {
             MappedGroup(region: .leftLeg, points: shifted(leftLeg), edges: chainEdges(leftLeg.count)),
             MappedGroup(region: .rightLeg, points: shifted(rightLeg), edges: chainEdges(rightLeg.count))
         ]
+    }
+
+    private func sampleHandGroup() -> MappedGroup {
+        let points = [
+            CGPoint(x: 110, y: 230),
+            CGPoint(x: 75, y: 205), CGPoint(x: 58, y: 188), CGPoint(x: 45, y: 168), CGPoint(x: 35, y: 150),
+            CGPoint(x: 85, y: 170), CGPoint(x: 80, y: 140), CGPoint(x: 77, y: 110), CGPoint(x: 75, y: 90),
+            CGPoint(x: 105, y: 165), CGPoint(x: 105, y: 132), CGPoint(x: 105, y: 100), CGPoint(x: 105, y: 75),
+            CGPoint(x: 125, y: 170), CGPoint(x: 129, y: 140), CGPoint(x: 132, y: 110), CGPoint(x: 135, y: 90),
+            CGPoint(x: 145, y: 180), CGPoint(x: 153, y: 157), CGPoint(x: 160, y: 135), CGPoint(x: 165, y: 120)
+        ]
+        let edges = [
+            (0, 1), (1, 2), (2, 3), (3, 4),
+            (0, 5), (5, 6), (6, 7), (7, 8),
+            (5, 9), (9, 10), (10, 11), (11, 12),
+            (9, 13), (13, 14), (14, 15), (15, 16),
+            (13, 17), (0, 17), (17, 18), (18, 19), (19, 20)
+        ]
+        return MappedGroup(region: .hands, points: points, edges: edges,
+                           labels: (0..<21).map { "L\($0)" })
     }
 
     private func loop(center: CGPoint, rx: CGFloat, ry: CGFloat, count: Int) -> (points: [CGPoint], edges: [(Int, Int)]) {

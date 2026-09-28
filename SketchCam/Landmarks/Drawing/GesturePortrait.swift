@@ -137,10 +137,18 @@ enum GesturePortrait {
                        rx: eyeWidthL, ry: 0.14, closed: true, expressionSensitive: true)
         let eyeR = fit(localFeature(.rightEye, "eR"), center: CGPoint(x: 0.42, y: 0),
                        rx: eyeWidthR, ry: 0.14, closed: true, expressionSensitive: true)
-        let browL = fit(localFeature(.leftBrow, "bL"), center: CGPoint(x: -0.47, y: -0.43),
+        var browL = fit(localFeature(.leftBrow, "bL"), center: CGPoint(x: -0.47, y: -0.43),
                         rx: 0.2 + random(17) * 0.22 * shapeVariation, ry: 0.04 + random(18) * 0.10 * shapeVariation, closed: false)
-        let browR = fit(localFeature(.rightBrow, "bR"), center: CGPoint(x: 0.47, y: -0.43),
+        var browR = fit(localFeature(.rightBrow, "bR"), center: CGPoint(x: 0.47, y: -0.43),
                         rx: 0.2 + random(19) * 0.22 * shapeVariation, ry: 0.04 + random(20) * 0.10 * shapeVariation, closed: false)
+        if settings.resolvedPortraitBrowCenterlineEnabled {
+            browL = PortraitPathBuilder.browCenterline([
+                .init(region: .leftBrow, points: browL, closed: false, handedness: .unknown)
+            ])?.points ?? browL
+            browR = PortraitPathBuilder.browCenterline([
+                .init(region: .rightBrow, points: browR, closed: false, handedness: .unknown)
+            ])?.points ?? browR
+        }
         let outerMouth = fit(localFeature(.mouth, "oL"), center: mouthCenter,
                              rx: 0.20 + random(21) * 0.26 * shapeVariation,
                              ry: 0.075 + random(22) * 0.12 * shapeVariation, closed: true, expressionSensitive: true)
@@ -150,6 +158,13 @@ enum GesturePortrait {
         let innerMouth = fit(localFeature(.mouth, "iL"), center: mouthCenter,
                              rx: 0.12 + random(23) * 0.16 * shapeVariation,
                              ry: 0.018 + random(24) * 0.09 * shapeVariation, closed: true, expressionSensitive: true)
+        let mouthPath = settings.resolvedPortraitMouthCenterlineEnabled
+            ? (PortraitPathBuilder.mouthFeatures([
+                .init(region: .mouth, points: outerMouth, closed: true, handedness: .unknown),
+                .init(region: .mouth, points: innerMouth, closed: true, handedness: .unknown)
+            ], connection: .sharedCorner, innerEnabled: true, centerline: true,
+               leftEye: [], rightEye: []).first?.points ?? outerMouth)
+            : outerMouth
         let nosePath = fit(localFeature(.nose, "n"), center: noseCenter,
                            rx: 0.09 + random(25) * 0.18 * shapeVariation,
                            ry: 0.20 + random(26) * 0.30 * shapeVariation, closed: false)
@@ -168,6 +183,52 @@ enum GesturePortrait {
         let bustY = max(chin + 0.5, (shoulderL.y + shoulderR.y + torso.y) / 3)
         let measuredBustWidth = max(abs(shoulderL.x), abs(shoulderR.x))
         let bustWidth = mix(1.25 + random(5) * 0.6, clamp(measuredBustWidth, 1.0, 2.6), liveWeight)
+        let jawTemplate = canonicalJaw(leftHalfWidth: leftHalfWidth, rightHalfWidth: rightHalfWidth,
+                                       chin: chin, cheek: 0.62 + random(38) * 0.62 * shapeVariation, count: 49)
+        let hiddenFaceLine = PortraitLineFeature.allCases
+            .filter { $0 != .hands }
+            .contains { !settings.portraitLineVisible($0) }
+        if !settings.resolvedPortraitBodyEnabled || settings.resolvedPortraitSeparateFeatures
+            || settings.resolvedPortraitConnectorWidth == 0 || hiddenFaceLine {
+            var marks: [[CGPoint]] = []
+            if settings.portraitLineVisible(.brows) { marks += [browL, browR] }
+            if settings.portraitLineVisible(.eyes) { marks += [eyeL, eyeR] }
+            if settings.portraitLineVisible(.pupils) {
+                func pupil(_ center: CGPoint, radius: CGFloat) -> [CGPoint] {
+                    (0...12).map { index in
+                        let angle = CGFloat(index) * .pi * 2 / 12
+                        return CGPoint(x: center.x + cos(angle) * radius,
+                                       y: center.y + sin(angle) * radius)
+                    }
+                }
+                marks.append(pupil(localPoints(.leftEye, "pL").first
+                    ?? CGPoint(x: -0.42, y: 0), radius: min(eyeWidthL, 0.14) * 0.32))
+                marks.append(pupil(localPoints(.rightEye, "pR").first
+                    ?? CGPoint(x: 0.42, y: 0), radius: min(eyeWidthR, 0.14) * 0.32))
+            }
+            if settings.portraitLineVisible(.nose) { marks.append(nosePath) }
+            if settings.portraitLineVisible(.mouth) {
+                marks.append(mouthPath)
+                if !settings.resolvedPortraitMouthCenterlineEnabled && settings.resolvedPortraitInnerMouthEnabled {
+                    marks.append(innerMouth)
+                }
+            }
+            if settings.portraitLineVisible(.faceContour) { marks.append(jawTemplate) }
+            if settings.resolvedPortraitHairEnabled {
+                marks.append([templeL,
+                              CGPoint(x: -leftHalfWidth * 0.76, y: crown),
+                              CGPoint(x: 0, y: crown - 0.16),
+                              CGPoint(x: rightHalfWidth * 0.82, y: crown), templeR])
+            }
+            let worldMarks = marks.filter { $0.count >= 2 }.map { mark in
+                mark.map { point in
+                    CGPoint(x: origin.x + scale * (point.x * xAxis.x + point.y * yAxis.x),
+                            y: origin.y + scale * (point.x * xAxis.y + point.y * yAxis.y))
+                }
+            }
+            return PortraitPathBuilder.subdivideLongest(
+                worldMarks, additional: settings.resolvedPortraitSegments - 1)
+        }
         let leftBrowAnchor = browL.first ?? CGPoint(x: -0.42 - eyeWidthL, y: -0.28)
         let leftEyeAnchor = eyeL.first ?? CGPoint(x: -0.42 - eyeWidthL, y: 0)
         var pen = Pen(start: leftBrowAnchor)
@@ -195,8 +256,6 @@ enum GesturePortrait {
         // Prefer the measured cheek/chin arc when Vision provides the open
         // face contour. Blend it against a clean authored jaw so turns are
         // legible while poor contours cannot collapse the whole portrait.
-        let jawTemplate = canonicalJaw(leftHalfWidth: leftHalfWidth, rightHalfWidth: rightHalfWidth,
-                                       chin: chin, cheek: 0.62 + random(38) * 0.62 * shapeVariation, count: 49)
         if let jaw, jaw.count >= 4, jaw.first != jaw.last {
             let oriented = jaw.first!.x <= jaw.last!.x ? jaw : Array(jaw.reversed())
             let measured = resample(oriented, count: jawTemplate.count, closed: false)
@@ -210,9 +269,11 @@ enum GesturePortrait {
         // Closed outer and inner lip contours remain explicit parts of the
         // same route. Their actual geometry is tracked independently, so a
         // changing mouth is visible without changing the connection order.
-        pen.connect(outerMouth.first ?? mouthCenter)
-        pen.followLoop(outerMouth)
-        pen.visitLoop(innerMouth, returnTo: outerMouth.first ?? mouthCenter)
+        pen.connect(mouthPath.first ?? mouthCenter)
+        pen.followLoop(mouthPath)
+        if !settings.resolvedPortraitMouthCenterlineEnabled && settings.resolvedPortraitInnerMouthEnabled {
+            pen.visitLoop(innerMouth, returnTo: mouthPath.first ?? mouthCenter)
+        }
         pen.breaks.append(pen.points.count - 1)
         pen.connect(nosePath.first ?? noseCenter)
         pen.followOpen(nosePath)
@@ -226,14 +287,16 @@ enum GesturePortrait {
         let flourish = clamp(CGFloat(settings.resolvedPortraitFlourish), 0, 1)
         pen.curve(CGPoint(x: 1.1, y: -0.2 - flourish), CGPoint(x: 0.22, y: -1 - flourish * 0.3), CGPoint(x: 0.34, y: -0.48))
 
-        let desired = min(3, settings.resolvedPortraitSegments)
-        let boundaries = [0] + Array(pen.breaks.prefix(desired - 1)) + [pen.points.count - 1]
-        return zip(boundaries, boundaries.dropFirst()).map { a, b in
+        let desired = settings.resolvedPortraitSegments
+        let natural = min(3, desired)
+        let boundaries = [0] + Array(pen.breaks.prefix(natural - 1)) + [pen.points.count - 1]
+        let authored = zip(boundaries, boundaries.dropFirst()).map { a, b in
             Array(pen.points[a...b]).map { p in
                 CGPoint(x: origin.x + scale * (p.x * xAxis.x + p.y * yAxis.x),
                         y: origin.y + scale * (p.x * xAxis.y + p.y * yAxis.y))
             }
         }
+        return PortraitPathBuilder.subdivideLongest(authored, additional: desired - natural)
     }
 
     private static func matches(_ label: String?, _ part: String) -> Bool {

@@ -25,8 +25,11 @@ the main Portrait controls remain available for existing scenes.
 
 ## Gesture approach
 
-Portrait → Style → Approach switches between the original **Landmarks** route
-algorithm and the **Gesture** drawing grammar. Landmarks remains the default.
+Portrait → Style → Approach switches between **Landmarks**, **Gesture**, and
+**Template**. Landmarks remains the default. The shared **2D figure rig** can
+supply a neck, torso, and bent arms to each approach. It keeps inferred joints
+when the pose tracker loses an elbow or wrist; tracked joints pull the same
+underlying figure into pose.
 Gesture uses an authored pen itinerary to connect smoothed eye, brow, nose,
 lip, and jaw contours from the corresponding semantic trackers. It completes
 missing anatomy with drawn curves for the scalp, neck, and shoulders. Because
@@ -39,22 +42,34 @@ the live torso/upper arms when present. It returns along a jaw contour, follows
 outer and inner lip loops, then traces the nose and opposite eye/brow. Seed
 changes the proportions and character of the completed forms while preserving
 the feature connections. Motion changes measured contours and positions; it
-does not reroll the route. Segments 1–3 split the gesture at pauses between the
-bust, mouth, and nose/eye passages.
+does not reroll the route. Segments first split the gesture at pauses between
+the bust, mouth, and nose/eye passages, then add more pen lifts up to 16.
 
 **Abstraction** blends measured contours toward authored strokes. **Shape
 variation** changes head, feature, and shoulder proportions; changing Seed
 browses deterministic character shapes. **Expression** follows or exaggerates
 eye and inner-lip opening. Width, nib variation, and halo use the existing
 stroke renderer. This mode draws a stylized character head and shoulders; it
-does not infer hands or animate a complete body skeleton. The original
-articulated Landmarks approach remains available for that.
+does not infer hands on its own; the shared figure rig supplies arm structure,
+and observed hands remain separate high-detail features.
 
 The current implementation is a lightweight geometric grammar, not a learned
 portrait model. Face contours are smoothed and resampled to a fixed point count
 so their changing shape does not alter the seeded route. Its fixture preview
 and geometry checks are in `GesturePortraitTests`; the feel during a real head
 turn, varied expressions, and varied faces still needs a local visual pass.
+
+## Template approach
+
+Portrait → Style → Approach → **Template** is a separate first study of an
+authored figure. Rather than copying a route through detected points, it keeps
+head, brows, eyes, nose, mouth, ears, hair, and bust curves in a local face
+frame. Tracking moves and rotates that frame and adjusts bounded proportions;
+eye and mouth measurements drive opening. The seed changes the character's
+shape while keeping its path structure. Detailed hands remain an observed
+exception because legible finger gestures matter for interaction. Template is
+experimental and can still look too rigid or exaggerated; Landmarks and Gesture
+remain available unchanged.
 
 ## What goes in and what comes out
 
@@ -74,7 +89,7 @@ optional labels, and its semantic edges. Portrait does not invent a generic
 nearest-neighbour tour over all points. It first separates the input into
 meaningful components, such as an outer lip loop versus an inner lip loop.
 
-The output is a small ordered list of routes by default:
+The Landmarks approach outputs a small ordered list of routes by default:
 
 1. Face route(s), including the optional crown/hair component.
 2. One articulated body route when body landmarks are available.
@@ -91,6 +106,22 @@ itinerary.
 The routes are rendered as ribbons. Feature strokes use the selected ink width;
 bridges can use a thinner relative width so the pen's travel reads as connective
 tissue rather than equally important anatomy.
+
+**Separate key features** draws facial components as independent marks,
+without the unicursal pen itinerary. Setting **Connector width** to 0 also
+omits travel strokes between components, including in Gesture and Template.
+
+**Brow centerlines** replaces each doubled brow outline with one midpoint
+curve; an already-single brow curve stays as is. **Mouth centerline** replaces
+the inner and outer lip rings with one loop halfway between them. Both options
+also apply to Gesture's fitted marks and Template's authored features. Template
+brows are already single curves. The options are independent, default off, and
+are included in Portrait presets. These line options do not change flat paint.
+
+Gesture and Template have a separate **Draw body** switch. Turning it off keeps
+the head and tracked hands while hiding the inferred neck, torso, and arms.
+**Body outline** controls body paint as well as the optional silhouette: with it
+off, the head and hands can still receive flat color but the body and neck do not.
 
 ## Semantic decomposition
 
@@ -138,24 +169,30 @@ The optional crown is an open scalp component whose endpoints are the two
 cheek/ear ends of Vision's face contour. Its frame follows the eye or brow line
 and points away from the lower face, so the endpoints, width, and roll change
 with the projected head. A full dome rises above the brows; it no longer uses
-the brow line as its base. If the person contour is present, its upper envelope
-guides the broad dome height and asymmetry within a bounded range. The face
-anchors still own the position, so the outline tracker cannot pull the crown
-off the ears. Hands and body joints never become scalp anchors.
+the brow line as its base. The inner scalp dome stays attached to the face;
+if the person contour is present, its upper envelope defines an outer hair
+mass instead of replacing that dome. Hands and body joints never become scalp
+anchors.
 
 - Clean: a 17-point ear-to-ear scalp outline.
 - Wild: a seeded proximity walk through the cap with occasional loose flicks.
 - Wrap: a denser proximity route with angular turns around selected samples.
 - Hatch Horizontal: alternating irregular temple-to-temple passes.
-- Hatch Vertical: alternating upper-to-lower scalp strands.
+- Hatch Vertical: slanted, alternating upper-to-lower zigzags.
 
 Every filled mode draws the scalp arc first and then carries the same route
 through the hair area back to the far ear. The dropdown selects a texture;
-**Hair fill** from 0 to 4 controls sample density. Values through 1 retain the
-previous density curve, while values above 1 add many more samples. This
-parameter never increases the scalp height; the face-attached dome and hidden
-apex remain stable as density changes. The fill's lower boundary is held above
-the eyebrow shelf so strands do not obscure the brows.
+**Hair fill** from 0 to 20 controls sample density. Values through 1 retain the
+previous density curve, while values above 1 add more samples. This parameter
+never increases the scalp height. **Hair overhang** expands the marks and flat
+paint mainly sideways toward the ears, with a smaller upward rise, leaving the
+face-attached dome and ear anchors in place. With Body outline enabled, an
+available upper person contour defines additional outer hair territory. Wild,
+Wrap, and both Hatch samplers place ink *inside that added area*, not only in
+the face-attached cap; the flat hair fill follows the same outer boundary.
+**Hairdo** selects Rounded, Swept, or Shag outer proportions independently of
+the interior texture. The hair's lower boundary stays above the eyebrow shelf.
+**Inferred ears** can be turned off without removing the scalp anchors.
 
 The crown stays in the unicursal face planner next to the jaw component. Seeds
 can choose which side of the jaw to connect first; both open paths retain their
@@ -196,11 +233,15 @@ avoid the previous visually wrong hand-to-head or left-hand-to-right-arm jumps.
 If no articulated body route is present, Portrait falls back to one body hull,
 then one contour.
 
-**Pose body shape** is an alternative to the segmentation-derived outline.
-It infers a neck, shoulder/bust boundary, and tapered arm sleeves from the
-tracked pose joints, joining the head at the face-contour ear points. It does
-not require the person matte; when enabled, it replaces the skeleton's torso
-and arm centerlines in Portrait and takes precedence over Body outline.
+**2D figure rig** is shared by all three approaches, separate from the
+segmentation-derived Body outline. It infers a short neck from the lower jaw
+into a narrow collar, then a torso and bent arm sleeves from the shoulders
+through elbows to wrists. Pose joints drive the figure when present; when
+missing, facial scale and nearby tracked hands provide fallback joint
+locations. Neck, torso, and sleeves are separate paint shapes, so a raised hand
+cannot stretch the shirt across the face or make the head fill into a
+shoulder-wide triangle. The rig takes precedence over old skeletal centerlines
+in Landmarks while preserving observed finger contours.
 
 ### Outline
 
@@ -270,11 +311,10 @@ intentional way to choose another topology.
 The crown is attached beside the jaw after the unified planner chooses the
 other components, so detail weighting cannot strand the scalp near an eye.
 
-`Subsample` is an explicit percentage of source points retained by the route.
-It is deterministic for a given seed, preserves open endpoints and detail
-anchors, and is independent of live topology variation. This makes it safe to
-explore simpler or more fragmentary portraits without introducing frame-to-
-frame route rewiring.
+`Subsample` is source density. Below 1× it retains a seeded subset; above 1×
+it interpolates sparse source curves up to 4× within bounded point caps. It is
+deterministic for a given seed, preserves open endpoints and detail anchors,
+and is independent of live topology variation.
 
 ### Landmark sampling
 
@@ -286,7 +326,8 @@ without turning into unrelated random geometry.
 
 ## Segments and bridges
 
-`Segments` is currently 1–6 and applies to the face itinerary.
+`Segments` is currently 1–16 and applies to the face itinerary; the actual
+number of breaks cannot exceed available semantic boundaries.
 
 - **1** means one planned face route, with bridges between features.
 - Higher values add breaks only at semantic boundaries.
@@ -337,7 +378,8 @@ The implementation protects the real-time path in three ways:
 
 - Dense segmentation contour input is ignored when an articulated body route
   exists; it is only a silhouette fallback.
-- A full route is capped at 320 points; each render stroke is capped at 160.
+- A full non-hair route is capped at 320–640 points according to Source density;
+  each non-hair render stroke is capped at 160–480. Hair has separate caps.
 - Rendering uses the shared ribbon tessellator and can stay on the Metal path.
 
 These limits preserve endpoints and order through uniform sampling, rather than
@@ -353,17 +395,28 @@ changing the semantic itinerary to solve a performance problem.
 | Organic variation | 0.22 | Seeded local hand-drawn drift |
 | Seed | 7 | All deterministic artistic choices |
 | Route variation | 0.38 | Itinerary, sampling, orientation, loop entry |
-| Segments | 1 | Number of face routes, 1–6 |
-| Connector width | 0.42 | Relative width for cross-part bridges |
+| Segments | 1 | Slider in every approach, 1–16. Landmarks splits semantic routes; Gesture and Template add pen lifts without changing geometry |
+| Connector width | 0.42 | Relative width for cross-part bridges; 0 removes travel strokes in every approach |
+| Separate key features | off | Draws eyes, brows, nose, mouth, jaw, and other components as separate marks |
+| Feature lines | all on | Independent Face contour, Brows, Eyes, Pupils, Nose, Mouth, and Hands outline switches; tracking and paint remain available |
+| 2D figure rig | on | Shared persistent neck, torso, bent arms, and sleeves; inferred joints bridge pose dropouts |
 | Unify face, body, and outline | off | One seeded planner for face, body, and optional silhouette |
 | Detail priority | 0.65 | Bias the unified planner toward eyes, nose, and mouth |
-| Subsample | 1.0 | Percentage of non-hand source points retained by the seeded sampler; hand joints keep full input resolution |
-| Body outline | off | Integrated line-based contour/hull silhouette; requests Person contour when enabled |
-| Pose body shape | off | Stylized neck, torso, and arm boundary from pose joints; no segmentation |
+| Subsample | 1.0 | Source density: below 1× keeps a seeded subset; above 1× interpolates sparse curves up to 4×. Hand joints keep tracked detail |
+| Finger contours | off | Continuous parallel sides and rounded tips for tracked fingers, joined at the palm and wrist; falls back with incomplete hand tracking |
+| Finger fullness | 1.0 | Distance between each finger's two traced sides |
+| Body outline | off | Requests Person contour. With rig on, its upper region guides and supplies hair samples; with rig off it can draw the body outline |
+| Inferred ears | on | Draws optional face-attached ear loops; can be switched off independently of the crown |
+| Flat camera-color fill | off | Paints inferred body, face, hair, and hand polygons below the line, using a 128-pixel-wide camera sample |
+| Limited palette | off | Snaps flat colors to a selectable 2–12-color print palette |
+| Forced variation | 0.25 | Seeded blend from camera color toward expressive colors for each anatomical region |
+| Fill opacity | 1.0 | Constant paint opacity; color tracking does not fade parts in and out |
 | Outline weight | 0.68 | Outline opacity |
-| Top-of-head line | off | Connect the ear-side face contour through a full scalp dome; person contour guides its shape when present |
-| Hair | Clean | Clean, Wild, Wrap, Hatch Horizontal, or Hatch Vertical crown geometry |
-| Hair fill | 0.45 | Fill density for Wild/Wrap/Hatch, from 0 to 4; does not increase scalp height |
+| Top-of-head line | off | Connect the ear-side face contour through a face-attached scalp dome; person contour contributes separate outer hair territory |
+| Hair | Clean | Clean, Wild, Wrap, Hatch Horizontal, or Hatch Vertical crown texture |
+| Hairdo | Rounded | Rounded, Swept, or Shag outer hair proportions, independent of texture |
+| Hair fill | 0.45 | Fill density for Wild/Wrap/Hatch/Zigzag, from 0 to 20; does not increase scalp height |
+| Hair overhang | 0 | Expands hair mainly sideways around ears, with modest rise, 0–2; may follow an upper person contour |
 | Lip connections | Single corner | Shared-corner rings or paired upper/lower lip arcs joined at both corners |
 | Inner mouth ring | on | Show/hide the inner lip landmarks |
 | Width | 2.8 | Main ribbon width |
@@ -372,6 +425,21 @@ changing the semantic itinerary to solve a performance problem.
 
 All values live in `LandmarkSettings`, are Codable, and use optional fields plus
 resolved defaults for compatibility with presets made before Portrait existed.
+
+Portrait → Portrait presets saves only these Portrait controls locally. Presets
+can be loaded, overwritten, deleted, exported as versioned JSON, and imported
+from JSON. Import/load does not replace camera, layers, effects, Marks, or other
+drawing algorithms. The existing Presets panel remains the broader app-state
+snapshot system. The Camera panel's live preview follows its Mirror toggle.
+
+The flat fill is deliberately a lightweight geometric paint pass, not a person
+matte: a small camera thumbnail supplies a color per semantic region, while
+landmarks and inferred geometry determine the polygons. Camera samples are
+averaged over several seconds per semantic part; in Limited palette mode a
+swatch is held for at least eight seconds and changes only for a meaningful
+improvement. The part's opacity stays fixed. This keeps source video hidden
+and line work crisp, but it cannot yet model clothing boundaries, occlusion,
+or multiple colored patches within a region.
 
 ## What is intentionally unfinished
 
@@ -382,8 +450,9 @@ The key limitations to keep in mind when evaluating output are:
   semantically valid single-line drawings.
 - Feature entry and exit points are sampled/rotated, but not optimized for pen
   economy, visual balance, or a specific drawing vocabulary.
-- The default body is an ordered skeleton route; Pose body shape adds a
-  stylized boundary, but does not yet model clothing, occlusion, or hands.
+- The 2D figure rig supplies a neck and arms across approaches, including
+  inferred joints through pose dropouts, but does not yet model clothing,
+  depth order, or occlusion.
 - The hull outline is semantically weak for arms, shoulders, and occlusion.
 - The scalp uses face-contour ear anchors and an optional bounded person-contour
   guide; it is still a 2-D estimate rather than a full 3-D head-pose model.
@@ -419,6 +488,12 @@ elegant nostril → bridge → brow and mouth → jaw → cheek-like lines.
 
 - `SketchCam/Landmarks/Drawing/PortraitDrawing.swift` — all component
   extraction, planning, seeded variation, stylization, and PRNG logic.
+- `SketchCam/Landmarks/Drawing/PortraitFillRenderer.swift` — flat paint shapes,
+  sampled camera color, temporal color stability, and print-palette remapping.
+- `SketchCam/Landmarks/Drawing/AaronPortrait.swift` — Template's authored
+  figure geometry and bounded landmark-driven proportions.
+- `SketchCam/App/PortraitPresetStore.swift` — portrait-only saved and exported
+  configurations.
 - `SketchCamCore/Sources/ProcessingSettings.swift` — Portrait controls,
   defaults, Codable compatibility.
 - `SketchCam/App/ContentView.swift` — Portrait control panel.

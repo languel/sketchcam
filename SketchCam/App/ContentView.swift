@@ -397,9 +397,12 @@ struct ContentView: View {
     @ObservedObject var outputWindow: OutputWindowController
     @StateObject private var windowMode = WindowModeController()
     @StateObject private var presetStore = PresetStore()
+    @StateObject private var portraitPresetStore = PortraitPresetStore()
     @EnvironmentObject private var appUI: AppUIState
     @Environment(\.openWindow) private var openWindow
     @State private var newPresetName = ""
+    @State private var newPortraitPresetName = ""
+    @State private var portraitPresetError: String?
     @State private var recallWholeState = false
     @State private var webURLField = ""
     @State private var webSnippetField = ""
@@ -943,11 +946,15 @@ struct ContentView: View {
     // MARK: - Preview
 
     private var previewPane: some View {
-        GeometryReader { geo in
-            let outputRect = workspaceOutputRect(
-                container: geo.size,
-                outputSize: model.outputFormat.size,
-                workspace: model.settings.workspace
+        WorkspaceNavigationGeometry(
+            navigation: model.workspaceNavigation,
+            outputSize: model.outputFormat.size,
+            workspace: model.settings.workspace
+        ) { outputRect, displayWorkspace in
+            let displayZoom = CGFloat(displayWorkspace?.zoom ?? 1)
+            let fittedSize = CGSize(
+                width: outputRect.width / max(0.05, displayZoom),
+                height: outputRect.height / max(0.05, displayZoom)
             )
             ZStack {
                 // Checkerboard backdrop so an Alpha background (or ink-only
@@ -960,18 +967,21 @@ struct ContentView: View {
                 if !model.settings.previewEnabled {
                     Text("Preview off — still publishing")
                         .foregroundStyle(.secondary)
-                        .frame(width: outputRect.width, height: outputRect.height)
+                        .frame(width: fittedSize.width, height: fittedSize.height)
+                        .scaleEffect(displayZoom)
                         .position(x: outputRect.midX, y: outputRect.midY)
                 } else if model.settings.useMetalPreview, model.settings.previewMode != .split {
                     // Zero-readback GPU display (also the presentation-mode output).
                     SampleBufferDisplayView(controller: model.previewDisplay)
-                        .frame(width: outputRect.width, height: outputRect.height)
+                        .frame(width: fittedSize.width, height: fittedSize.height)
+                        .scaleEffect(displayZoom)
                         .position(x: outputRect.midX, y: outputRect.midY)
                 } else {
                     // Observes the live store, so the ~4 Hz image updates don't
                     // re-evaluate the whole ContentView body.
                     LivePreviewImage(live: model.live)
-                        .frame(width: outputRect.width, height: outputRect.height)
+                        .frame(width: fittedSize.width, height: fittedSize.height)
+                        .scaleEffect(displayZoom)
                         .position(x: outputRect.midX, y: outputRect.midY)
                 }
                 if model.settings.landmarks.inkEnabled {
@@ -986,7 +996,7 @@ struct ContentView: View {
                         onStrokeCommitted: { commitCanvasStrokeRecord($0) },
                         outputSize: model.outputFormat.size,
                         outputRect: outputRect,
-                        workspace: model.settings.workspace,
+                        workspace: displayWorkspace,
                         activeFrameID: activeInkFrameID,
                         inkColor: rgbaColor(activeInkConfig.inkColor),
                         inkRGBA: activeInkConfig.inkColor,
@@ -1005,12 +1015,10 @@ struct ContentView: View {
                     )
                     .zIndex(20)
                 }
-                WorkspaceArtboardOverlay(model: model, outputSize: model.outputFormat.size)
+                WorkspaceArtboardOverlay(model: model, navigation: model.workspaceNavigation, outputSize: model.outputFormat.size)
                     .allowsHitTesting(workspaceOverlayHandlesInput)
                     .zIndex(25)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipShape(Rectangle())
         }
         .frame(minWidth: 120, minHeight: 68)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2771,16 +2779,11 @@ struct ContentView: View {
     }
 
     private func zoomWorkspace(by factor: Double) {
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.zoom = max(0.05, min(16, workspace.zoom * factor))
-        }
+        model.zoomWorkspaceNavigation(by: factor)
     }
 
     private func resetWorkspaceView() {
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.zoom = 1
-            workspace.viewCenter = CGPoint(x: workspace.outputViewport.frame.midX, y: workspace.outputViewport.frame.midY)
-        }
+        model.resetWorkspaceNavigation()
     }
 
     private var workspaceToolBinding: Binding<WorkspaceTool> {
@@ -2894,7 +2897,8 @@ struct ContentView: View {
         SourcePreviewImage(
             previews: model.sourcePreviews,
             source: .camera,
-            active: model.cameraPermissionState == .authorized && !model.settings.testPatternMode
+            active: model.cameraPermissionState == .authorized && !model.settings.testPatternMode,
+            mirrored: model.settings.mirror
         )
         .onAppear { model.setSourcePreviewActive(.camera, active: true) }
         .onDisappear { model.setSourcePreviewActive(.camera, active: false) }
@@ -3567,17 +3571,65 @@ struct ContentView: View {
                 ForEach(PortraitApproach.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            .help("Gesture uses authored continuous curves and completes a scalp and bust. Landmarks retains the original route algorithms.")
-            if model.settings.landmarks.resolvedPortraitApproach == .gesture {
+            .help("Landmarks traces semantic routes. Gesture fits tracked contours to authored curves. Template draws a seeded figure from measured proportions and expressions, without tracing source points.")
+            Toggle("Separate key features", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitSeparateFeatures },
+                set: { model.settings.landmarks.portraitSeparateFeatures = $0 }
+            ))
+                .help("Draw eyes, brows, nose, mouth, head, and body as separate marks without pen-travel connectors. Connector width 0 has the same effect.")
+            Toggle("2D figure rig", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitPoseBodyEnabled },
+                set: { model.settings.landmarks.portraitPoseBodyEnabled = $0 }
+            ))
+                .help("Keep a head-attached neck, torso, elbows, and arms even when pose joints drop out. Visible across all Portrait approaches; tracked joints steer the inferred figure.")
+            if model.settings.landmarks.resolvedPortraitApproach != .landmarks {
+                Toggle("Draw body", isOn: Binding(
+                    get: { model.settings.landmarks.resolvedPortraitBodyEnabled },
+                    set: { model.settings.landmarks.portraitBodyEnabled = $0 }
+                ))
+                    .help("Hide the neck, torso, and arms in Gesture and Template while retaining the head and tracked hands.")
+            }
+            SliderRow(
+                title: "Segments",
+                value: Binding(
+                    get: { Double(model.settings.landmarks.resolvedPortraitSegments) },
+                    set: { model.settings.landmarks.portraitSegments = Int($0.rounded()) }
+                ),
+                range: 1...16,
+                precision: 0,
+                defaultValue: 1,
+                hint: "Split Portrait strokes into more pen passages. Landmarks favors semantic boundaries; Gesture and Template subdivide authored passages without changing the character's geometry."
+            )
+            SectionHeader("Feature lines")
+            ForEach(PortraitLineFeature.allCases) { feature in
+                Toggle(feature.title, isOn: Binding(
+                    get: { model.settings.landmarks.portraitLineVisible(feature) },
+                    set: { visible in
+                        var features = model.settings.landmarks.portraitLineFeatures ?? [:]
+                        features[feature] = visible
+                        model.settings.landmarks.portraitLineFeatures = features
+                    }
+                ))
+            }
+            .help("Show or hide each outline independently. Tracking and flat paint remain available when a line is hidden.")
+            Toggle("Brow centerlines", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitBrowCenterlineEnabled },
+                set: { model.settings.landmarks.portraitBrowCenterlineEnabled = $0 }
+            ))
+                .help("Use one brow curve. Doubled tracked outlines collapse to their midpoint; already-single curves stay single.")
+            Toggle("Mouth centerline", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitMouthCenterlineEnabled },
+                set: { model.settings.landmarks.portraitMouthCenterlineEnabled = $0 }
+            ))
+                .help("Use one lip loop midway between the outer and inner mouth shapes.")
+            if model.settings.landmarks.resolvedPortraitApproach != .landmarks {
                 SliderRow(title: "Abstraction", value: optionalLandmarkFloatBinding(\.portraitAbstraction, defaultValue: 0.35),
-                          defaultValue: 0.35, hint: "Blend the live eye, mouth, nose, and jaw shapes toward an authored drawing. Lower values follow the tracked contours more closely.")
+                          defaultValue: 0.35, hint: "Gesture blends tracked shapes toward authored curves. Template uses the stream only to adjust a fixed figure's proportions; higher values follow less.")
                 SliderRow(title: "Shape variation", value: optionalLandmarkFloatBinding(\.portraitShapeVariation, defaultValue: 0.55),
                           defaultValue: 0.55, hint: "Seeded character proportions: head silhouette, eye shape, nose, mouth, and shoulder form. Change Seed to browse stable variations.")
                 SliderRow(title: "Expression", value: optionalLandmarkFloatBinding(\.portraitExpression, defaultValue: 0.8),
                           range: 0...2, defaultValue: 0.8, hint: "How strongly eye and inner-lip opening follows the live contours. 0 holds the authored shape; 1 follows; values above 1 exaggerate.")
                 portraitSeedRow
-                Stepper("Segments \(model.settings.landmarks.resolvedPortraitSegments)", value: portraitSegmentsBinding, in: 1...3)
-                    .help("One continuous gesture, or separate bust, mouth, and nose/eye passages.")
             } else {
             Picker("Hand", selection: portraitStyleBinding) {
                 ForEach(PortraitStyle.allCases) { style in
@@ -3611,17 +3663,11 @@ struct ContentView: View {
                 hint: "Separate-route topology variation. Unified mode keeps the route stable and uses Seed, Detail priority, and Subsample for exploration."
             )
             .disabled(model.settings.landmarks.resolvedPortraitUnifiedRoute)
-            HStack {
-                Stepper(value: portraitSegmentsBinding, in: 1...6) {
-                    Text("Segments \(model.settings.landmarks.resolvedPortraitSegments)")
-                        .monospacedDigit()
-                }
-                .help("Split the seeded face route at semantic boundaries. One keeps a single unicursal line; higher values can isolate features while inner and outer lips remain together when possible.")
-            }
-
             SectionHeader("Route graph")
             Toggle("Unify face, body, and outline", isOn: portraitUnifiedRouteBinding)
                 .help("Send face landmarks, articulated body paths, and the optional silhouette through one seeded line planner so cross-part handoffs stay visually connected.")
+                .disabled(model.settings.landmarks.resolvedPortraitSeparateFeatures ||
+                          model.settings.landmarks.resolvedPortraitConnectorWidth == 0)
             SliderRow(
                 title: "Detail priority",
                 value: optionalLandmarkFloatBinding(\.portraitDetailPriority, defaultValue: 0.65),
@@ -3631,28 +3677,65 @@ struct ContentView: View {
             SliderRow(
                 title: "Subsample",
                 value: optionalLandmarkFloatBinding(\.portraitSubsample, defaultValue: 1),
-                range: 0.05...1,
+                range: 0.05...4,
                 defaultValue: 1,
-                hint: "Percentage of source points retained. Hand joints always keep full source resolution; lower values simplify denser face and outline paths."
+                hint: "Below 1×, keep a seeded subset of source points. Above 1×, interpolate between landmarks for denser body and face curves; hand joints retain their tracked detail."
             )
 
+            SectionHeader("Hands")
+            Toggle("Finger contours", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitFingerContoursEnabled },
+                set: { model.settings.landmarks.portraitFingerContoursEnabled = $0 }
+            ))
+                .help("Trace both sides of each tracked finger with rounded tips, returning through the palm to the wrist. Falls back to joint paths when tracking is incomplete.")
+            SliderRow(
+                title: "Finger fullness",
+                value: optionalLandmarkFloatBinding(\.portraitFingerFullness, defaultValue: 1),
+                range: 0.5...2,
+                defaultValue: 1,
+                hint: "Sets the spacing between each finger's parallel contour lines. Higher values make fingers broader; fingertip and joint positions still follow tracking."
+            )
+            .disabled(!model.settings.landmarks.resolvedPortraitFingerContoursEnabled)
+
             SectionHeader("Crown")
+            Toggle("Inferred ears", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitEarsEnabled },
+                set: { model.settings.landmarks.portraitEarsEnabled = $0 }
+            ))
+                .help("Add small head-aligned ear loops at the sides of the jaw. Turn off for a cleaner silhouette.")
             Toggle("Top-of-head line", isOn: portraitHairEnabledBinding)
-                .help("Connect the ear-side face contour points with a scalp line. The person outline can guide its shape, while the face anchors keep it attached during head turns.")
+                .help("Connect the ear-side face contour with a face-attached scalp line. When Body outline is enabled, the person silhouette adds outer hair area for ink sampling without moving this inner scalp.")
             Picker("Hair", selection: portraitHairStyleBinding) {
                 ForEach(PortraitHairStyle.allCases) { style in
                     Text(style.title).tag(style)
                 }
             }
             .pickerStyle(.menu)
+            Picker("Hairdo", selection: Binding(
+                get: { model.settings.landmarks.resolvedPortraitHairdo },
+                set: { model.settings.landmarks.portraitHairdo = $0 }
+            )) {
+                ForEach(PortraitHairdo.allCases) { hairdo in
+                    Text(hairdo.title).tag(hairdo)
+                }
+            }
+            .pickerStyle(.menu)
+            .help("Shape the hair mass independently of its texture: rounded, side-swept, or loose around the ears.")
             SliderRow(
                 title: "Hair fill",
                 value: optionalLandmarkFloatBinding(\.portraitHairAmount, defaultValue: 0.45),
-                range: 0...4,
+                range: 0...20,
                 defaultValue: 0.45,
-                hint: "Adds denser fill above the brow line without moving the scalp. Wild, Wrap, and horizontal/vertical Hatch use different line patterns."
+                hint: "Adds denser fill above the brow line without moving the scalp. Wild, Wrap, horizontal Hatch, and slanted Zigzag use different line patterns."
             )
             .disabled(model.settings.landmarks.resolvedPortraitHairStyle == .clean)
+            SliderRow(
+                title: "Hair overhang",
+                value: optionalLandmarkFloatBinding(\.portraitHairExpansion, defaultValue: 0),
+                range: 0...2,
+                defaultValue: 0,
+                hint: "Expand the hair sideways around the ears and somewhat above the fixed scalp. The upper person outline guides it when available."
+            )
 
             SectionHeader("Mouth")
             Picker("Lip connections", selection: Binding(
@@ -3672,19 +3755,50 @@ struct ContentView: View {
                 .help("Hide the inner lip contour while keeping the outer mouth shape.")
 
             SectionHeader("Silhouette")
-            Toggle("Pose body shape", isOn: Binding(
-                get: { model.settings.landmarks.resolvedPortraitPoseBodyEnabled },
-                set: { model.settings.landmarks.portraitPoseBodyEnabled = $0 }
-            ))
-                .help("Draw a stylized neck, torso, and tapered arms from pose joints. This takes precedence over the person outline, follows body motion, and does not require segmentation.")
             Toggle("Body outline", isOn: portraitOutlineEnabledBinding)
-                .help("Use the person silhouette when Pose body shape is off. This requests Vision segmentation; Marks → Person controls its detail.")
+                .help("Request the person silhouette and allow body color fill. When off, Portrait can still paint the head and hands. Marks → Person controls detail.")
             SliderRow(
                 title: "Outline weight",
                 value: optionalLandmarkFloatBinding(\.portraitOutlineStrength, defaultValue: 0.68),
                 defaultValue: 0.68,
                 hint: "Opacity of the silhouette contribution; in unified mode it also scales the silhouette portion of the shared line."
             )
+
+            SectionHeader("Paint")
+            Toggle("Flat camera-color fill", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitFillEnabled },
+                set: { model.settings.landmarks.portraitFillEnabled = $0 }
+            ))
+                .help("Paint the inferred face, hair, body, and finger shapes beneath Portrait's lines, using colors sampled from the camera.")
+            Toggle("Limited palette", isOn: Binding(
+                get: { model.settings.landmarks.resolvedPortraitFillPalettized },
+                set: { model.settings.landmarks.portraitFillPalettized = $0 }
+            ))
+                .help("Match sampled colors to a small, fixed palette of print-like paints.")
+                .disabled(!model.settings.landmarks.resolvedPortraitFillEnabled)
+            SliderRow(
+                title: "Palette colors",
+                value: Binding(
+                    get: { Double(model.settings.landmarks.resolvedPortraitFillPaletteSteps) },
+                    set: { model.settings.landmarks.portraitFillPaletteSteps = Int($0.rounded()) }
+                ), range: 2...12, precision: 0, defaultValue: 6,
+                hint: "Number of available colors in the flat print palette. Two gives a warm near-monochrome look; higher values add color families."
+            )
+            .disabled(!model.settings.landmarks.resolvedPortraitFillEnabled ||
+                      !model.settings.landmarks.resolvedPortraitFillPalettized)
+            SliderRow(
+                title: "Forced variation",
+                value: optionalLandmarkFloatBinding(\.portraitFillVariation, defaultValue: 0.25),
+                defaultValue: 0.25,
+                hint: "Blend camera colors toward seeded, region-specific paint hues: skin, hair, clothing, and hands."
+            )
+            .disabled(!model.settings.landmarks.resolvedPortraitFillEnabled)
+            SliderRow(
+                title: "Fill opacity",
+                value: optionalLandmarkFloatBinding(\.portraitFillOpacity, defaultValue: 1),
+                defaultValue: 1
+            )
+            .disabled(!model.settings.landmarks.resolvedPortraitFillEnabled)
 
             }
             SectionHeader("Stroke")
@@ -3701,18 +3815,93 @@ struct ContentView: View {
                 defaultValue: 0.45,
                 hint: "Calligraphic taper and swell along the continuous route."
             )
-            if model.settings.landmarks.resolvedPortraitApproach == .landmarks {
             SliderRow(
                 title: "Connector width",
                 value: optionalLandmarkFloatBinding(\.portraitConnectorWidth, defaultValue: 0.42),
-                range: 0.12...1,
+                range: 0...1,
                 defaultValue: 0.42,
-                hint: "Relative width of bridges between different semantic parts. Same-part links, such as inner and outer mouth, keep the main width."
+                hint: "0 removes travel strokes and separates key features in every approach. Above 0, Landmarks uses this relative bridge width."
             )
-            }
             Toggle("Halo (glow)", isOn: portraitHaloBinding)
         }
         .disabled(!model.settings.landmarks.resolvedPortraitEnabled)
+
+        SectionHeader("Portrait presets")
+        HStack {
+            TextField("Name this look", text: $newPortraitPresetName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(savePortraitPreset)
+            Button("Save") { savePortraitPreset() }
+        }
+        ForEach(portraitPresetStore.presets) { preset in
+            HStack(spacing: 8) {
+                Button(preset.name) { applyPortraitPreset(preset) }
+                    .buttonStyle(.borderless)
+                    .help("Load only this Portrait configuration; leave layers, camera, and other effects unchanged.")
+                Spacer(minLength: 4)
+                Button { portraitPresetStore.save(name: preset.name, landmarks: model.settings.landmarks) } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .help("Replace this Portrait preset with the current look.")
+                Button { exportPortraitPreset(preset) } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .help("Export this Portrait preset as JSON.")
+                Button { portraitPresetStore.delete(preset) } label: {
+                    Image(systemName: "trash")
+                }
+                .help("Delete this saved Portrait preset.")
+            }
+            .buttonStyle(.borderless)
+        }
+        Button("Import Portrait…") { importPortraitPreset() }
+            .help("Import a SketchCam Portrait JSON preset without changing the rest of the app.")
+        .alert("Portrait preset", isPresented: Binding(
+            get: { portraitPresetError != nil },
+            set: { if !$0 { portraitPresetError = nil } }
+        )) {
+            Button("OK", role: .cancel) { portraitPresetError = nil }
+        } message: {
+            Text(portraitPresetError ?? "")
+        }
+    }
+
+    private func savePortraitPreset() {
+        portraitPresetStore.save(name: newPortraitPresetName, landmarks: model.settings.landmarks)
+        newPortraitPresetName = ""
+    }
+
+    private func applyPortraitPreset(_ preset: PortraitPreset) {
+        var landmarks = model.settings.landmarks
+        preset.configuration.apply(to: &landmarks)
+        model.settings.landmarks = landmarks
+    }
+
+    private func exportPortraitPreset(_ preset: PortraitPreset) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = preset.name + ".json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try portraitPresetStore.export(preset).write(to: url, options: .atomic)
+        } catch {
+            portraitPresetError = error.localizedDescription
+        }
+    }
+
+    private func importPortraitPreset() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            guard data.count < 1_000_000 else { throw PortraitPresetError.unsupportedFormat }
+            let preset = try portraitPresetStore.importPreset(data)
+            applyPortraitPreset(preset)
+        } catch {
+            portraitPresetError = error.localizedDescription
+        }
     }
 
     @ViewBuilder private var paperTab: some View {
@@ -5045,13 +5234,6 @@ struct ContentView: View {
         Binding(
             get: { model.settings.landmarks.resolvedPortraitSeed },
             set: { model.settings.landmarks.portraitSeed = $0 }
-        )
-    }
-
-    private var portraitSegmentsBinding: Binding<Int> {
-        Binding(
-            get: { model.settings.landmarks.resolvedPortraitSegments },
-            set: { model.settings.landmarks.portraitSegments = $0 }
         )
     }
 
@@ -8981,13 +9163,36 @@ private func workspaceOutputRect(container: CGSize, outputSize: CGSize, workspac
     )
 }
 
+/// Only this preview subtree observes trackpad navigation. The much larger
+/// ContentView and its controls redraw when the settled state is persisted.
+private struct WorkspaceNavigationGeometry<Content: View>: View {
+    @ObservedObject var navigation: WorkspaceNavigationState
+    let outputSize: CGSize
+    let workspace: CollageWorkspace?
+    @ViewBuilder let content: (CGRect, CollageWorkspace?) -> Content
+
+    var body: some View {
+        GeometryReader { geometry in
+            let displayWorkspace = navigation.applied(to: workspace)
+            let outputRect = workspaceOutputRect(
+                container: geometry.size,
+                outputSize: outputSize,
+                workspace: displayWorkspace
+            )
+            content(outputRect, displayWorkspace)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipShape(Rectangle())
+        }
+    }
+}
+
 private struct WorkspaceArtboardOverlay: View {
     @ObservedObject var model: SketchCamViewModel
+    @ObservedObject var navigation: WorkspaceNavigationState
     let outputSize: CGSize
 
     @State private var dragStarted = false
     @State private var dragOperation: DragOperation?
-    @State private var magnifyStartZoom: Double?
     @State private var suppressDragUntilMouseUp = false
 
     private enum CropHandle {
@@ -9034,10 +9239,11 @@ private struct WorkspaceArtboardOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            let outputRect = workspaceOutputRect(container: geo.size, outputSize: outputSize, workspace: model.settings.workspace)
+            let displayWorkspace = navigation.applied(to: model.settings.workspace)
+            let outputRect = workspaceOutputRect(container: geo.size, outputSize: outputSize, workspace: displayWorkspace)
             ZStack {
                 Canvas { context, _ in
-                    drawOverlay(context: &context, outputRect: outputRect)
+                    drawOverlay(context: &context, outputRect: outputRect, workspace: displayWorkspace)
                 }
                 ArtboardNavigationEventMonitor(
                     onScroll: { event in
@@ -9062,20 +9268,11 @@ private struct WorkspaceArtboardOverlay: View {
                         handleDragEnded()
                     }
             )
-            .simultaneousGesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        handleMagnifyChanged(value)
-                    }
-                    .onEnded { _ in
-                        magnifyStartZoom = nil
-                    }
-            )
         }
     }
 
-    private func drawOverlay(context: inout GraphicsContext, outputRect: CGRect) {
-        guard let workspace = model.settings.workspace else { return }
+    private func drawOverlay(context: inout GraphicsContext, outputRect: CGRect, workspace: CollageWorkspace?) {
+        guard let workspace else { return }
         var viewportPath = Path()
         viewportPath.addRect(outputRect)
         context.stroke(
@@ -9166,7 +9363,7 @@ private struct WorkspaceArtboardOverlay: View {
         if suppressDragUntilMouseUp { return }
         guard outputRect.width > 0,
               outputRect.height > 0,
-              let workspace = model.settings.workspace else { return }
+              let workspace = navigation.applied(to: model.settings.workspace) else { return }
         if workspace.activeTool == .pan {
             handlePan(value, outputRect: outputRect, workspace: workspace)
             return
@@ -9296,7 +9493,7 @@ private struct WorkspaceArtboardOverlay: View {
 
     private func handleMouseDown(_ event: ArtboardMouseEvent, outputRect: CGRect) {
         guard event.clickCount == 2,
-              let workspace = model.settings.workspace else { return }
+              let workspace = navigation.applied(to: model.settings.workspace) else { return }
         let world = worldPoint(view: event.location, viewport: workspace.outputViewport.frame, outputRect: outputRect)
 
         if event.modifiers.contains(.command), event.modifiers.contains(.option) {
@@ -9422,14 +9619,15 @@ private struct WorkspaceArtboardOverlay: View {
             x: (value.location.x - startView.x) / scale,
             y: (value.location.y - startView.y) / scale
         )
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.viewCenter = CGPoint(x: startCenter.x - delta.x, y: startCenter.y - delta.y)
-        }
+        model.updateWorkspaceNavigation(
+            zoom: workspace.zoom,
+            viewCenter: CGPoint(x: startCenter.x - delta.x, y: startCenter.y - delta.y)
+        )
     }
 
     private func handleScroll(_ event: ArtboardNavigationEvent, outputRect: CGRect) {
         guard outputRect.width > 0,
-              let workspace = model.settings.workspace else { return }
+              let workspace = navigation.applied(to: model.settings.workspace) else { return }
         if event.modifiers.contains(.option) {
             let factor = pow(1.0018, Double(event.deltaY))
             zoomWorkspace(by: factor, around: event.location, outputRect: outputRect, workspace: workspace)
@@ -9437,16 +9635,17 @@ private struct WorkspaceArtboardOverlay: View {
         }
         let scale = max(0.0001, outputRect.width / max(1, workspace.outputViewport.frame.width))
         let direction: CGFloat = model.settings.resolvedArtboardDragCanvasWithScroll ? -1 : 1
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.viewCenter = CGPoint(
+        model.updateWorkspaceNavigation(
+            zoom: workspace.zoom,
+            viewCenter: CGPoint(
                 x: workspace.viewCenter.x + direction * event.deltaX / scale,
                 y: workspace.viewCenter.y + direction * event.deltaY / scale
             )
-        }
+        )
     }
 
     private func handleMagnifyEvent(_ event: ArtboardMagnifyEvent, outputRect: CGRect) {
-        guard let workspace = model.settings.workspace else { return }
+        guard let workspace = navigation.applied(to: model.settings.workspace) else { return }
         zoomWorkspace(by: 1 + Double(event.magnification), around: event.location, outputRect: outputRect, workspace: workspace)
     }
 
@@ -9468,13 +9667,13 @@ private struct WorkspaceArtboardOverlay: View {
             zoomRatio: CGFloat(newZoom / oldZoom)
         )
         let worldAfter = worldPoint(view: viewPoint, viewport: viewport, outputRect: nextOutputRect)
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.zoom = newZoom
-            workspace.viewCenter = CGPoint(
+        model.updateWorkspaceNavigation(
+            zoom: newZoom,
+            viewCenter: CGPoint(
                 x: workspace.viewCenter.x + (worldBefore.x - worldAfter.x),
                 y: workspace.viewCenter.y + (worldBefore.y - worldAfter.y)
             )
-        }
+        )
     }
 
     private func outputRectFor(
@@ -9491,18 +9690,6 @@ private struct WorkspaceArtboardOverlay: View {
             width: width,
             height: height
         )
-    }
-
-    private func handleMagnifyChanged(_ value: CGFloat) {
-        guard let workspace = model.settings.workspace else { return }
-        if magnifyStartZoom == nil {
-            magnifyStartZoom = workspace.zoom
-        }
-        let base = magnifyStartZoom ?? workspace.zoom
-        let zoom = max(0.05, min(16, base * Double(value)))
-        model.updateWorkspaceLiveEdit { workspace in
-            workspace.zoom = zoom
-        }
     }
 
     private func hitScaleHandle(at view: CGPoint, workspace: CollageWorkspace, outputRect: CGRect) -> (frame: WorkspaceFrame, handle: CropHandle)? {
@@ -10450,6 +10637,7 @@ private struct SourcePreviewImage: View {
     @ObservedObject var previews: SourcePreviewReadouts
     let source: SketchCamViewModel.FrameSource
     let active: Bool
+    var mirrored = false
 
     var body: some View {
         ZStack {
@@ -10460,6 +10648,7 @@ private struct SourcePreviewImage: View {
                     .resizable()
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
+                    .scaleEffect(x: mirrored ? -1 : 1, y: 1)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 VStack {
                     Spacer()

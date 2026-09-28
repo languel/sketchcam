@@ -23,6 +23,43 @@ final class SourcePreviewReadouts: ObservableObject {
     @Published var movieSize: CGSize = .zero
 }
 
+/// Navigation is display-only. Keeping it out of ProcessingSettings while a
+/// gesture is active avoids rebuilding every control and copying the full
+/// compositor configuration for each trackpad event.
+struct WorkspaceNavigationSnapshot: Equatable {
+    var zoom: Double
+    var viewCenter: CGPoint
+}
+
+final class WorkspaceNavigationState: ObservableObject {
+    @Published private(set) var snapshot = WorkspaceNavigationSnapshot(zoom: 1, viewCenter: .zero)
+    private(set) var hasPendingEdit = false
+
+    func sync(from workspace: CollageWorkspace?) {
+        guard !hasPendingEdit, let workspace else { return }
+        let next = WorkspaceNavigationSnapshot(zoom: workspace.zoom, viewCenter: workspace.viewCenter)
+        if snapshot != next { snapshot = next }
+    }
+
+    @discardableResult
+    func update(zoom: Double, viewCenter: CGPoint) -> Bool {
+        let next = WorkspaceNavigationSnapshot(zoom: zoom, viewCenter: viewCenter)
+        guard next != snapshot else { return false }
+        hasPendingEdit = true
+        snapshot = next
+        return true
+    }
+
+    func applied(to workspace: CollageWorkspace?) -> CollageWorkspace? {
+        guard var workspace else { return nil }
+        workspace.zoom = snapshot.zoom
+        workspace.viewCenter = snapshot.viewCenter
+        return workspace
+    }
+
+    func finishEdit() { hasPendingEdit = false }
+}
+
 final class SketchCamViewModel: ObservableObject {
     enum FrameSource: String, CaseIterable, Identifiable, Codable {
         case camera
@@ -81,9 +118,11 @@ final class SketchCamViewModel: ObservableObject {
             persistSession()
         }
     }
+    let workspaceNavigation = WorkspaceNavigationState()
     @Published var settings = ProcessingSettings() {
         didSet {
             store.settings = settings
+            workspaceNavigation.sync(from: settings.workspace)
             scheduleSessionSave()
         }
     }
@@ -278,6 +317,43 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     private var pendingSessionSave: DispatchWorkItem?
+    private var pendingNavigationCommit: DispatchWorkItem?
+
+    func updateWorkspaceNavigation(zoom: Double, viewCenter: CGPoint) {
+        ensureWorkspace()
+        guard settings.workspace != nil else { return }
+        guard workspaceNavigation.update(zoom: max(0.05, min(16, zoom)), viewCenter: viewCenter) else { return }
+        pendingNavigationCommit?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.commitWorkspaceNavigation() }
+        pendingNavigationCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    func zoomWorkspaceNavigation(by factor: Double) {
+        ensureWorkspace()
+        guard let workspace = workspaceNavigation.applied(to: settings.workspace) else { return }
+        updateWorkspaceNavigation(zoom: workspace.zoom * factor, viewCenter: workspace.viewCenter)
+    }
+
+    func resetWorkspaceNavigation() {
+        ensureWorkspace()
+        guard let workspace = settings.workspace else { return }
+        updateWorkspaceNavigation(
+            zoom: 1,
+            viewCenter: CGPoint(x: workspace.outputViewport.frame.midX, y: workspace.outputViewport.frame.midY)
+        )
+    }
+
+    private func commitWorkspaceNavigation() {
+        pendingNavigationCommit = nil
+        guard workspaceNavigation.hasPendingEdit, var workspace = settings.workspace else { return }
+        let navigation = workspaceNavigation.snapshot
+        workspaceNavigation.finishEdit()
+        guard workspace.zoom != navigation.zoom || workspace.viewCenter != navigation.viewCenter else { return }
+        workspace.zoom = navigation.zoom
+        workspace.viewCenter = navigation.viewCenter
+        settings.workspace = workspace
+    }
 
     /// Pan/zoom and sliders publish many settings snapshots per second. Keep
     /// the processing mirror immediate but coalesce the expensive full JSON
@@ -1095,9 +1171,7 @@ final class SketchCamViewModel: ObservableObject {
                 // enabling that one Portrait control produces a real line
                 // contour without requiring a separate Marks toggle.
                 let portraitOutlineWanted = analysisEnabled && settings.landmarks.resolvedPortraitEnabled
-                    && settings.landmarks.resolvedPortraitApproach != .gesture
                     && settings.landmarks.resolvedPortraitOutlineEnabled
-                    && !settings.landmarks.resolvedPortraitPoseBodyEnabled
                 let contourWanted = analysisEnabled && settings.landmarks.enabled
                     && (detectionSettings.landmarks.trackContour || portraitOutlineWanted)
                 // v2: a Person Key effect anywhere in the layer stack needs the matte.
@@ -1206,6 +1280,7 @@ final class SketchCamViewModel: ObservableObject {
                         detection: routedDetection,
                         settings: routedSettings,
                         outputSize: outputFormat.size,
+                        sourceFrame: originalPixelBuffer,
                         allowedRegions: Set(LandmarkRegion.allCases.filter {
                             settings.landmarks.tracks($0) || ($0 == .contour && portraitOutlineWanted)
                         })
@@ -1243,7 +1318,9 @@ final class SketchCamViewModel: ObservableObject {
                         let compositor = self.drawingCompositors[node.id] ?? LandmarkOverlayCompositor(mode: .drawing(algorithm))
                         self.drawingCompositors[node.id] = compositor
                         if let image = compositor.overlay(detection: detection, settings: nodeSettings,
-                                                          outputSize: outputFormat.size, allowedRegions: allowed) {
+                                                          outputSize: outputFormat.size,
+                                                          sourceFrame: originalPixelBuffer,
+                                                          allowedRegions: allowed) {
                             drawingLayers[node.id] = image
                         }
                     }
