@@ -184,6 +184,7 @@ final class SketchCamViewModel: ObservableObject {
     private let motionInkLiveStroke = InkLiveStroke()
     private var motionPath: InkEditorPath?
     private var motionAction: MotionAction?
+    private var motionRuleID: UUID?
     private var motionFrameID: UUID?
     private var motionStart: TimeInterval = 0
     private let canvasActions = CanvasActionHistory()
@@ -248,6 +249,9 @@ final class SketchCamViewModel: ObservableObject {
 
         systemPointer.onCanvasEvent = { [weak self] action, point in
             self?.handleMotionCanvas(action: action, point: point)
+        }
+        systemPointer.onCanvasPaint = { [weak self] command in
+            self?.handleMotionPaint(command)
         }
 
         captureService.onConfigurationChanged = { [weak self] size in
@@ -602,16 +606,11 @@ final class SketchCamViewModel: ObservableObject {
     /// channel and persisted undo ledger. Gesture strokes own a separate live
     /// channel so they cannot overwrite a physical mouse stroke's identity.
     private func handleMotionCanvas(action: MotionAction?, point: CGPoint?) {
+        if motionRuleID != nil { finishMotionPath() }
         let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
         let frameID = activeInkFrameID(graph: graph, settings: settings)
         if motionAction != action || motionFrameID != frameID || point == nil || (motionPath?.points.count ?? 0) >= 8192 {
-            if let path = motionPath {
-                motionInkLiveStroke.end()
-                var record = InkStrokeRecord.legacy(path: path, isEditable: false)
-                record.frameID = motionFrameID
-                commitImmediateCanvasStroke(record)
-            }
-            motionPath = nil; motionAction = nil
+            finishMotionPath()
         }
         guard let action, action == .draw || action == .erase, let point else { return }
         guard let frameID,
@@ -636,6 +635,66 @@ final class SketchCamViewModel: ObservableObject {
             inkKind: path.inkKind ?? .black, width: path.width ?? 0.5, flow: path.flow ?? 0.9,
             brushInk: path.brushInk ?? 0, color: path.color ?? .ink, smoothBoost: false,
             destructive: false, wetOnly: false, charge: 1))
+    }
+
+    private func finishMotionPath() {
+        if let path = motionPath {
+            motionInkLiveStroke.end()
+            if path.points.count >= 2 {
+                var record = InkStrokeRecord.legacy(path: path, isEditable: false)
+                record.frameID = motionFrameID
+                commitImmediateCanvasStroke(record)
+            }
+        }
+        motionPath = nil
+        motionAction = nil
+        motionRuleID = nil
+        motionFrameID = nil
+    }
+
+    private func handleMotionPaint(_ command: MotionPaintCommand?) {
+        guard let command else { finishMotionPath(); return }
+        let graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        guard let frameID = activeInkFrameID(graph: graph, settings: settings),
+              let entry = inkLayerEntries(graph: graph).first(where: { $0.layer.id == frameID }),
+              entry.layer.visible else { finishMotionPath(); return }
+        let l = (entry.node.inkConfig ?? InkFrameConfig(landmarks: settings.landmarks))
+            .applying(to: settings).landmarks
+        let mode: InkBrushMode = command.mode == .pen ? .pen : .brush
+        let width = command.parameters[command.mode == .pen ? .penSize : .washSize]
+            ?? (command.mode == .pen ? l.inkWidth : (l.inkWashWidth ?? 0.5))
+        let flow = command.parameters[.flow] ?? l.inkFlow
+        let brushInk = command.intent == .erase ? Float(1) : (command.parameters[.brushInk] ?? (l.inkBrushInk ?? 0))
+        let kind: InkKind = command.intent == .erase ? .white : (l.inkKind ?? .black)
+        let changed = motionRuleID != command.ruleID || motionFrameID != frameID
+            || motionPath?.brushMode != mode || motionPath?.inkKind != kind
+            || abs((motionPath?.width ?? width) - width) > 0.035
+            || abs((motionPath?.flow ?? flow) - flow) > 0.05
+            || abs((motionPath?.brushInk ?? brushInk) - brushInk) > 0.05
+            || (motionPath?.points.count ?? 0) >= 8192
+        let carry = changed ? motionPath?.points.last : nil
+        if changed { finishMotionPath() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if motionPath == nil {
+            motionStart = now
+            motionRuleID = command.ruleID
+            motionFrameID = frameID
+            motionPath = InkEditorPath(points: carry.map { [$0] } ?? [],
+                sampleTimes: carry == nil ? [] : [0],
+                strokeSeed: UInt64.random(in: 0...UInt64.max),
+                brushMode: mode, inkKind: kind, width: width, flow: flow,
+                bleed: l.inkBleed, dry: l.inkDry,
+                colorSeparation: l.inkColorSeparation, brushInk: brushInk, color: l.inkColor)
+        }
+        motionPath?.points.append(command.point)
+        motionPath?.sampleTimes?.append(now - motionStart)
+        guard let path = motionPath else { return }
+        motionInkLiveStroke.update(InkLiveStrokeSample(id: path.id, seed: path.strokeSeed ?? 0,
+            point: command.point, time: now - motionStart, brushMode: mode,
+            inkKind: kind, width: width, flow: flow, brushInk: brushInk,
+            color: path.color ?? .ink, smoothBoost: false,
+            destructive: command.intent == .erase && mode == .brush,
+            wetOnly: false, charge: 1))
     }
 
     func prepareInkStrokeRecordsForCurrentSettings() {

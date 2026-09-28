@@ -99,7 +99,41 @@ struct SystemInputMappingPanel: View {
                     valueSlider("Pinch", value: $pointer.mapping.pinchThreshold, range: 0.15...0.65, defaultValue: 0.35)
                 }
 
+                if pointer.mapping.destination == .canvas {
+                section("CUSTOM MAP STACK") {
+                    Toggle("Use custom maps", isOn: Binding(
+                        get: { pointer.mapping.customGestureMaps != nil },
+                        set: { pointer.mapping.customGestureMaps = $0 ? MotionGestureMap.examples : nil }
+                    ))
+                    .help("Ordered active actions and passive joint controls. Editing disarms motion control.")
+                    if let maps = pointer.mapping.customGestureMaps {
+                        Text("First matching active rule paints. Passive rules read either hand and can modify that stroke; later parameter rules win.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        ForEach(Array(maps.enumerated()), id: \.element.id) { index, rule in
+                            MotionGestureMapEditor(map: mapBinding(rule.id),
+                                moveUp: { moveMap(index, by: -1) },
+                                moveDown: { moveMap(index, by: 1) },
+                                remove: { pointer.mapping.customGestureMaps?.removeAll { $0.id == rule.id } },
+                                canMoveUp: index > 0, canMoveDown: index < maps.count - 1)
+                        }
+                        HStack {
+                            Button("Add action") {
+                                pointer.mapping.customGestureMaps?.append(.action(.right, .pinch, .pen, .draw))
+                            }
+                            Button("Add parameter") {
+                                pointer.mapping.customGestureMaps?.append(.parameter())
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                }
+
                 section("GESTURE → ACTION") {
+                    if pointer.mapping.destination == .canvas && pointer.mapping.customGestureMaps != nil {
+                        Text("Legacy gesture preset is inactive while the custom stack is on.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else {
                     if let rules = pointer.mapping.gestureRules {
                         ForEach(rules) { rule in
                             Picker(rule.gesture.title, selection: actionBinding(rule.gesture)) {
@@ -123,6 +157,7 @@ struct SystemInputMappingPanel: View {
                     }
                     Button("Reset gesture preset") { pointer.usePreset(pointer.mapping.destination ?? .computer) }
                         .help("Canvas: pinch draws, fist dissolves ink. Computer: pinch clicks/drags, fist right-clicks. Open palm has no action until assigned.")
+                    }
                     Text("Escape disarms. Lost tracking releases held actions.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
@@ -134,7 +169,9 @@ struct SystemInputMappingPanel: View {
                         liveValue("Pinching", pointer.live.pinching ? "yes" : "no")
                     }
                     Text(pointer.mapping.destination == .canvas
-                         ? "Gestures draw into the selected Ink frame, or the first enabled Ink frame. The camera region maps across that frame. Fist dissolves ink; it does not delete layers."
+                         ? (pointer.mapping.customGestureMaps == nil
+                            ? "Gestures draw into the selected Ink frame, or the first enabled Ink frame. Fist dissolves ink; it does not delete layers."
+                            : "The first matching active map paints in the visible Ink frame. Passive maps can control brush parameters without taking over the stroke.")
                          : pointer.mapping.driveMode == .always
                          ? "Always continuously maps the selected landmark to the main display and can override physical mouse movement."
                          : "The physical mouse is left alone until a gesture engages. The selected landmark then positions the pointer; its assigned action controls clicking or other input.")
@@ -155,6 +192,23 @@ struct SystemInputMappingPanel: View {
                     guard let i = pointer.mapping.gestureRules?.firstIndex(where: { $0.gesture == gesture }) else { return }
                     pointer.mapping.gestureRules?[i].action = action
                 })
+    }
+
+    private func mapBinding(_ id: UUID) -> Binding<MotionGestureMap> {
+        Binding(get: {
+            pointer.mapping.customGestureMaps?.first(where: { $0.id == id })
+                ?? .action(.right, .pinch, .pen, .draw)
+        }, set: { value in
+            guard let index = pointer.mapping.customGestureMaps?.firstIndex(where: { $0.id == id }) else { return }
+            pointer.mapping.customGestureMaps?[index] = value
+        })
+    }
+
+    private func moveMap(_ index: Int, by offset: Int) {
+        guard var maps = pointer.mapping.customGestureMaps,
+              maps.indices.contains(index), maps.indices.contains(index + offset) else { return }
+        maps.swapAt(index, index + offset)
+        pointer.mapping.customGestureMaps = maps
     }
 
     private func shortcutBinding(_ gesture: HandGesture) -> Binding<MotionShortcut> {
@@ -191,6 +245,87 @@ struct SystemInputMappingPanel: View {
             Text(title).font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MotionGestureMapEditor: View {
+    @Binding var map: MotionGestureMap
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let remove: () -> Void
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Toggle("", isOn: $map.enabled).labelsHidden()
+                TextField("Map name", text: $map.name).textFieldStyle(.roundedBorder)
+                Button(action: moveUp) { Image(systemName: "arrow.up") }.disabled(!canMoveUp)
+                Button(action: moveDown) { Image(systemName: "arrow.down") }.disabled(!canMoveDown)
+                Button(role: .destructive, action: remove) { Image(systemName: "trash") }
+            }
+            .controlSize(.small)
+            Picker("Type", selection: $map.kind) {
+                ForEach(MotionMapKind.allCases) { Text($0.title).tag($0) }
+            }
+            Picker(map.kind == .action ? "Painting hand" : "While hand", selection: $map.hand) {
+                ForEach(MediaPipeHandSide.allCases) { Text($0.title).tag($0) }
+            }
+            Picker("Gesture", selection: $map.gesture) {
+                ForEach(MotionGestureGate.allCases) { Text($0.title).tag($0) }
+            }
+            if map.kind == .action {
+                HStack {
+                    Picker("Tool", selection: $map.mode) {
+                        ForEach(MotionPaintMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker("Action", selection: $map.intent) {
+                        ForEach(MotionPaintIntent.allCases) { Text($0.title).tag($0) }
+                    }
+                }
+            } else {
+                Picker("Measure", selection: $map.metric) {
+                    ForEach(MotionJointMetric.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: map.metric) { _, metric in
+                    map.inputLow = metric == .angle ? 0 : 0.2
+                    map.inputHigh = metric == .angle ? 180 : 1.2
+                }
+                HStack {
+                    featurePicker("Point A", feature: $map.first)
+                    if map.metric == .angle { featurePicker("Vertex", feature: $map.vertex) }
+                    featurePicker("Point B", feature: $map.last)
+                }
+                Picker("Controls", selection: $map.target) {
+                    ForEach(MotionParameterTarget.allCases) { Text($0.title).tag($0) }
+                }
+                HStack {
+                    Text("Input").frame(width: 44, alignment: .leading)
+                    TextField("Low", value: $map.inputLow, format: .number.precision(.fractionLength(2)))
+                    Text("→")
+                    TextField("High", value: $map.inputHigh, format: .number.precision(.fractionLength(2)))
+                }
+                HStack {
+                    Text("Output").frame(width: 44, alignment: .leading)
+                    TextField("Low", value: $map.outputLow, format: .number.precision(.fractionLength(2)))
+                    Text("→")
+                    TextField("High", value: $map.outputHigh, format: .number.precision(.fractionLength(2)))
+                }
+                .help("Values are clamped to the target parameter's range. Reverse the output values to invert control.")
+            }
+        }
+        .font(.caption)
+        .padding(7)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.055)))
+    }
+
+    private func featurePicker(_ title: String, feature: Binding<MediaPipeHandFeature>) -> some View {
+        Picker(title, selection: feature) {
+            ForEach(MediaPipeHandFeature.allCases) { Text($0.title).tag($0) }
+        }
+        .labelsHidden()
+        .help(title)
     }
 }
 

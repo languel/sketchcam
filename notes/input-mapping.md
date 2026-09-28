@@ -4,6 +4,22 @@ Input Map maps live hand motion to either the SketchCam canvas or macOS system
 events. The original one-feature pointer mode remains available; the gesture
 editor adds a small set of natural hand actions.
 
+Canvas also has a **Custom map stack**. Enable it to start with editable
+left-pinch pen draw, right-pinch wash draw, right-fist wash erase, and left-fist
+pen erase actions, plus a passive left pinky-tip/thumb-tip distance control for
+wash size while the right hand pinches. Add, rename, reorder, disable, or remove
+maps independently. The first matching active action owns the stroke; later
+matching passive controls can override pen size, wash size, flow, or brush ink.
+Active actions and passive controls may observe different hands. Distance on
+one hand is divided by its palm length; cross-hand distance uses normalized
+camera coordinates. Three-joint angles are degrees. Input and output ranges
+are editable, including reversed output ranges. Changes release any active
+stroke and require re-arming.
+Parameter changes during a stroke are captured as short adjoining Ink segments
+when the value moves enough to affect the rendered mark; each segment keeps its
+own recorded brush settings. The selected homunculus landmark supplies the
+pointer position for both hands in the custom stack.
+
 ## Current Behavior
 
 - The visual picker exposes the 21 MediaPipe-style landmarks for each hand,
@@ -95,7 +111,12 @@ which face/body/hand regions Drawing tracks.
    arming.
 5. For drawing, choose **Canvas**, show/select a visible Ink frame, and arm.
    Pinch draws; fist washes/dissolves; opening the hand ends the stroke.
-6. Confirm tracking loss and Escape release/disarm. Test **Always** only when
+6. To try custom painting, disarm, enable **Custom map stack**, then arm again.
+   Pinch-drag left for pen, pinch-drag right for wash, and fist-drag either hand
+   for its corresponding erase action. While right-pinch painting, open or close
+   the left pinky/thumb span to vary wash size. Reordering maps changes which
+   active rule wins when both hands match at once.
+7. Confirm tracking loss and Escape release/disarm. Test **Always** only when
    continuous pointer takeover is intended.
 
 For later iterations, use `./script/build_and_run.sh` after code changes and
@@ -103,21 +124,23 @@ For later iterations, use `./script/build_and_run.sh` after code changes and
 System Settings automatically; use Request access explicitly, then Refresh
 after approving.
 
-## Known First-Slice Limits
+## Current Limits
 
-- One selected pointer landmark, one selected hand, and three built-in gesture
-  classes; no multi-hand priority graph or independently selected gesture hand
-  yet.
+- The custom Canvas stack supports either hand and arbitrary ordered maps, but
+  only one active paint stroke owns the live Ink channel at a time. A second
+  hand may modulate it passively; simultaneous two-handed drawing is deferred.
+- Gesture classes are still pinch, fist, and open palm. Joint measurements can
+  use any of the 21 tracked joints on either hand.
 - Main display only; no display selector or virtual-desktop calibration.
 - Hands only; the picker does not yet expose body/face feature groups.
 - Keyboard actions are a short fixed list; no arbitrary text entry, zones,
   pressure, OSC, multitouch, or configurable desktop/display calibration.
-- Pinch always uses thumb/index on the selected feature's hand; gesture source
-  and pointer source cannot yet be chosen independently.
+- Pinch recognition always uses thumb/index on its action hand. All active
+  custom maps share the selected pointer landmark index; per-map pointer
+  landmarks are not yet exposed.
 - Live system-event behavior still requires a manual smoke test after signing and
   Accessibility approval.
 
-The next architectural step is a collection of typed feature → event bindings
-with explicit sources, transforms/gates, destinations, priority, and coexistence
-policy. The current pointer engine should become one destination adapter rather
-than the editor's entire data model.
+The custom stack is currently a Canvas painting adapter. The Computer preset
+still uses the original fixed-action editor; generic desktop destinations,
+arbitrary expression trees, and simultaneous live strokes remain future work.

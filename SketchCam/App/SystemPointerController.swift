@@ -91,6 +91,7 @@ struct SystemPointerMapping: Codable, Equatable {
     var destination: MotionControlDestination?
     var gestureRules: [GestureRule]?
     var gestureDwell: Double?
+    var customGestureMaps: [MotionGestureMap]?
     var pointer = MediaPipeHandFeature.rightIndexTip
     var driveMode = SystemPointerDriveMode.whilePinching
     var clickWithPinch = true
@@ -121,6 +122,7 @@ enum SystemPointerEvent: Equatable {
     case scroll(Int32)
     case shortcut(MotionShortcut)
     case canvas(MotionAction, CGPoint)
+    case canvasPaint(MotionPaintCommand)
     case canvasEnd
     case disarm
 }
@@ -273,7 +275,9 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     private let stateLock = NSLock()
     private let engine = SystemPointerEngine()
     private let gestureEngine = GestureMappingEngine()
+    private let canvasStackEngine = CanvasGestureStackEngine()
     var onCanvasEvent: ((MotionAction?, CGPoint?) -> Void)?
+    var onCanvasPaint: ((MotionPaintCommand?) -> Void)?
     private var localEscapeMonitor: Any?
     private var globalEscapeMonitor: Any?
     private var armGeneration: UInt64 = 0
@@ -353,9 +357,10 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
         stateLock.withLock {
             runtimeArmed = false
             armGeneration &+= 1
-            post(engine.stop() + gestureEngine.stop())
+            post(engine.stop() + gestureEngine.stop() + canvasStackEngine.stop())
         }
         onCanvasEvent?(nil, nil)
+        onCanvasPaint?(nil)
         isArmed = false
         live = SystemPointerLiveState()
     }
@@ -395,7 +400,11 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
         let result: (events: [SystemPointerEvent], live: SystemPointerLiveState, shouldPublish: Bool)? = stateLock.withLock {
             guard runtimeArmed else { return nil }
             lastFrameAt = now
-            let result = runtimeMapping.gestureRules != nil ? gestureEngine.update(
+            let result = runtimeMapping.destination == .canvas && runtimeMapping.customGestureMaps != nil
+                ? canvasStackEngine.update(
+                    detection: detection, mapping: runtimeMapping,
+                    screen: CGDisplayBounds(CGMainDisplayID()), mirrored: mirrored, now: now
+                ) : runtimeMapping.gestureRules != nil ? gestureEngine.update(
                 detection: detection, mapping: runtimeMapping,
                 screen: CGDisplayBounds(CGMainDisplayID()), mirrored: mirrored, now: now
             ) : engine.update(
@@ -428,6 +437,13 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             let type: CGEventType
             let point: CGPoint
             switch event {
+            case .canvasPaint(let command):
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.stateLock.withLock({ self.runtimeArmed && self.armGeneration == generation }) else { return }
+                    self.onCanvasPaint?(command)
+                }
+                continue
             case .canvas(let action, let p):
                 let generation = armGeneration
                 DispatchQueue.main.async { [weak self] in
@@ -440,6 +456,7 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.stateLock.withLock({ self.armGeneration == generation }) else { return }
                     self.onCanvasEvent?(nil, nil)
+                    self.onCanvasPaint?(nil)
                 }
                 continue
             case .disarm:
