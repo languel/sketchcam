@@ -6,6 +6,11 @@ import SketchCamCore
 /// the same small set of template curves is drawn on every frame.
 enum AaronPortrait {
     static func paths(groups: [MappedGroup], settings: LandmarkSettings) -> [[CGPoint]] {
+        geometry(groups: groups, settings: settings).paths
+    }
+
+    static func geometry(groups: [MappedGroup], settings: LandmarkSettings)
+        -> (paths: [[CGPoint]], hair: PortraitPathBuilder.Component?) {
         func points(_ region: LandmarkRegion) -> [CGPoint] {
             groups.filter { $0.region == region }.flatMap(\.points)
                 .filter { $0.x.isFinite && $0.y.isFinite }
@@ -19,7 +24,7 @@ enum AaronPortrait {
         let leftEye = points(.leftEye), rightEye = points(.rightEye)
         let left = center(leftEye) ?? center(points(.leftBrow)) ?? jaw.first
         let right = center(rightEye) ?? center(points(.rightBrow)) ?? jaw.last
-        guard let left, let right else { return [] }
+        guard let left, let right else { return ([], nil) }
         let eyeSpan = max(1, hypot(right.x - left.x, right.y - left.y))
         let origin = CGPoint(x: (left.x + right.x) * 0.5, y: (left.y + right.y) * 0.5)
         let across = CGPoint(x: (right.x - left.x) / eyeSpan, y: (right.y - left.y) / eyeSpan)
@@ -45,6 +50,20 @@ enum AaronPortrait {
             let observed = points(region).map(local)
             guard !observed.isEmpty else { return nil }
             return observed.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+        }
+        func featurePoints(_ region: LandmarkRegion, part: String) -> [CGPoint] {
+            groups.filter { $0.region == region }.flatMap { group in
+                group.points.indices.compactMap { index -> CGPoint? in
+                    let label = group.labels.indices.contains(index) ? group.labels[index] : nil
+                    guard group.labels.isEmpty || label?.hasPrefix(part) == true
+                        || label?.contains(".\(part)") == true else { return nil }
+                    return local(group.points[index])
+                }
+            }
+        }
+        func height(_ points: [CGPoint]) -> CGFloat? {
+            guard let low = points.map(\.y).min(), let high = points.map(\.y).max() else { return nil }
+            return high - low
         }
         func shoulder(_ region: LandmarkRegion, label: String) -> CGPoint? {
             guard let group = groups.first(where: { $0.region == region }) else { return nil }
@@ -73,12 +92,14 @@ enum AaronPortrait {
         let leftWidth = width * (1 + yaw * 0.30)
         let rightWidth = width * (1 - yaw * 0.30)
         let browLift = (random.unit() - 0.5) * 0.16 * variation
-        let eyeOpenL = clamp((measuredBox(.leftEye)?.height ?? 0.12) * expression, 0.025, 0.23)
-        let eyeOpenR = clamp((measuredBox(.rightEye)?.height ?? 0.12) * expression, 0.025, 0.23)
+        let eyeOpenL = clamp(0.12 + ((height(featurePoints(.leftEye, part: "eL")) ?? 0.07) * 1.7 - 0.12) * expression, 0.002, 0.48)
+        let eyeOpenR = clamp(0.12 + ((height(featurePoints(.rightEye, part: "eR")) ?? 0.07) * 1.7 - 0.12) * expression, 0.002, 0.48)
         let mouthObserved = measuredBox(.mouth)
-        let mouthOpen = clamp((mouthObserved?.height ?? 0.10) * expression * 0.62, 0.018, 0.30)
-        let mouthWidth = clamp(adjusted(0.30 + random.unit() * 0.12 * variation,
-                                         mouthObserved.map { $0.width * 0.5 }), 0.20, 0.54)
+        let innerOpening = height(featurePoints(.mouth, part: "iL")) ?? mouthObserved?.height ?? 0.08
+        let mouthOpen = clamp(0.08 + (innerOpening * 1.3 + 0.015 - 0.08) * expression, 0.008, 0.72)
+        let authoredWidth = 0.30 + random.unit() * 0.12 * variation
+        let mouthWidth = clamp(authoredWidth + ((mouthObserved?.width ?? authoredWidth * 2) * 0.5 - authoredWidth)
+                               * min(1, expression * 0.85), 0.14, 0.65)
         let mouthY = clamp(adjusted(0.94, center(points(.mouth)).map { local($0).y }), 0.75, 1.15)
         let noseY = clamp(adjusted(0.52, noseObserved?.y), 0.38, 0.72)
         let noseX = yaw * 0.16
@@ -103,6 +124,22 @@ enum AaronPortrait {
                 + quad(b, CGPoint(x: x, y: openness * 0.88), a).dropFirst()
         }
         let leftX: CGFloat = -0.42, rightX: CGFloat = 0.42
+        func pupil(_ region: LandmarkRegion, eyePart: String, pupilPart: String,
+                   x: CGFloat, opening: CGFloat) -> [CGPoint] {
+            let eyeCenter = center(featurePoints(region, part: eyePart))
+            let observed = groups.filter { $0.region == region }.flatMap { group in
+                group.points.indices.compactMap { index -> CGPoint? in
+                    guard group.labels.indices.contains(index), let label = group.labels[index],
+                          label.hasPrefix(pupilPart) || label.contains(".\(pupilPart)") else { return nil }
+                    return local(group.points[index])
+                }
+            }.first
+            let dx = observed.flatMap { p in eyeCenter.map { p.x - $0.x } } ?? yaw * 0.04
+            let dy = observed.flatMap { p in eyeCenter.map { p.y - $0.y } } ?? 0
+            return ellipse(CGPoint(x: x + clamp(dx * expression, -0.13, 0.13),
+                                   y: clamp(dy * expression, -opening * 0.2, opening * 0.2)),
+                           min(0.055, opening * 0.6), min(0.075, opening * 0.4))
+        }
         let forehead = -0.96 - random.unit() * 0.16 * variation
         let face = [
             CGPoint(x: -leftWidth * 0.76, y: -0.36),
@@ -122,10 +159,10 @@ enum AaronPortrait {
         ]
         func ear(_ side: CGFloat, _ halfWidth: CGFloat) -> [CGPoint] {
             let x = side * halfWidth * 0.98
-            return [CGPoint(x: x, y: 0.08), CGPoint(x: x + side * 0.10, y: -0.01),
-                    CGPoint(x: x + side * 0.15, y: 0.25),
-                    CGPoint(x: x + side * 0.08, y: 0.41),
-                    CGPoint(x: x + side * 0.05, y: 0.33), CGPoint(x: x, y: 0.08)]
+            return [CGPoint(x: x, y: 0.08), CGPoint(x: x + side * 0.05, y: 0.07),
+                    CGPoint(x: x + side * 0.08, y: 0.20),
+                    CGPoint(x: x + side * 0.04, y: 0.32),
+                    CGPoint(x: x, y: 0.30), CGPoint(x: x, y: 0.08)]
         }
         let browL = quad(CGPoint(x: -0.70, y: -0.30 + browLift),
                          CGPoint(x: -0.43, y: -0.46 + browLift),
@@ -139,8 +176,14 @@ enum AaronPortrait {
             + quad(CGPoint(x: noseX - 0.13, y: noseY),
                    CGPoint(x: noseX + 0.06, y: noseY + 0.12),
                    CGPoint(x: noseX + 0.18, y: noseY + 0.01)).dropFirst()
-        let mouthLeft = CGPoint(x: -mouthWidth + yaw * 0.08, y: mouthY)
-        let mouthRight = CGPoint(x: mouthWidth + yaw * 0.08, y: mouthY)
+        let outerLip = featurePoints(.mouth, part: "oL")
+        let lipCenterY = center(outerLip)?.y ?? mouthY
+        let leftCornerY = outerLip.min { $0.x < $1.x }?.y ?? lipCenterY
+        let rightCornerY = outerLip.max { $0.x < $1.x }?.y ?? lipCenterY
+        let mouthLeft = CGPoint(x: -mouthWidth + yaw * 0.08,
+                                y: mouthY + clamp((leftCornerY - lipCenterY) * expression, -0.18, 0.18))
+        let mouthRight = CGPoint(x: mouthWidth + yaw * 0.08,
+                                 y: mouthY + clamp((rightCornerY - lipCenterY) * expression, -0.18, 0.18))
         let mouth = quad(mouthLeft, CGPoint(x: yaw * 0.08, y: mouthY - mouthOpen), mouthRight)
             + quad(mouthRight, CGPoint(x: yaw * 0.08, y: mouthY + mouthOpen), mouthLeft).dropFirst()
         let innerMouth = quad(CGPoint(x: mouthLeft.x * 0.78, y: mouthY),
@@ -179,21 +222,26 @@ enum AaronPortrait {
             : authoredBody
         var curves = [body, face,
                       browL, browR, eye(leftX, eyeOpenL), eye(rightX, eyeOpenR),
-                      ellipse(CGPoint(x: leftX + yaw * 0.04, y: 0), 0.055, 0.075),
-                      ellipse(CGPoint(x: rightX + yaw * 0.04, y: 0), 0.055, 0.075),
+                      pupil(.leftEye, eyePart: "eL", pupilPart: "pL", x: leftX, opening: eyeOpenL),
+                      pupil(.rightEye, eyePart: "eR", pupilPart: "pR", x: rightX, opening: eyeOpenR),
                       nose, mouthPath]
         if settings.resolvedPortraitEarsEnabled {
             curves.append(contentsOf: [ear(-1, leftWidth), ear(1, rightWidth)])
         }
-        if settings.resolvedPortraitHairEnabled {
-            let overhang = CGFloat(settings.resolvedPortraitHairExpansion)
-            let hair = quad(CGPoint(x: -leftWidth * (0.73 + overhang * 0.06), y: -0.55),
-                            CGPoint(x: 0, y: forehead - 0.24 - overhang * 0.35),
-                            CGPoint(x: rightWidth * (0.79 + overhang * 0.06), y: -0.50), steps: 16)
-            curves.append(hair)
-        }
-        return curves.map { curve in
+        var result = curves.map { curve in
             DrawingSupport.curvePoints(curve.map(world), fit: .catmull, samplesPerSegment: 3)
         }
+        let templateJaw = Array(face[6...12].reversed()).map(world)
+        let hairGroups = groups.filter { $0.region != .jaw } + [MappedGroup(region: .jaw, points: templateJaw)]
+        let hair = settings.resolvedPortraitHairEnabled ? PortraitPathBuilder.hairComponent(
+            from: hairGroups, style: settings.resolvedPortraitHairStyle,
+            amount: settings.resolvedPortraitHairAmount, seed: settings.resolvedPortraitSeed &+ 71,
+            expansion: settings.resolvedPortraitHairExpansion, hairdo: settings.resolvedPortraitHairdo
+        ) : nil
+        if let hair {
+            result.append(hair.points)
+            result.append(contentsOf: hair.hairSideFills.map { $0 + [$0[0]] })
+        }
+        return (result, hair)
     }
 }

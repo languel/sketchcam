@@ -82,7 +82,8 @@ enum PortraitFillRenderer {
 
     static func shapes(groups: [MappedGroup], settings: LandmarkSettings) -> [Shape] {
         if settings.resolvedPortraitApproach == .aaron {
-            let curves = AaronPortrait.paths(groups: groups, settings: settings)
+            let geometry = AaronPortrait.geometry(groups: groups, settings: settings)
+            let curves = geometry.paths
             guard curves.count >= 2, curves[1].count >= 4 else { return [] }
             let faceSample = groups.first(where: { $0.region == .nose })?.points.first
                 ?? curves[1][curves[1].count / 2]
@@ -110,6 +111,24 @@ enum PortraitFillRenderer {
             }
             painted.append(Shape(part: .face, points: curves[1],
                                  colorSample: faceSample, colorSlot: 1))
+            if let hair = geometry.hair, let outer = hair.hairFillOutline {
+                let roof = Array(hair.points.prefix(17))
+                if let first = roof.first, let last = roof.last, roof.count > 1 {
+                    let under = roof.enumerated().map { index, point in
+                        let t = CGFloat(index) / CGFloat(roof.count - 1)
+                        let base = CGPoint(x: first.x + (last.x - first.x) * t,
+                                           y: first.y + (last.y - first.y) * t)
+                        return CGPoint(x: base.x + (point.x - base.x) * 0.46,
+                                       y: base.y + (point.y - base.y) * 0.46)
+                    }
+                    painted.append(Shape(part: .hair, points: outer + under.reversed(),
+                                         colorSample: roof[roof.count / 2], colorSlot: 2))
+                    painted += hair.hairSideFills.map {
+                        Shape(part: .hair, points: $0,
+                              colorSample: roof[roof.count / 2], colorSlot: 2)
+                    }
+                }
+            }
             for hand in groups where hand.region == .hands {
                 guard let contour = PortraitPathBuilder.fingerContourComponent(
                     from: hand, fullness: settings.resolvedPortraitFingerFullness
@@ -173,6 +192,9 @@ enum PortraitFillRenderer {
             let sample = roof[roof.count / 2]
             shapes.append(Shape(part: .hair, points: outer + Array(under.reversed()),
                                 colorSample: sample, colorSlot: 2))
+            shapes += (crown?.hairSideFills ?? []).map {
+                Shape(part: .hair, points: $0, colorSample: sample, colorSlot: 2)
+            }
         }
 
         for hand in groups where hand.region == .hands {

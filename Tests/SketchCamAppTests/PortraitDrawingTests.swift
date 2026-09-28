@@ -653,9 +653,94 @@ final class PortraitDrawingTests: XCTestCase {
             CGPoint(x: 150, y: 230), CGPoint(x: 185, y: 190), CGPoint(x: 200, y: 130)
         ], closed: false, handedness: .unknown)
         let withEars = PortraitPathBuilder.jawWithEars(jaw)
-        XCTAssertLessThan(withEars.points.map(\.x).min()!, 85)
-        XCTAssertGreaterThan(withEars.points.map(\.x).max()!, 215)
+        XCTAssertLessThan(withEars.points.map(\.x).min()!, 98)
+        XCTAssertGreaterThan(withEars.points.map(\.x).max()!, 202)
+        XCTAssertGreaterThan(withEars.points.map(\.x).min()!, 90)
+        XCTAssertLessThan(withEars.points.map(\.x).max()!, 210)
         XCTAssertTrue(withEars.points.contains(CGPoint(x: 150, y: 230)))
+    }
+
+    func testConstructivistDirectionsPreserveEndpointsAndClosure() {
+        let source = [CGPoint(x: 2, y: 3), CGPoint(x: 31, y: 15),
+                      CGPoint(x: 9, y: 44), CGPoint(x: 2, y: 3)]
+        XCTAssertEqual(PortraitPathBuilder.constructivistPath(source, amount: 0), source)
+        let angular = PortraitPathBuilder.constructivistPath(source, amount: 1)
+        XCTAssertEqual(angular.first, source.first)
+        XCTAssertEqual(angular.last, source.last)
+        for (a, b) in zip(angular, angular.dropFirst()) {
+            let dx = abs(b.x - a.x), dy = abs(b.y - a.y)
+            XCTAssertTrue(dx < 0.001 || dy < 0.001 || abs(dx - dy) < 0.001)
+        }
+    }
+
+    func testConstructivistSimplifiesDenseFaceContourAtFeatureScale() {
+        let dense = (0...240).map { index -> CGPoint in
+            let t = CGFloat(index) / 240
+            return CGPoint(x: 100 + 150 * t,
+                           y: 150 + 55 * sin(.pi * t) + (index.isMultiple(of: 2) ? 1.5 : -1.5))
+        }
+        let reduced = PortraitPathBuilder.simplifiedFeaturePath(dense, faceWidth: 150, amount: 1)
+        XCTAssertLessThan(reduced.count, 20)
+        XCTAssertEqual(reduced.first, dense.first)
+        XCTAssertEqual(reduced.last, dense.last)
+        XCTAssertEqual(PortraitPathBuilder.simplifiedFeaturePath(dense, faceWidth: 150, amount: 0), dense)
+    }
+
+    func testTemplateHairHasTextureAndPaintAndDropsBelowTemples() throws {
+        var settings = LandmarkSettings()
+        settings.portraitApproach = .aaron
+        settings.portraitHairEnabled = true
+        settings.portraitHairStyle = .hatch
+        settings.portraitHairdo = .shag
+        settings.portraitHairExpansion = 1
+        let groups = portraitGroups(offset: .zero)
+        let geometry = AaronPortrait.geometry(groups: groups, settings: settings)
+        let hair = try XCTUnwrap(geometry.hair)
+        XCTAssertGreaterThan(hair.points.count, 17)
+        let outer = try XCTUnwrap(hair.hairFillOutline)
+        let jaw = geometry.paths[1]
+        XCTAssertFalse(jaw.isEmpty)
+        XCTAssertEqual(outer.first!.x, hair.points.first!.x, accuracy: 0.001)
+        XCTAssertEqual(outer.first!.y, hair.points.first!.y, accuracy: 0.001)
+        XCTAssertEqual(outer.last!.x, hair.points[16].x, accuracy: 0.001)
+        XCTAssertEqual(outer.last!.y, hair.points[16].y, accuracy: 0.001)
+        XCTAssertEqual(hair.hairSideFills.count, 2)
+        let paintedHair = PortraitFillRenderer.shapes(groups: groups, settings: settings)
+            .filter { $0.part == .hair }
+        XCTAssertEqual(paintedHair.count, 3)
+        for side in hair.hairSideFills {
+            let width = (side.map(\.x).max() ?? 0) - (side.map(\.x).min() ?? 0)
+            XCTAssertLessThan(width, 25)
+        }
+    }
+
+    func testTemplateFollowsBlinkAndInnerLipOpening() {
+        var settings = LandmarkSettings()
+        settings.portraitApproach = .aaron
+        settings.portraitExpression = 1
+        let original = portraitGroups(offset: .zero)
+        func observed(blink: Bool, lipHeight: CGFloat) -> [MappedGroup] {
+            let face = original.filter { $0.region != .mouth }.map { group in
+                guard blink && group.region == .leftEye else { return group }
+                return MappedGroup(region: group.region,
+                    points: group.points.map { CGPoint(x: $0.x, y: 125 + ($0.y - 125) * 0.02) },
+                    edges: group.edges)
+            }
+            let outer = loop(center: CGPoint(x: 200, y: 190), rx: 32, ry: 24, count: 12)
+            let inner = loop(center: CGPoint(x: 200, y: 190), rx: 24, ry: lipHeight, count: 12)
+            return face + [MappedGroup(region: .mouth, points: outer.points + inner.points,
+                edges: outer.edges + inner.edges.map { ($0.0 + 12, $0.1 + 12) },
+                labels: (0..<12).map { "oL\($0)" } + (0..<12).map { "iL\($0)" })]
+        }
+        let open = AaronPortrait.paths(groups: observed(blink: false, lipHeight: 20), settings: settings)
+        let closed = AaronPortrait.paths(groups: observed(blink: true, lipHeight: 0.5), settings: settings)
+        func height(_ path: [CGPoint]) -> CGFloat {
+            (path.map(\.y).max() ?? 0) - (path.map(\.y).min() ?? 0)
+        }
+        XCTAssertLessThan(height(closed[4]), height(open[4]) * 0.1)
+        XCTAssertLessThan(height(closed[6]), height(open[6]) * 0.1)
+        XCTAssertLessThan(height(closed[9]), height(open[9]) * 0.2)
+        XCTAssertEqual(open[1], closed[1], "Expressions must not distort the head")
     }
 
     func testPortraitFillShapesAndCameraColorAreDeterministic() {

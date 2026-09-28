@@ -43,6 +43,32 @@ struct PortraitDrawing: DrawingAlgorithm {
     }
 
     func strokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
+        let strokes = rawStrokes(groups: groups, landmarks: landmarks)
+        guard landmarks.resolvedPortraitApproach == .landmarks,
+              landmarks.resolvedPortraitStyle == .cubist,
+              landmarks.resolvedPortraitConstructivist > 0 else { return strokes }
+        let face = groups.first { $0.region == .jaw && $0.points.count >= 3 }?.points ?? []
+        let faceX = face.map(\.x), faceY = face.map(\.y)
+        let faceWidth = (faceX.max() ?? 0) - (faceX.min() ?? 0)
+        let faceBounds = CGRect(x: faceX.min() ?? 0, y: faceY.min() ?? 0,
+                                width: faceWidth, height: (faceY.max() ?? 0) - (faceY.min() ?? 0))
+        return strokes.map { source in
+            var stroke = source
+            let xs = source.points.map(\.x), ys = source.points.map(\.y)
+            let center = CGPoint(x: ((xs.min() ?? 0) + (xs.max() ?? 0)) / 2,
+                                 y: ((ys.min() ?? 0) + (ys.max() ?? 0)) / 2)
+            let nearFace = faceWidth > 0 && faceBounds.insetBy(dx: -faceWidth * 0.25,
+                                                                dy: -faceWidth * 0.3).contains(center)
+            stroke.points = PortraitPathBuilder.constructivistPath(
+                nearFace ? PortraitPathBuilder.simplifiedFeaturePath(
+                    source.points, faceWidth: faceWidth, amount: landmarks.resolvedPortraitConstructivist
+                ) : source.points,
+                amount: landmarks.resolvedPortraitConstructivist)
+            return stroke
+        }
+    }
+
+    private func rawStrokes(groups: [MappedGroup], landmarks: LandmarkSettings) -> [StrokeTessellator.Stroke] {
         if landmarks.resolvedPortraitApproach != .landmarks {
             var paths = landmarks.resolvedPortraitApproach == .aaron
                 ? PortraitPathBuilder.subdivideLongest(
@@ -239,6 +265,10 @@ struct PortraitDrawing: DrawingAlgorithm {
             ) : nil
         if let hair {
             faceFeatures.append(hair)
+            faceFeatures.append(contentsOf: hair.hairSideFills.map {
+                PortraitPathBuilder.Component(region: .head, points: $0 + [$0[0]], closed: true,
+                          handedness: .unknown, isCrown: true)
+            })
         }
         faceFeatures = PortraitPathBuilder.anchorFaceConnections(
             faceFeatures,
@@ -632,6 +662,9 @@ enum PortraitPathBuilder {
         var sleeveFills: [[CGPoint]] = []
         /// Outer hair mass used by paint; the scalp arc remains independent.
         var hairFillOutline: [CGPoint]? = nil
+        /// Narrow side locks are painted separately so the crown cannot become
+        /// a broad triangle hanging from each temple.
+        var hairSideFills: [[CGPoint]] = []
         /// Geometry reference for joining an optional person contour. Wild
         /// hair need not draw a smooth roof just to supply its apex.
         var scalpApex: CGPoint? = nil
@@ -658,9 +691,9 @@ enum PortraitPathBuilder {
                 CGPoint(x: anchor.x + across.x * span * x * outward + down.x * span * y,
                         y: anchor.y + across.y * span * x * outward + down.y * span * y)
             }
-            return [anchor, point(0.09, -0.12), point(0.18, -0.08),
-                    point(0.21, 0.08), point(0.15, 0.25),
-                    point(0.06, 0.19), point(0.10, 0.07), anchor]
+            return [anchor, point(0.045, -0.025), point(0.075, 0.035),
+                    point(0.07, 0.115), point(0.03, 0.175),
+                    point(0, 0.15), anchor]
         }
         var result = jaw
         result.points = ear(at: first, outward: -1) + jaw.points.dropFirst()
@@ -673,6 +706,66 @@ enum PortraitPathBuilder {
         case .torso, .leftArm, .rightArm, .leftLeg, .rightLeg, .hands: return true
         default: return false
         }
+    }
+
+    /// Replace each edge with a diagonal plus an axis-aligned leg. Keeping
+    /// both endpoints fixed avoids cumulative drift and preserves closed loops.
+    static func constructivistPath(_ points: [CGPoint], amount: Float) -> [CGPoint] {
+        let blend = CGFloat(min(1, max(0, amount)))
+        guard blend > 0, let first = points.first else { return points }
+        var result = [first]
+        result.reserveCapacity(points.count * 2)
+        for (a, b) in zip(points, points.dropFirst()) {
+            let dx = b.x - a.x, dy = b.y - a.y
+            let diagonal = min(abs(dx), abs(dy))
+            let corner = CGPoint(x: a.x + (dx < 0 ? -diagonal : diagonal),
+                                 y: a.y + (dy < 0 ? -diagonal : diagonal))
+            let total = hypot(dx, dy)
+            guard total > 0.0001 else { continue }
+            // Start the intermediate vertex on the original edge so the dial
+            // moves continuously without changing the feature's endpoints.
+            let fraction = min(1, hypot(corner.x - a.x, corner.y - a.y) / total)
+            let straight = CGPoint(x: a.x + dx * fraction, y: a.y + dy * fraction)
+            let elbow = CGPoint(x: straight.x + (corner.x - straight.x) * blend,
+                                y: straight.y + (corner.y - straight.y) * blend)
+            if hypot(elbow.x - a.x, elbow.y - a.y) > 0.0001,
+               hypot(elbow.x - b.x, elbow.y - b.y) > 0.0001 { result.append(elbow) }
+            result.append(b)
+        }
+        return result
+    }
+
+    static func simplifiedFeaturePath(_ points: [CGPoint], faceWidth: CGFloat, amount: Float) -> [CGPoint] {
+        guard points.count > 3, faceWidth > 0, amount > 0 else { return points }
+        let xs = points.map(\.x), ys = points.map(\.y)
+        let localSize = hypot((xs.max() ?? 0) - (xs.min() ?? 0),
+                              (ys.max() ?? 0) - (ys.min() ?? 0))
+        let tolerance = min(faceWidth * 0.085, max(faceWidth * 0.018, localSize * 0.12))
+            * CGFloat(amount * amount)
+        func reduce(_ path: [CGPoint]) -> [CGPoint] {
+            guard path.count > 2, let first = path.first, let last = path.last else { return path }
+            let dx = last.x - first.x, dy = last.y - first.y
+            let denominator = max(0.0001, dx * dx + dy * dy)
+            let candidate = path.indices.dropFirst().dropLast().map { index -> (Int, CGFloat) in
+                let point = path[index]
+                let t = max(0, min(1, ((point.x - first.x) * dx + (point.y - first.y) * dy) / denominator))
+                return (index, hypot(point.x - first.x - t * dx, point.y - first.y - t * dy))
+            }.max { $0.1 < $1.1 }
+            guard let candidate, candidate.1 > tolerance else { return [first, last] }
+            return reduce(Array(path[...candidate.0])).dropLast()
+                + reduce(Array(path[candidate.0...]))
+        }
+        if let first = points.first, let last = points.last,
+           hypot(first.x - last.x, first.y - last.y) < 0.001 {
+            let open = Array(points.dropLast())
+            guard let split = open.indices.max(by: {
+                hypot(open[$0].x - first.x, open[$0].y - first.y)
+                    < hypot(open[$1].x - first.x, open[$1].y - first.y)
+            }), split > 0 else { return points }
+            return reduce(Array(open[...split])).dropLast()
+                + reduce(Array(open[split...]) + [first])
+        }
+        return reduce(points)
     }
 
     static func shouldBridge(_ previous: Component?, _ next: Component) -> Bool {
@@ -2048,9 +2141,11 @@ enum PortraitPathBuilder {
                 shapeRise = 0.55
             }
             let intrinsicSide: CGFloat = hairdo == .rounded ? 0 : faceScale * 0.045
+            let endpointTaper = pow(max(0, sin(.pi * t)), 0.45)
             let lateral = (overhangLevel * faceScale * 0.28 * shapeSide
                            + silhouetteSide + intrinsicSide)
-                * pow(sideDistance, 0.68) * (0.38 + 0.62 * depth * depth)
+                * pow(sideDistance, 0.68) * endpointTaper
+                * (0.38 + 0.62 * depth * depth)
             let lateralSign: CGFloat = left ? -1 : 1
             // Keep crown growth modest; most of the added mass sits around
             // the temples and can overlap the outer half of the ears.
@@ -2248,9 +2343,23 @@ enum PortraitPathBuilder {
             }
             points = roof + fill
         }
+        let sideLength: CGFloat = hairdo == .shag ? 0.42 : (hairdo == .swept ? 0.30 : 0.19)
+        let lockLength = faceScale * sideLength * min(1.2, 0.48 + overhangLevel * 0.38)
+        let lockWidth = faceScale * min(0.13, 0.045 + overhangLevel * 0.045)
+        let sideFills: [[CGPoint]] = [-1.0, 1.0].map { sign in
+            let ear = sign < 0 ? leftEar : rightEar
+            func at(_ outward: CGFloat, _ down: CGFloat) -> CGPoint {
+                CGPoint(x: ear.x + across.x * outward * sign - up.x * down,
+                        y: ear.y + across.y * outward * sign - up.y * down)
+            }
+            return [at(0, -faceScale * 0.06), at(lockWidth * 0.72, -faceScale * 0.05),
+                    at(lockWidth, lockLength * 0.40), at(lockWidth * 0.48, lockLength),
+                    at(lockWidth * 0.12, lockLength * 0.66), at(0, 0)]
+        }
         return Component(region: .head, points: points, closed: false,
                          handedness: .unknown, isCrown: true,
-                         hairFillOutline: outerRoof, scalpApex: roof[8])
+                         hairFillOutline: outerRoof, hairSideFills: sideFills,
+                         scalpApex: roof[8])
     }
 
     private static func handedness(_ group: MappedGroup) -> Handedness {

@@ -20,6 +20,7 @@ final class PortraitPresetTests: XCTestCase {
         source.portraitFingerContoursEnabled = true
         source.portraitBrowCenterlineEnabled = true
         source.portraitMouthCenterlineEnabled = true
+        source.portraitConstructivist = 0.8
         source.portraitFillEnabled = true
         source.portraitFillPalettized = true
         source.portraitFillVariation = 0.7
@@ -43,6 +44,7 @@ final class PortraitPresetTests: XCTestCase {
         XCTAssertTrue(target.resolvedPortraitBrowCenterlineEnabled)
         XCTAssertTrue(target.resolvedPortraitMouthCenterlineEnabled)
         XCTAssertFalse(target.resolvedPortraitBodyEnabled)
+        XCTAssertEqual(target.resolvedPortraitConstructivist, 0.8)
         XCTAssertTrue(target.yarnEnabled)
         XCTAssertFalse(target.trackHands)
     }

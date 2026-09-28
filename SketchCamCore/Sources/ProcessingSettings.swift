@@ -635,6 +635,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     // Portrait parameters. Optional fields let older persisted settings decode
     // through synthesized Codable while resolved accessors provide defaults.
     public var portraitStyle: PortraitStyle?
+    public var portraitConstructivist: Float?
     public var portraitApproach: PortraitApproach?
     public var portraitAbstraction: Float?
     public var portraitShapeVariation: Float?
@@ -1202,6 +1203,7 @@ public struct LandmarkSettings: Equatable, Sendable, Codable {
     public var resolvedPortraitOutlineEnabled: Bool { portraitOutlineEnabled ?? false }
     public var resolvedPortraitPoseBodyEnabled: Bool { portraitPoseBodyEnabled ?? true }
     public var resolvedPortraitBodyEnabled: Bool { portraitBodyEnabled ?? true }
+    public var resolvedPortraitConstructivist: Float { min(1, max(0, portraitConstructivist ?? 0)) }
     public var resolvedPortraitOutlineStrength: Float { portraitOutlineStrength ?? 0.68 }
     public var resolvedPortraitUnifiedRoute: Bool { portraitUnifiedRoute ?? false }
     public var resolvedPortraitDetailPriority: Float { min(1, max(0, portraitDetailPriority ?? 0.65)) }

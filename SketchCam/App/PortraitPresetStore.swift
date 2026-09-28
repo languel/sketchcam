@@ -7,6 +7,7 @@ struct PortraitConfiguration: Codable, Equatable {
     var enabled: Bool
     var approach: PortraitApproach
     var style: PortraitStyle
+    var constructivist: Float?
     var abstraction: Float
     var shapeVariation: Float
     var expression: Float
@@ -52,6 +53,7 @@ struct PortraitConfiguration: Codable, Equatable {
         enabled = value.resolvedPortraitEnabled
         approach = value.resolvedPortraitApproach
         style = value.resolvedPortraitStyle
+        constructivist = value.resolvedPortraitConstructivist
         abstraction = value.resolvedPortraitAbstraction
         shapeVariation = value.resolvedPortraitShapeVariation
         expression = value.resolvedPortraitExpression
@@ -98,6 +100,7 @@ struct PortraitConfiguration: Codable, Equatable {
         value.portraitEnabled = enabled
         value.portraitApproach = approach
         value.portraitStyle = style
+        value.portraitConstructivist = constructivist ?? 0
         value.portraitAbstraction = abstraction
         value.portraitShapeVariation = shapeVariation
         value.portraitExpression = expression

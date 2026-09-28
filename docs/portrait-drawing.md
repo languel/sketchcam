@@ -125,6 +125,17 @@ off, the head and hands can still receive flat color but the body and neck do no
 
 ## Semantic decomposition
 
+Cubist's **Constructivist** dial progressively bends each edge into horizontal,
+vertical, or 45-degree legs. At maximum all stroke segments use these directions;
+feature endpoints and closed-loop seams stay fixed. It is saved in Portrait presets.
+
+Inferred ears are compact outer curves without the former inner zigzag. Hair
+overhang extends down past the temples as well as sideways; Shag reaches furthest
+toward the neck. The extended area supplies both paint and texture samples.
+Template exposes the shared procedural hair controls and paints its hair mass.
+Its Expression control drives eye closure, inner-lip opening, mouth width, and
+lip-corner height while preserving the authored head shape.
+
 `PortraitPathBuilder.components` converts every graph-connected component in a
 landmark group into an ordered `Component`:
 
@@ -191,7 +202,9 @@ available upper person contour defines additional outer hair territory. Wild,
 Wrap, and both Hatch samplers place ink *inside that added area*, not only in
 the face-attached cap; the flat hair fill follows the same outer boundary.
 **Hairdo** selects Rounded, Swept, or Shag outer proportions independently of
-the interior texture. The hair's lower boundary stays above the eyebrow shelf.
+the interior texture. The crown returns to the temples; narrow side locks extend
+down beside the ears as separate ink and paint shapes, avoiding triangular hair
+panels across the cheeks. The crown's lower boundary stays above the eyebrow shelf.
 **Inferred ears** can be turned off without removing the scalp anchors.
 
 The crown stays in the unicursal face planner next to the jaw component. Seeds

@@ -3637,6 +3637,12 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.segmented)
+            if model.settings.landmarks.resolvedPortraitStyle == .cubist {
+                SliderRow(title: "Constructivist",
+                          value: optionalLandmarkFloatBinding(\.portraitConstructivist, defaultValue: 0),
+                          defaultValue: 0,
+                          hint: "Pull Cubist lines toward horizontal, vertical, and 45° directions. At 1, every segment follows one of these directions.")
+            }
             SliderRow(
                 title: "Follow markers",
                 value: optionalLandmarkFloatBinding(\.portraitFollow, defaultValue: 0.72),
@@ -3697,6 +3703,7 @@ struct ContentView: View {
             )
             .disabled(!model.settings.landmarks.resolvedPortraitFingerContoursEnabled)
 
+            }
             SectionHeader("Crown")
             Toggle("Inferred ears", isOn: Binding(
                 get: { model.settings.landmarks.resolvedPortraitEarsEnabled },
@@ -3800,7 +3807,6 @@ struct ContentView: View {
             )
             .disabled(!model.settings.landmarks.resolvedPortraitFillEnabled)
 
-            }
             SectionHeader("Stroke")
             ColorPicker("Ink", selection: portraitColorBinding, supportsOpacity: true)
             SliderRow(
