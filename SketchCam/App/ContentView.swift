@@ -169,6 +169,10 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case layers = "Layers"
     case camera = "Camera"
     case movie = "Movie"
+    case microphone = "Microphone"
+    case audioFile = "Audio File"
+    case script = "Script"
+    case text = "Text"
     case marks = "Marks"
     case inputMap = "Input Map"
     case yarn = "Yarn"
@@ -249,6 +253,10 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .input: "gearshape"
         case .camera: "camera"
         case .movie: "film"
+        case .microphone: "mic"
+        case .audioFile: "waveform"
+        case .script: "text.alignleft"
+        case .text: "textformat"
         case .layers: "square.3.layers.3d"
         case .marks: "point.3.connected.trianglepath.dotted"
         case .inputMap: "hand.point.up.left"
@@ -2568,6 +2576,10 @@ struct ContentView: View {
         case .input: inputTab
         case .camera: cameraTab
         case .movie: movieTab
+        case .microphone: AudioSourcePanel(controller: model.audio, source: .microphone)
+        case .audioFile: AudioSourcePanel(controller: model.audio, source: .recordedAudio)
+        case .script: ScriptSourcePanel(model: model)
+        case .text: TextDrawingPanel(model: model)
         case .layers: layersTab
         case .marks: marksTab
         case .inputMap: SystemInputMappingPanel(model: model)
@@ -4499,6 +4511,11 @@ struct ContentView: View {
             case .personMatte: return "Person Key"
             case .landmarks: return "Landmarks"
             case .mouse: return "Mouse"
+            case .microphone: return "Microphone"
+            case .recordedAudio: return "Audio File"
+            case .script: return "Script"
+            case .microphoneText: return "Microphone speech"
+            case .recordedAudioText: return "Audio File speech"
             }
         case .node(let id):
             return inkTextureSources().first { $0.id == id }?.name ?? "Layer"
@@ -5569,6 +5586,11 @@ private extension SourceID {
         case .landmarks: return "Landmarks"
         case .mouse: return "Mouse"
         case .personMatte: return "Person matte"
+        case .microphone: return "Microphone"
+        case .recordedAudio: return "Audio File"
+        case .script: return "Script"
+        case .microphoneText: return "Microphone speech"
+        case .recordedAudioText: return "Audio File speech"
         }
     }
 }
@@ -6836,6 +6858,7 @@ private struct WorkspaceFrameStackEditor: View {
             Section("Materials") {
                 Button("Camera") { addGraphFrame(kind: .video, name: "Camera", role: .layer) }
                 Button("Movie") { addGraphFrame(kind: .movie, name: "Movie", role: .layer) }
+                Button("Text") { addGraphFrame(kind: .text(TextLayerConfig()), name: "Text", role: .layer) }
                 Button("Solid color") {
                     addGraphFrame(kind: .solid(SolidConfig(color: RGBAColor(red: 0.85, green: 0.3, blue: 0.3, alpha: 1))), name: "Solid", role: .layer)
                 }
@@ -7530,6 +7553,7 @@ private struct LayerStackEditor: View {
             Section("Sources") {
                 Button("Camera") { addNode(.video, name: "Camera") }
                 Button("Movie") { addNode(.movie, name: "Movie") }
+                Button("Text") { addNode(.text(TextLayerConfig()), name: "Text") }
                 Button("Solid color") { addSolid() }
                 Button("Paper") { addPaper() }
                 Button("Acrylic") { addAcrylic() }
@@ -7728,6 +7752,7 @@ private struct LayerStackEditor: View {
 
     /// Add a user-created (unmanaged) stream layer on top of the stack.
     private func addNode(_ kind: NodeKind, name: String) {
+        if kind.family == "text" { model.settings.useLayerGraph = true }
         if case .drawing = kind { model.settings.landmarks.enabled = true }
         let node = Node(
             name: nextLayerName(base: name, family: kind.family),

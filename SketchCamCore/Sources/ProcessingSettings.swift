@@ -372,6 +372,8 @@ public struct ProcessingSettings: Equatable, Sendable, Codable {
     /// the default graph from the feature flags. The compositor reconciles it
     /// against the current flags each frame.
     public var layerGraph: LayerGraph?
+    /// Shared authored text stream; playback cursors belong to Text consumers.
+    public var textScript: String?
     /// Collage workspace/artboard state. Nil means this preset predates the
     /// workspace model and resolves to an identity workspace at runtime.
     public var workspace: CollageWorkspace?

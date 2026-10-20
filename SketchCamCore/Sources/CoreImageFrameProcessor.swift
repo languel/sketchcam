@@ -299,7 +299,7 @@ public final class CoreImageFrameProcessor: FrameProcessor {
             case .overlay, .marks:
                 image = overlayDone ? nil : overlay   // the one merged overlay, once
                 overlayDone = true
-            case .drawing:
+            case .drawing, .text:
                 image = drawingLayers[node.id]
             case .solid(let cfg):
                 // User-created solid fills render here; the managed background

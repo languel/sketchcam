@@ -32,6 +32,10 @@ settings:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: Apple Development
       ENABLE_HARDENED_RUNTIME: YES
+packages:
+  ArgmaxSpeech:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    exactVersion: 1.1.1
 targets:
   SketchCamShared:
     type: framework.static
@@ -90,6 +94,8 @@ targets:
           - Resources/Info.plist
           - Resources/SketchCam.entitlements
     dependencies:
+      - package: ArgmaxSpeech
+        product: WhisperKit
       - target: SketchCamCore
       - target: SketchCamShared
       - target: SketchCamCameraExtension

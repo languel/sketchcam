@@ -180,6 +180,8 @@ final class SketchCamViewModel: ObservableObject {
     private let paperRenderer = MetalPaperRenderer.shared
     /// Live in-progress ink stroke, handed to the engine off the @Published
     /// settings path so drawing doesn't re-render the whole UI per mouse move.
+    let audio = AudioInputController()
+    private let textRenderer = TextLayerRenderer()
     let inkLiveStroke = InkLiveStroke()
     private let motionInkLiveStroke = InkLiveStroke()
     private var motionPath: InkEditorPath?
@@ -246,6 +248,33 @@ final class SketchCamViewModel: ObservableObject {
         isRestoringSession = false
         store.settings = settings
         store.outputFormat = outputFormat
+
+        audio.voiceCommands.onTextPreset = { [weak self] name, targetID in
+            guard let self, var graph = self.settings.layerGraph else { return "No Text layer" }
+            let index = targetID.flatMap { id in graph.nodes.firstIndex { $0.id == id && $0.kind.family == "text" } }
+                ?? (targetID == nil ? graph.nodes.firstIndex { $0.kind.family == "text" } : nil)
+            guard let index else { return "Text preset target unavailable" }
+            let normalized = VoiceCommandText.normalized(name)
+            let matches = (TextPresetStore().presets + TextPresetStore.builtins).filter {
+                VoiceCommandText.normalized($0.name) == normalized
+            }
+            guard matches.count == 1, let preset = matches.first else {
+                return matches.isEmpty ? "Text preset not found: \(name)" : "Ambiguous Text preset: \(name)"
+            }
+            graph.nodes[index].kind = .text(preset.configuration)
+            self.settings.layerGraph = graph
+            return "Text preset: \(preset.name) → \(graph.nodes[index].name)"
+        }
+
+        inkLiveStroke.onTextEvent = { [weak self] event in self?.audio.streams.emit(event) }
+        motionInkLiveStroke.onTextEvent = { [weak self] event in self?.audio.streams.emit(event) }
+        ShortcutRegistry.shared.register(id: "text.advance", title: "Advance text", category: "Text", default: nil) { [weak self] in
+            self?.audio.streams.emit(.manual)
+            self?.audio.streams.emit(.gesture)
+        }
+        ShortcutRegistry.shared.register(id: "text.reset", title: "Reset text", category: "Text", default: nil) { [weak self] in
+            self?.audio.streams.resetText()
+        }
 
         systemPointer.onCanvasEvent = { [weak self] action, point in
             self?.handleMotionCanvas(action: action, point: point)
@@ -920,6 +949,16 @@ final class SketchCamViewModel: ObservableObject {
         settings.landmarks.inkPaths = records.filter(\.isEditable).map(\.renderPath)
     }
 
+    func addTextLayer() {
+        var graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
+        let count = graph.nodes.filter { $0.kind.family == "text" }.count
+        let node = Node(name: "Text \(count + 1)", kind: .text(TextLayerConfig()), managed: false)
+        graph.nodes.append(node); graph.layers.append(Layer(node: node.id))
+        settings.layerGraph = graph
+        settings.useLayerGraph = true
+        reconcileWorkspaceWithGraph()
+    }
+
     // MARK: - Web layer controls (main thread)
 
     func webGoBack() { webController.goBack() }
@@ -969,6 +1008,7 @@ final class SketchCamViewModel: ObservableObject {
     }
 
     func stop() {
+        audio.stop()
         systemPointer.disarm()
         persistSession()
         captureService.stop()
@@ -1346,6 +1386,15 @@ final class SketchCamViewModel: ObservableObject {
                     )
                 }()
                 var drawingLayers: [UUID: CIImage] = [:]
+                let textNodes = graph.nodes.filter { $0.kind.family == "text" }
+                self.textRenderer.retainNodes(Set(textNodes.map(\.id)))
+                let temporal = self.audio.streams.snapshot()
+                let textNow = ProcessInfo.processInfo.systemUptime
+                for node in textNodes {
+                    drawingLayers[node.id] = self.textRenderer.image(node: node,
+                        script: settings.textScript ?? "", snapshot: temporal,
+                        size: outputFormat.size, now: textNow)
+                }
                 if analysisEnabled && settings.landmarks.enabled {
                     let mouseDetection: LandmarkDetection? = drawingNodes.contains {
                         self.analysisBinding(for: $0) == .source(.mouse)
@@ -1624,6 +1673,10 @@ final class SketchCamViewModel: ObservableObject {
                 return personMatteImage
             case .overlay, .marks, .drawing:
                 return overlay
+            case .text:
+                return self.textRenderer.image(node: node, script: settings.textScript ?? "",
+                    snapshot: self.audio.streams.snapshot(), size: outputFormat.size,
+                    now: ProcessInfo.processInfo.systemUptime)
             case .web:
                 return webLayer
             case .acrylic(let config):
@@ -1644,7 +1697,7 @@ final class SketchCamViewModel: ObservableObject {
                 return cameraImage
             case .personMatte:
                 return personMatteImage
-            case .landmarks, .mouse:
+            case .landmarks, .mouse, .microphone, .recordedAudio, .script, .microphoneText, .recordedAudioText:
                 return nil
             }
         case .node(let id):
@@ -1759,7 +1812,7 @@ final class SketchCamViewModel: ObservableObject {
                     return personMatteImage
                 case .overlay, .marks:
                     return scaledOverlay
-                case .drawing:
+                case .drawing, .text:
                     return scaledDrawingLayers[node.id]
                 case .ink:
                     return scaledInkLayers[node.id] ?? scaledInkLayer

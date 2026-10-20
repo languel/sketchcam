@@ -18,10 +18,14 @@ import Foundation
 public enum SignalType: String, Codable, Sendable, CaseIterable {
     case pixel
     case path
+    case audio
+    case text
 }
 
 /// Shared, singleton inputs computed once per frame (not layers).
 public enum SourceID: String, Codable, Sendable, CaseIterable {
+    case microphone, recordedAudio // audio + analysis, shared temporal streams
+    case script, microphoneText, recordedAudioText // text
     case camera        // pixel
     case landmarks     // path  (Vision feature analysis)
     case mouse         // path  (live brush strokes)
@@ -31,6 +35,8 @@ public enum SourceID: String, Codable, Sendable, CaseIterable {
         switch self {
         case .camera, .personMatte: return .pixel
         case .landmarks, .mouse: return .path
+        case .microphone, .recordedAudio: return .audio
+        case .script, .microphoneText, .recordedAudioText: return .text
         }
     }
 }
@@ -473,7 +479,7 @@ public struct Port: Codable, Sendable, Equatable {
 }
 
 /// Where a node's input port gets its signal.
-public enum PortBinding: Codable, Sendable, Equatable {
+public enum PortBinding: Codable, Sendable, Equatable, Hashable {
     case none                  // use the kind's built-in default for that port
     case source(SourceID)      // a shared input
     case node(UUID)            // another node's output — the routing
@@ -684,6 +690,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
     case ink
     case acrylic(AcrylicConfig)
     case web
+    case text(TextLayerConfig)
     case image(WorkspaceImageConfig)
 
     /// Input ports this kind exposes, in binding order.
@@ -702,6 +709,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .ink:     return [Port(name: "strokes", type: .path),
                                Port(name: "texture", type: .pixel)]
         case .acrylic: return [Port(name: "strokes", type: .path), Port(name: "texture", type: .pixel)]
+        case .text: return [Port(name: "content", type: .text), Port(name: "audio", type: .audio)]
         case .web:     return []
         case .image:   return []
         }
@@ -725,6 +733,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .drawing(let a): return "drawing.\(a.rawValue)"
         case .ink: return "ink"
         case .acrylic: return "acrylic"
+        case .text: return "text"
         case .web: return "web"
         case .image: return "image"
         }
@@ -744,6 +753,7 @@ public enum NodeKind: Codable, Sendable, Equatable {
         case .drawing: return [.source(.landmarks)]
         case .ink:     return [.source(.mouse), .none]   // texture unrouted by default
         case .acrylic: return [.source(.mouse), .none]
+        case .text: return [.source(.script), .source(.microphone)]
         case .web:     return []
         case .image:   return []
         }

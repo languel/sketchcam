@@ -20,6 +20,8 @@
 	<string>5</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SketchCam uses microphone audio for live captions and audio-reactive drawing.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>SketchCam needs camera access to process your webcam into a virtual camera feed.</string>
 	<key>NSPrincipalClass</key>

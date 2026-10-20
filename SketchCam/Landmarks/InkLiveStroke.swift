@@ -37,6 +37,8 @@ struct InkLiveStrokePoint: Equatable {
 /// Accumulates every cursor point between engine frames so fast drags stay
 /// dense — the engine reads ~30x/sec but the mouse moves ~60–120x/sec.
 final class InkLiveStroke {
+    /// Non-consuming edge events shared with Text; callbacks run outside the lock.
+    var onTextEvent: ((TextAdvanceEvent) -> Void)?
     private let lock = NSLock()
     private var latest: InkLiveStrokeSample?
     private var activeID: UUID?
@@ -48,7 +50,8 @@ final class InkLiveStroke {
     /// Called per mouse move while drawing.
     func update(_ s: InkLiveStrokeSample) {
         lock.lock()
-        if activeID != s.id {
+        let starts = activeID != s.id
+        if starts {
             activeID = s.id
             pending.removeAll(keepingCapacity: true)
             activePath.removeAll(keepingCapacity: true)
@@ -58,11 +61,13 @@ final class InkLiveStroke {
         activePath.append(s.point)
         pathRevision &+= 1
         lock.unlock()
+        if starts { onTextEvent?(.strokeStart) }
     }
 
     /// Called once when the stroke finishes; the engine bakes that id.
     func end() {
         lock.lock()
+        let didEnd = activeID != nil
         endedID = activeID
         activeID = nil
         latest = nil
@@ -70,6 +75,7 @@ final class InkLiveStroke {
         activePath.removeAll(keepingCapacity: true)
         pathRevision &+= 1
         lock.unlock()
+        if didEnd { onTextEvent?(.strokeEnd) }
     }
 
     /// Discard any in-progress stroke WITHOUT baking (clear / undo / redo).

@@ -71,6 +71,19 @@ final class ShortcutRegistry: ObservableObject {
     private var monitor: Any?
     private let storeKey = "io.github.languel.sketchcam.shortcuts"
 
+    private(set) var isInvokingExternally = false
+
+    /// Shared main-queue dispatch for voice and other local command inputs.
+    @discardableResult
+    func invoke(id: String) -> Bool {
+        guard let action = actions.first(where: { $0.id == id }) else { return false }
+        isInvokingExternally = true
+        defer { isInvokingExternally = false }
+        action.handler()
+        return true
+    }
+
+
     func start() {
         guard monitor == nil else { return }
         loadOverrides()
