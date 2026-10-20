@@ -49,14 +49,21 @@ final class GestureMappingTests: XCTestCase {
         let engine = GestureMappingEngine(), m = mapping(.canvas)
         _ = engine.update(detection: hand(.pinch), mapping: m, screen: screen, mirrored: false, now: 0)
         let draw = engine.update(detection: hand(.pinch), mapping: m, screen: screen, mirrored: false, now: 0.13)
-        XCTAssertEqual(draw.events, [.canvas(.draw, CGPoint(x: 0.45, y: 0.35))])
+        XCTAssertEqual(draw.events.count, 2)
+        guard case .recognition(let drawCue) = draw.events.first else {
+            return XCTFail("Expected recognition metadata before canvas drawing")
+        }
+        XCTAssertEqual(drawCue.mapID, "legacy.pinch")
+        XCTAssertEqual(draw.events.last, .canvas(.draw, CGPoint(x: 0.45, y: 0.35)))
         let transition = engine.update(detection: hand(.fist), mapping: m, screen: screen, mirrored: false, now: 0.2)
         XCTAssertEqual(transition.events, [.canvasEnd])
         let erase = engine.update(detection: hand(.fist), mapping: m, screen: screen, mirrored: false, now: 0.34)
-        XCTAssertEqual(erase.events.count, 1)
-        guard case .canvas(.erase, let point) = erase.events.first else {
-            return XCTFail("Expected only a canvas erase sample")
+        XCTAssertEqual(erase.events.count, 2)
+        guard case .recognition(let eraseCue) = erase.events.first,
+              case .canvas(.erase, let point) = erase.events.last else {
+            return XCTFail("Expected recognition metadata followed by a canvas erase sample")
         }
+        XCTAssertEqual(eraseCue.mapID, "legacy.fist")
         XCTAssertEqual(point.x, 0.45, accuracy: 0.000001)
         XCTAssertEqual(point.y, 0.68, accuracy: 0.000001)
         XCTAssertEqual(engine.stop(), [.canvasEnd])

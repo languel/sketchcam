@@ -28,6 +28,13 @@ Open repository **Settings → Secrets and variables → Actions**, or use
 | `APPLE_API_KEY_ID` | The API key's Key ID. |
 | `APPLE_API_ISSUER_ID` | The API key's Issuer ID. |
 
+Alternatively, reuse an existing notarization Apple ID/app-specific password:
+set `APPLE_ID` and `APPLE_APP_SPECIFIC_PASSWORD` **instead of the three API key
+secrets**. This matches the authentication used by the local `UPBGE_NOTARY`
+profile and CloudyWindow's release workflow. The four signing/profile secrets
+remain required. If an API key is configured, it takes precedence. No new Apple
+API key is needed when the existing app-specific password is usable.
+
 Use team `K39T7B8529`. Profiles must include the relevant app-group and
 system-extension capabilities from this project's entitlements, match the
 exported certificate, and be current. Development/App Store profiles cannot
@@ -47,7 +54,8 @@ gh secret set APPLE_API_KEY_ID
 gh secret set APPLE_API_ISSUER_ID
 ```
 
-After all seven are set, add repository **variable**
+After the four signing/profile secrets and either set of notarization credentials
+are set, add repository **variable**
 `MACOS_DISTRIBUTION_ENABLED=true` (not a secret):
 
 ```sh

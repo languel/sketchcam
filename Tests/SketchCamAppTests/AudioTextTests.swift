@@ -164,7 +164,7 @@ final class AudioTextTests: XCTestCase {
 
     func testWordFadeIsIndependentOfNewArrivals() {
         let trail = FadingWordTrail(), id = UUID()
-        var config = TextLayerConfig(); config.fadeSeconds = 1
+        var config = TextLayerConfig(); config.style = .trail; config.fadeSeconds = 1
         let size = CGSize(width: 640, height: 360)
         XCTAssertTrue(trail.receive(phrase("one", id: id), at: 0))
         XCTAssertTrue(trail.receive(phrase("one two", id: id), at: 0.75))

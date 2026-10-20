@@ -23,8 +23,12 @@ cleanup() {
 trap cleanup EXIT
 
 required=(MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD
-  MACOS_APP_PROFILE_BASE64 MACOS_EXTENSION_PROFILE_BASE64
-  APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID)
+  MACOS_APP_PROFILE_BASE64 MACOS_EXTENSION_PROFILE_BASE64)
+if [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
+  required+=(APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID)
+else
+  required+=(APPLE_ID APPLE_APP_SPECIFIC_PASSWORD)
+fi
 missing=0
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then echo "::error::Missing GitHub Actions secret: $name"; missing=1; fi
@@ -34,7 +38,9 @@ done
 printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$SIGNING_DIR/certificate.p12"
 printf '%s' "$MACOS_APP_PROFILE_BASE64" | base64 --decode > "$SIGNING_DIR/app.provisionprofile"
 printf '%s' "$MACOS_EXTENSION_PROFILE_BASE64" | base64 --decode > "$SIGNING_DIR/extension.provisionprofile"
-printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$SIGNING_DIR/AuthKey.p8"
+if [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
+  printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$SIGNING_DIR/AuthKey.p8"
+fi
 KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -113,7 +119,12 @@ for bundle in "$APP" "$EXT"; do
 done
 codesign --verify --deep --strict "$APP"
 
-xcrun notarytool store-credentials sketchcam-ci --key "$SIGNING_DIR/AuthKey.p8" \
-  --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" --keychain "$KEYCHAIN_PATH"
+if [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
+  xcrun notarytool store-credentials sketchcam-ci --key "$SIGNING_DIR/AuthKey.p8" \
+    --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" --keychain "$KEYCHAIN_PATH"
+else
+  xcrun notarytool store-credentials sketchcam-ci --apple-id "$APPLE_ID" \
+    --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" --keychain "$KEYCHAIN_PATH"
+fi
 bash script/notarize.sh sketchcam-ci
 (cd build/Release-export && shasum -a 256 SketchCam.zip > SketchCam.zip.sha256)
