@@ -32,5 +32,10 @@ echo
 echo "Gatekeeper assessment:"
 spctl --assess --type execute --verbose "$APP"
 
+# The submission ZIP predates stapling. Replace it so downloads carry the ticket.
+echo "Packaging stapled app for distribution..."
+rm -f "$ZIP"
+/usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
+
 echo
 echo "Done. Install with: script/install_release.sh"

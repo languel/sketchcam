@@ -9,8 +9,10 @@ import SketchCamShared
 final class WrapNearestNeighborTests: XCTestCase {
     func testSpatialOrderMatchesOriginalGreedyOrderIncludingTies() {
         for count in [3, 17, 96, 512] {
-            let points = (0..<count).map { index in
-                CGPoint(x: (index * 37 % 23) * 3, y: (index * 19 % 29) * 2)
+            let points: [CGPoint] = (0..<count).map { index in
+                let x: Int = (index * 37 % 23) * 3
+                let y: Int = (index * 19 % 29) * 2
+                return CGPoint(x: CGFloat(x), y: CGFloat(y))
             }
             var remaining = points
             var expected = [remaining.removeFirst()]

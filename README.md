@@ -108,6 +108,12 @@ SKETCHCAM_ALLOW_DEVICE_REGISTRATION=1 ./script/build_and_run.sh
 
 ## Release Build (Developer ID, Notarized)
 
+GitHub Actions can also produce a signed, notarized app ZIP after successful
+`main` builds. It requires a one-time signing-secret setup and the repository
+variable `MACOS_DISTRIBUTION_ENABLED=true`; see
+[`docs/ci-distribution.md`](docs/ci-distribution.md). Downloads appear under the
+workflow run's **Artifacts** after notarization and stapling succeed.
+
 On SIP-enabled macOS, the system extension only activates from a notarized Developer ID build. The working pipeline (see `notes/notarization.md` for the full story):
 
 ```sh

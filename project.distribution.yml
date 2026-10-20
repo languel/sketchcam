@@ -1,0 +1,19 @@
+# CI-only signing overlay. Local Debug/Release signing stays in project.yml.
+include:
+  - project.yml
+settings:
+  configs:
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: Developer ID Application
+targets:
+  SketchCam:
+    settings:
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: $(SKETCHCAM_APP_PROFILE)
+  SketchCamCameraExtension:
+    settings:
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: $(SKETCHCAM_EXTENSION_PROFILE)

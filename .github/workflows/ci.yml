@@ -1,6 +1,7 @@
 name: Build and Test
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main", "codex/**"]
   pull_request:
@@ -26,3 +27,41 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             test
+
+  distribute:
+    name: Signed and notarized app
+    needs: build-test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.MACOS_DISTRIBUTION_ENABLED == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode 26.5
+        run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Archive, sign, notarize and staple
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_APP_PROFILE_BASE64: ${{ secrets.MACOS_APP_PROFILE_BASE64 }}
+          MACOS_EXTENSION_PROFILE_BASE64: ${{ secrets.MACOS_EXTENSION_PROFILE_BASE64 }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: bash script/ci_release.sh
+      - name: Upload notarized app
+        uses: actions/upload-artifact@v4
+        with:
+          name: SketchCam-notarized-${{ github.sha }}
+          path: |
+            build/Release-export/SketchCam.zip
+            build/Release-export/SketchCam.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Download instructions
+        run: |
+          echo '### Notarized SketchCam' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download the SketchCam-notarized artifact from this run, unpack the outer artifact ZIP, then unpack SketchCam.zip. Move SketchCam.app to /Applications before activating its camera extension.' >> "$GITHUB_STEP_SUMMARY"
