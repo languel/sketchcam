@@ -94,7 +94,9 @@ final class LandmarkDetectionService {
             return LandmarkGroup(region: group.region, points: points, edges: group.edges)
         }
         frameTick &+= 1
-        return LandmarkDetection(groups: groups, detectionID: frameTick, sourceSize: latest.detection.sourceSize)
+        return LandmarkDetection(groups: groups, detectionID: frameTick,
+                                 sourceSize: latest.detection.sourceSize,
+                                 observationID: latest.detection.detectionID)
     }
 
     private func scheduleIfDue(pixelBuffer: CVPixelBuffer, settings: ProcessingSettings) {

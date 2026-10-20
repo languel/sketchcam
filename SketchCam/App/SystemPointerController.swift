@@ -10,6 +10,7 @@ enum MediaPipeHandSide: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { self == .left ? "Left hand" : "Right hand" }
     var labelPrefix: String { self == .left ? "L" : "R" }
+    var opposite: Self { self == .left ? .right : .left }
 }
 
 enum MediaPipeHandLandmark: Int, Codable, CaseIterable, Identifiable {
@@ -113,6 +114,45 @@ struct SystemPointerLiveState: Equatable {
     var status = "Not armed"
 }
 
+struct GestureRecognition: Equatable {
+    var mapID: String
+    var label: String
+    /// Vision-normalized landmark coordinates, with origin at bottom-left.
+    var point: CGPoint
+}
+
+struct GestureCue: Identifiable, Equatable {
+    var id = UUID()
+    var mapID: String
+    var label: String
+    var point: CGPoint
+    var bornAt: TimeInterval
+}
+
+enum GestureCueEffect: String, Codable, CaseIterable, Identifiable {
+    case click, ripple, burst
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .click: "Click"; case .ripple: "Ripple"; case .burst: "Burst" }
+    }
+}
+
+enum GestureCueColor: String, Codable, CaseIterable, Identifiable {
+    case cyan, amber, magenta, green, white
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
+struct GestureCueSettings: Codable, Equatable {
+    var enabled = true
+    var showsLabels = true
+    var effect: GestureCueEffect = .ripple
+    var color: GestureCueColor = .cyan
+    var duration = 0.9
+    var size = 34.0
+    var hiddenMapIDs: Set<String> = []
+}
+
 enum SystemPointerEvent: Equatable {
     case move(CGPoint)
     case leftDown(CGPoint)
@@ -123,6 +163,8 @@ enum SystemPointerEvent: Equatable {
     case shortcut(MotionShortcut)
     case canvas(MotionAction, CGPoint)
     case canvasPaint(MotionPaintCommand)
+    case tool(String)
+    case recognition(GestureRecognition)
     case canvasEnd
     case disarm
 }
@@ -257,10 +299,17 @@ final class SystemPointerEngine {
 final class SystemPointerController: ObservableObject, @unchecked Sendable {
     @Published var mapping: SystemPointerMapping {
         didSet {
-            // A changed mapping must release old buttons/strokes before a new
-            // destination or rule can take ownership.
-            if isArmed { disarm() }
-            stateLock.withLock { runtimeMapping = mapping }
+            guard mapping != oldValue else { return }
+            // Changing destination still requires an explicit Arm. Rule edits
+            // finish the old action but preserve the armed session.
+            if isArmed && mapping.destination != oldValue.destination { disarm() }
+            stateLock.withLock {
+                armGeneration &+= 1
+                post(engine.stop() + gestureEngine.stop() + canvasStackEngine.stop())
+                runtimeMapping = mapping
+            }
+            onCanvasEvent?(nil, nil)
+            onCanvasPaint?(nil)
             if let data = try? JSONEncoder().encode(mapping) {
                 defaults.set(data, forKey: Self.mappingDefaultsKey)
             }
@@ -269,8 +318,28 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     @Published private(set) var isTrusted: Bool
     @Published private(set) var isArmed = false
     @Published private(set) var live = SystemPointerLiveState()
+    @Published var cueSettings = GestureCueSettings() {
+        didSet {
+            if let data = try? JSONEncoder().encode(cueSettings) {
+                defaults.set(data, forKey: Self.cueSettingsDefaultsKey)
+            }
+        }
+    }
+    @Published private(set) var gestureCues: [GestureCue] = []
+    @Published var palmArmGestureEnabled = false {
+        didSet {
+            stateLock.withLock {
+                runtimePalmArmGestureEnabled = palmArmGestureEnabled
+                palmArmGesture = PalmArmGestureRecognizer()
+                palmGestureGeneration &+= 1
+            }
+            defaults.set(palmArmGestureEnabled, forKey: Self.palmArmDefaultsKey)
+        }
+    }
 
     private static let mappingDefaultsKey = "systemPointerMapping.v1"
+    private static let cueSettingsDefaultsKey = "gestureCueSettings.v1"
+    private static let palmArmDefaultsKey = "palmArmGestureEnabled.v1"
     private let defaults: UserDefaults
     private let stateLock = NSLock()
     private let engine = SystemPointerEngine()
@@ -278,6 +347,10 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     private let canvasStackEngine = CanvasGestureStackEngine()
     var onCanvasEvent: ((MotionAction?, CGPoint?) -> Void)?
     var onCanvasPaint: ((MotionPaintCommand?) -> Void)?
+    var onArmToggleRequested: (() -> Void)?
+    private var runtimePalmArmGestureEnabled = false
+    private var palmArmGesture = PalmArmGestureRecognizer()
+    private var palmGestureGeneration: UInt64 = 0
     private var localEscapeMonitor: Any?
     private var globalEscapeMonitor: Any?
     private var armGeneration: UInt64 = 0
@@ -295,7 +368,13 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             ?? .default
         mapping = saved
         runtimeMapping = saved
+        let savedPalmGesture = defaults.bool(forKey: Self.palmArmDefaultsKey)
+        palmArmGestureEnabled = savedPalmGesture
+        runtimePalmArmGestureEnabled = savedPalmGesture
         isTrusted = AXIsProcessTrusted()
+        cueSettings = defaults.data(forKey: Self.cueSettingsDefaultsKey)
+            .flatMap { try? JSONDecoder().decode(GestureCueSettings.self, from: $0) }
+            ?? GestureCueSettings()
         localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53, self?.isArmed == true { self?.disarm(); return nil }
             return event
@@ -324,6 +403,15 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
     }
 
     var isRuntimeArmed: Bool { stateLock.withLock { runtimeArmed } }
+    var needsHandTracking: Bool { stateLock.withLock { runtimeArmed || runtimePalmArmGestureEnabled } }
+
+    var sequenceFaceTargets: Set<String> {
+        stateLock.withLock {
+            Set((runtimeMapping.customGestureMaps ?? [])
+                .filter { $0.enabled && $0.kind == .tool }
+                .flatMap { $0.sequence.flatMap { [$0.pointA, $0.pointB] } })
+        }
+    }
 
     @discardableResult
     func arm() -> Bool {
@@ -398,6 +486,31 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
 
     func update(detection: LandmarkDetection?, mirrored: Bool, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         let result: (events: [SystemPointerEvent], live: SystemPointerLiveState, shouldPublish: Bool)? = stateLock.withLock {
+            if runtimePalmArmGestureEnabled {
+                let gesture = palmArmGesture.update(detection: detection, now: now)
+                if gesture.fired {
+                    let generation = armGeneration
+                    let gestureGeneration = palmGestureGeneration
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.stateLock.withLock({
+                            self.runtimePalmArmGestureEnabled && self.armGeneration == generation
+                                && self.palmGestureGeneration == gestureGeneration
+                        }) else { return }
+                        let wasArmed = self.isArmed
+                        self.onArmToggleRequested?()
+                        self.publishCue(GestureRecognition(mapID: "motion.arm.toggle",
+                            label: self.isArmed == wasArmed ? self.live.status : (self.isArmed ? "Armed" : "Disarmed"),
+                            point: gesture.point))
+                    }
+                }
+                // The reserved two-palm pose must not also draw, erase, or
+                // invoke an ordinary open-palm map while toggling control.
+                if gesture.reserved {
+                    lastFrameAt = now
+                    post(engine.stop() + gestureEngine.stop() + canvasStackEngine.stop())
+                    return nil
+                }
+            }
             guard runtimeArmed else { return nil }
             lastFrameAt = now
             let result = runtimeMapping.destination == .canvas && runtimeMapping.customGestureMaps != nil
@@ -437,6 +550,21 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             let type: CGEventType
             let point: CGPoint
             switch event {
+            case .tool(let id):
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.stateLock.withLock({ self.runtimeArmed && self.armGeneration == generation }) else { return }
+                    _ = ShortcutRegistry.shared.invoke(id: id)
+                }
+                continue
+            case .recognition(let recognition):
+                let generation = armGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.stateLock.withLock({ self.runtimeArmed && self.armGeneration == generation }) else { return }
+                    self.publishCue(recognition)
+                }
+                continue
             case .canvasPaint(let command):
                 let generation = armGeneration
                 DispatchQueue.main.async { [weak self] in
@@ -489,5 +617,21 @@ final class SystemPointerController: ObservableObject, @unchecked Sendable {
             CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?
                 .post(tap: .cghidEventTap)
         }
+    }
+
+    private func publishCue(_ recognition: GestureRecognition) {
+        guard cueSettings.enabled, !cueSettings.hiddenMapIDs.contains(recognition.mapID),
+              recognition.point.x.isFinite, recognition.point.y.isFinite else { return }
+        let duration = min(4, max(0.2, cueSettings.duration))
+        let cue = GestureCue(mapID: recognition.mapID, label: recognition.label,
+                             point: recognition.point, bornAt: ProcessInfo.processInfo.systemUptime)
+        gestureCues.append(cue)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            self?.gestureCues.removeAll { $0.id == cue.id }
+        }
+    }
+
+    func previewGestureCue(mapID: String = "preview", label: String = "Gesture recognized") {
+        publishCue(GestureRecognition(mapID: mapID, label: label, point: CGPoint(x: 0.5, y: 0.5)))
     }
 }

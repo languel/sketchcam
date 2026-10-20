@@ -175,6 +175,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
     case text = "Text"
     case marks = "Marks"
     case inputMap = "Input Map"
+    case gestureCues = "Gesture Cues"
     case yarn = "Yarn"
     case wrap = "Wrap"
     case lineWalk = "Line walk"
@@ -260,6 +261,7 @@ enum ControlTab: String, CaseIterable, Identifiable {
         case .layers: "square.3.layers.3d"
         case .marks: "point.3.connected.trianglepath.dotted"
         case .inputMap: "hand.point.up.left"
+        case .gestureCues: "dot.radiowaves.left.and.right"
         case .yarn: "scribble.variable"
         case .wrap: "figure.stand"
         case .lineWalk: "lasso"
@@ -439,6 +441,10 @@ struct ContentView: View {
     @AppStorage(LayoutStorageKeys.minimizedPanels) private var minimizedPanelsRaw = ""
     @AppStorage(InkUndoPreferences.gpuStateCountKey)
     private var inkUndoGPUStateCount = InkUndoPreferences.defaultGPUStateCount
+    @AppStorage(CanvasUndoPreferences.enabledKey)
+    private var inkUndoHistoryEnabled = CanvasUndoPreferences.defaultEnabled
+    @AppStorage(CanvasUndoPreferences.depthKey)
+    private var inkUndoHistoryDepth = CanvasUndoPreferences.defaultDepth
     @State private var inkTool = InkTool.draw
     @State private var selectedInkPathID: UUID?
     @State private var selectedInkPointIndex: Int?
@@ -1026,6 +1032,9 @@ struct ContentView: View {
                 WorkspaceArtboardOverlay(model: model, navigation: model.workspaceNavigation, outputSize: model.outputFormat.size)
                     .allowsHitTesting(workspaceOverlayHandlesInput)
                     .zIndex(25)
+                GestureCueOverlay(pointer: model.systemPointer, outputRect: outputRect,
+                                  mirrored: model.settings.mirror)
+                    .zIndex(40)
             }
         }
         .frame(minWidth: 120, minHeight: 68)
@@ -2583,6 +2592,7 @@ struct ContentView: View {
         case .layers: layersTab
         case .marks: marksTab
         case .inputMap: SystemInputMappingPanel(model: model)
+        case .gestureCues: GesturePresentationPanel(model: model)
         case .yarn: yarnTab
         case .wrap: wrapTab
         case .lineWalk: lineWalkTab
@@ -3268,6 +3278,17 @@ struct ContentView: View {
         Binding(
             get: { min(inkUndoGPUStateCount, inkUndoMaximumStateCount) },
             set: { inkUndoGPUStateCount = min(inkUndoMaximumStateCount, max(0, $0)) }
+        )
+    }
+
+    private var inkUndoHistoryDepthBinding: Binding<Int> {
+        Binding(
+            get: { min(inkUndoHistoryDepth, CanvasUndoPreferences.maximumDepth) },
+            set: {
+                inkUndoHistoryDepth = min(CanvasUndoPreferences.maximumDepth, max(1, $0))
+                model.configureCanvasUndoHistory(enabled: inkUndoHistoryEnabled,
+                                                  maximumDepth: inkUndoHistoryDepth)
+            }
         )
     }
 
@@ -4088,38 +4109,58 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var historyTab: some View {
-        SectionHeader("Ink actions")
-        InkStrokeDataList(
-            records: inkStrokeRecords,
-            selectedRecordID: $selectedInkPathID
-        )
-        .frame(minHeight: 180)
-        .help("Captured ink actions in chronological order.")
-
-        HStack {
-            Button {
-                deleteSelectedInk()
-            } label: {
-                Label("Delete", systemImage: "delete.left")
+        VStack(alignment: .leading, spacing: 7) {
+            SectionHeader("Ink actions")
+            HStack(spacing: 8) {
+                Toggle("Undo history", isOn: Binding(
+                    get: { inkUndoHistoryEnabled },
+                    set: {
+                        inkUndoHistoryEnabled = $0
+                        model.configureCanvasUndoHistory(enabled: $0, maximumDepth: inkUndoHistoryDepth)
+                    }
+                ))
+                .toggleStyle(.checkbox)
+                .help("When off, new canvas actions cannot be undone. Existing artwork remains on the canvas.")
+                if inkUndoHistoryEnabled {
+                    Text("Max steps")
+                        .font(.caption)
+                    Slider(value: Binding(
+                        get: { Double(inkUndoHistoryDepth) },
+                        set: {
+                            inkUndoHistoryDepth = Int($0.rounded())
+                            model.configureCanvasUndoHistory(enabled: true, maximumDepth: inkUndoHistoryDepth)
+                        }
+                    ), in: 1...Double(CanvasUndoPreferences.maximumDepth), step: 1)
+                    Text("\(inkUndoHistoryDepth)")
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 34, alignment: .trailing)
+                }
             }
-            .disabled(selectedInkPathID == nil)
-            Button {
-                rerenderInk()
-            } label: {
-                Label("Rerender", systemImage: "arrow.clockwise")
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Button(action: undoInk) { Label("Undo", systemImage: "arrow.uturn.backward") }
+                        .disabled(!model.canUndoCanvasAction)
+                    Button(action: redoInk) { Label("Redo", systemImage: "arrow.uturn.forward") }
+                        .disabled(!model.canRedoCanvasAction)
+                    Spacer(minLength: 0)
+                    Text("\(inkStrokeRecords.count) actions")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    Button { deleteSelectedInk() } label: { Label("Delete", systemImage: "delete.left") }
+                        .disabled(selectedInkPathID == nil)
+                    Button { rerenderInk() } label: { Label("Rerender", systemImage: "arrow.clockwise") }
+                        .disabled(inkStrokeRecords.isEmpty)
+                    Button { clearInk() } label: { Label("Clear", systemImage: "trash") }
+                }
             }
-            .disabled(inkStrokeRecords.isEmpty)
-            Button {
-                clearInk()
-            } label: {
-                Label("Clear", systemImage: "trash")
-            }
-            Spacer(minLength: 0)
-            Text("\(inkStrokeRecords.count) actions")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .controlSize(.small)
+            InkStrokeDataList(records: inkStrokeRecords, selectedRecordID: $selectedInkPathID)
+                .frame(height: 220)
+                .help("Captured ink actions in chronological order. Scroll this list to inspect earlier actions.")
         }
-        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder private var timelineTab: some View {
@@ -4974,8 +5015,16 @@ struct ContentView: View {
             .foregroundStyle(.secondary)
     }
 
+    private func canRunInkShortcut(_ registry: ShortcutRegistry) -> Bool {
+        registry.isInvokingExternally || activeInkFrameID != nil
+    }
+
     private func registerShortcuts() {
         let r = ShortcutRegistry.shared
+        r.register(id: "motion.arm.toggle", title: "Arm / Disarm Motion Control", category: "Motion",
+                   default: KeyBinding(key: "a", modifiers: [.control, .option])) { [weak model] in
+            model?.toggleMotionControl()
+        }
         r.register(id: "transport.freezePause", title: "Freeze / Pause", category: "Transport",
                    default: KeyBinding(key: "f", modifiers: .command)) { [weak model] in model?.toggleFreezeOrPause() }
         r.register(id: "transport.export", title: "Export Frame", category: "Transport",
@@ -5020,133 +5069,140 @@ struct ContentView: View {
         }
         r.register(id: "ink.tool.select", title: "Ink: Select Tool", category: "Ink",
                    default: nil) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             inkTool = .select
         }
         r.register(id: "ink.tool.selectNumber", title: "Ink: Select Tool (1)", category: "Ink",
                    default: KeyBinding(key: "1", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             inkTool = .select
         }
         r.register(id: "ink.tool.draw", title: "Ink: Draw Tool", category: "Ink",
                    default: nil) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             inkTool = .draw
         }
         r.register(id: "ink.tool.drawNumber", title: "Ink: Draw Tool (7)", category: "Ink",
                    default: KeyBinding(key: "7", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             inkTool = .draw
         }
         r.register(id: "ink.tool.points", title: "Ink: Points Tool", category: "Ink",
                    default: KeyBinding(key: "a", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             inkTool = .points
         }
         r.register(id: "ink.delete", title: "Ink: Delete Selected", category: "Ink",
                    default: KeyBinding(key: "delete", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             deleteSelectedInk()
         }
         r.register(id: "ink.mode.toggle", title: "Ink: Pen / Wash", category: "Ink",
                    default: KeyBinding(key: "b", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             toggleInkMode()
         }
         r.register(id: "ink.kind.toggle", title: "Ink: Black / White", category: "Ink",
                    default: KeyBinding(key: "w", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             toggleInkKind()
+        }
+        r.register(id: "ink.color.sampleNose", title: "Ink: Pick Camera Color at Nose", category: "Ink",
+                   default: nil) { [weak model] in
+            guard canRunInkShortcut(r) else { return }
+            guard let color = model?.sampleInkColorAtTrackedNose() else { return }
+            inkColorRGBA.wrappedValue = color
         }
         r.register(id: "ink.fix", title: "Ink: Fix", category: "Ink",
                    default: KeyBinding(key: "f", modifiers: [.control, .option])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             fixInk()
         }
         r.register(id: "ink.unfix", title: "Ink: Unfix", category: "Ink",
                    default: KeyBinding(key: "f", modifiers: [.shift, .option])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             unfixInk()
         }
         r.register(id: "ink.wetCanvas", title: "Ink: Wet Canvas", category: "Ink",
                    default: KeyBinding(key: "w", modifiers: [.control, .option])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             wetInkCanvas()
         }
         r.register(id: "ink.dryCanvas", title: "Ink: Dry Canvas", category: "Ink",
                    default: KeyBinding(key: "w", modifiers: [.shift, .option])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             dryInkCanvas()
         }
         r.register(id: "ink.clear", title: "Ink: Clear", category: "Ink",
                    default: KeyBinding(key: "c", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             clearInk()
         }
         r.register(id: "ink.save", title: "Ink: Save PNG", category: "Ink",
                    default: KeyBinding(key: "s", modifiers: [])) { [weak model] in
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             model?.exportCurrentFrame()
         }
         r.register(id: "ink.fullscreen", title: "Ink: Fullscreen", category: "Ink",
                    default: KeyBinding(key: "f", modifiers: [])) { [weak windowMode] in
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             windowMode?.togglePresentationMode()
         }
         r.register(id: "ink.undo", title: "Ink: Undo", category: "Ink",
                    default: KeyBinding(key: "z", modifiers: .command)) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             undoInk()
         }
         r.register(id: "ink.redo", title: "Ink: Redo", category: "Ink",
                    default: KeyBinding(key: "z", modifiers: [.command, .shift])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             redoInk()
         }
         r.register(id: "ink.redoAction", title: "Ink: Redo Last Action", category: "Ink",
                    default: KeyBinding(key: "r", modifiers: [.command, .shift])) {
+            guard canRunInkShortcut(r) else { return }
             redoInk()
         }
         r.register(id: "ink.immediate.pen", title: "Ink: Toggle Immediate Pen", category: "Ink",
                    default: KeyBinding(key: "i", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             toggleImmediatePen()
         }
         r.register(id: "ink.immediate.wash", title: "Ink: Toggle Immediate Wash", category: "Ink",
                    default: KeyBinding(key: "o", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             toggleImmediateWash()
         }
         r.register(id: "ink.size.decrease", title: "Ink: Decrease Brush Size", category: "Ink",
                    default: KeyBinding(key: "[", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkWidth(by: -0.05)
         }
         r.register(id: "ink.size.increase", title: "Ink: Increase Brush Size", category: "Ink",
                    default: KeyBinding(key: "]", modifiers: [])) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkWidth(by: 0.05)
         }
         // Shift+[ / Shift+] resize the WASH brush (the chars are { } once Shift is
         // applied). Pen size uses plain [ ].
         r.register(id: "ink.washSize.decrease", title: "Ink: Decrease Wash Size", category: "Ink",
                    default: KeyBinding(key: "{", modifiers: .shift)) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkWashWidth(by: -0.05)
         }
         r.register(id: "ink.washSize.increase", title: "Ink: Increase Wash Size", category: "Ink",
                    default: KeyBinding(key: "}", modifiers: .shift)) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkWashWidth(by: 0.05)
         }
         r.register(id: "ink.brushInk.decrease", title: "Ink: Decrease Brush Ink", category: "Ink",
                    default: KeyBinding(key: "<", modifiers: .shift)) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkBrushInk(by: -0.05)
         }
         r.register(id: "ink.brushInk.increase", title: "Ink: Increase Brush Ink", category: "Ink",
                    default: KeyBinding(key: ">", modifiers: .shift)) {
-            guard tab == .ink else { return }
+            guard canRunInkShortcut(r) else { return }
             adjustInkBrushInk(by: 0.05)
         }
     }
@@ -8734,7 +8790,7 @@ private struct InkStrokeDataList: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 64, alignment: .center)
             } else {
-                ScrollView {
+                ScrollView(.vertical) {
                     LazyVStack(spacing: 4) {
                         ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
                             Button {
@@ -8746,6 +8802,7 @@ private struct InkStrokeDataList: View {
                         }
                     }
                 }
+                .scrollIndicators(.visible)
                 .frame(minHeight: 94)
                 if let selectedRecord {
                     InkStrokeDetail(record: selectedRecord)

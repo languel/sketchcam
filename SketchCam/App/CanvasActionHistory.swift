@@ -1,6 +1,14 @@
 import Foundation
 import SketchCamCore
 
+enum CanvasUndoPreferences {
+    static let enabledKey = "canvasUndoHistoryEnabled.v1"
+    static let depthKey = "canvasUndoHistoryDepth.v1"
+    static let defaultEnabled = true
+    static let defaultDepth = 100
+    static let maximumDepth = 2_000
+}
+
 /// Thread-safe because the UI mutates history on the main actor while the
 /// processing queue reads a stable path snapshot every frame.
 final class CanvasActionHistory: @unchecked Sendable {
@@ -102,6 +110,13 @@ final class CanvasActionHistory: @unchecked Sendable {
     func clear(frameID: UUID?, includeUntagged: Bool = false) {
         lock.withLock {
             ledger.clear(frameID: frameID, includeUntagged: includeUntagged)
+            revision &+= 1
+        }
+    }
+
+    func configureUndoHistory(enabled: Bool, maximumDepth: Int) {
+        lock.withLock {
+            ledger.configureUndoHistory(enabled: enabled, maximumDepth: maximumDepth)
             revision &+= 1
         }
     }

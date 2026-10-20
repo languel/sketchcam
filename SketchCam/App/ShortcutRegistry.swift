@@ -70,10 +70,16 @@ final class ShortcutRegistry: ObservableObject {
     private var defaults: [String: KeyBinding] = [:]
     private var monitor: Any?
     private let storeKey = "io.github.languel.sketchcam.shortcuts"
-
+    private let toolBridge = LocalToolBridge()
     private(set) var isInvokingExternally = false
 
-    /// Shared main-queue dispatch for voice and other local command inputs.
+    /// Shared command surface for keyboard shortcuts, motion sequences and
+    /// local MCP clients. All handlers are UI actions and run on the main queue.
+    var toolCatalog: [(id: String, title: String, category: String)] {
+        actions.map { ($0.id, $0.title, $0.category) }
+            .sorted { $0.id < $1.id }
+    }
+
     @discardableResult
     func invoke(id: String) -> Bool {
         guard let action = actions.first(where: { $0.id == id }) else { return false }
@@ -83,10 +89,10 @@ final class ShortcutRegistry: ObservableObject {
         return true
     }
 
-
     func start() {
         guard monitor == nil else { return }
         loadOverrides()
+        toolBridge.start(registry: self)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             return self.handle(event) ? nil : event
@@ -107,6 +113,7 @@ final class ShortcutRegistry: ObservableObject {
                 bindings[id] = defaultBinding
             }
         }
+        toolBridge.publishCatalog(registry: self)
     }
 
     func setBinding(_ binding: KeyBinding?, for id: String) {
@@ -161,6 +168,7 @@ final class ShortcutRegistry: ObservableObject {
               let action = actions.first(where: { $0.id == id }) else {
             return false
         }
+        if id == "motion.arm.toggle", event.isARepeat { return true }
         action.handler()
         return true
     }
@@ -189,6 +197,63 @@ final class ShortcutRegistry: ObservableObject {
         overriddenClear = Set(store.cleared)
         for id in overriddenClear where store.bindings[id] == nil {
             bindings[id] = nil
+        }
+    }
+}
+
+/// Private, local-only request/reply bridge for the stdio MCP helper. Requests
+/// are atomically renamed into place; no app UI command runs off-main-thread.
+private final class LocalToolBridge {
+    private var timer: Timer?
+    private var lastHeartbeat = 0.0
+    private let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("SketchCam/mcp-bridge", isDirectory: true)
+
+    func start(registry: ShortcutRegistry) {
+        guard timer == nil else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self, weak registry] _ in
+                guard let self, let registry else { return }
+                self.poll(registry: registry)
+            }
+            publishCatalog(registry: registry)
+        } catch {
+            NSLog("SketchCam MCP bridge unavailable: %@", String(describing: error))
+        }
+    }
+
+    func publishCatalog(registry: ShortcutRegistry) {
+        guard timer != nil else { return }
+        let catalog = registry.toolCatalog.map {
+            ["id": $0.id, "title": $0.title, "category": $0.category]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: catalog) else { return }
+        try? data.write(to: directory.appendingPathComponent("catalog.json"), options: .atomic)
+    }
+
+    private func poll(registry: ShortcutRegistry) {
+        let now = Date().timeIntervalSince1970
+        if now - lastHeartbeat >= 1 {
+            lastHeartbeat = now
+            let heartbeat = directory.appendingPathComponent("heartbeat")
+            try? Data(String(now).utf8).write(to: heartbeat, options: .atomic)
+        }
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: nil) else { return }
+        for request in files where request.pathExtension == "request" {
+            let stem = request.deletingPathExtension().lastPathComponent
+            guard UUID(uuidString: stem) != nil else { continue }
+            let claimed = directory.appendingPathComponent("\(stem).processing")
+            guard (try? FileManager.default.moveItem(at: request, to: claimed)) != nil else { continue }
+            let id = (try? Data(contentsOf: claimed))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["id"]
+            let ok = id.map { registry.invoke(id: $0) } ?? false
+            if let data = try? JSONSerialization.data(withJSONObject: ["ok": ok]) {
+                try? data.write(to: directory.appendingPathComponent("\(stem).response"), options: .atomic)
+            }
+            try? FileManager.default.removeItem(at: claimed)
         }
     }
 }

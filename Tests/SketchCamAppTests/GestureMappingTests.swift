@@ -168,4 +168,81 @@ final class GestureMappingTests: XCTestCase {
         XCTAssertGreaterThan(degrees, 0)
         XCTAssertLessThanOrEqual(degrees, 180)
     }
+
+    func testPinkyNoseSequenceFiresOnceUntilReleaseAndSurvivesEncoding() throws {
+        let recognizer = MotionSequenceRecognizer()
+        var rule = MotionGestureMap.tool()
+        rule.toolID = "ink.kind.toggle"
+        rule.sequence[0].dwell = 0.1
+        let handGroup = hand(.openPalm, side: .left).groups[0]
+        let nose = LandmarkGroup(region: .nose, points: [
+            LandmarkPoint(point: CGPoint(x: 0.555, y: 0.65), confidence: 1, label: "n0")])
+        let touching = LandmarkDetection(groups: [handGroup, nose], detectionID: 3,
+            sourceSize: CGSize(width: 640, height: 480))
+        func fire(_ detection: LandmarkDetection?, _ time: Double) -> [String] {
+            recognizer.update(rules: [rule], detection: detection, gestures: [:],
+                minimumConfidence: 0.25, now: time)
+        }
+        XCTAssertTrue(fire(touching, 0).isEmpty)
+        XCTAssertEqual(fire(touching, 0.11), ["ink.kind.toggle"])
+        XCTAssertTrue(fire(touching, 0.4).isEmpty)
+        XCTAssertTrue(fire(nil, 0.5).isEmpty)
+        XCTAssertTrue(fire(touching, 0.6).isEmpty)
+        XCTAssertEqual(fire(touching, 0.71), ["ink.kind.toggle"])
+        XCTAssertEqual(try JSONDecoder().decode(MotionGestureMap.self, from: JSONEncoder().encode(rule)), rule)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(rule)) as? [String: Any])
+        legacy.removeValue(forKey: "toolID")
+        legacy.removeValue(forKey: "sequence")
+        let decoded = try JSONDecoder().decode(MotionGestureMap.self,
+            from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(decoded.toolID, "")
+        XCTAssertTrue(decoded.sequence.isEmpty)
+    }
+
+    func testSequenceRequiresOrderedReleaseAndHonorsGap() {
+        let recognizer = MotionSequenceRecognizer()
+        var rule = MotionGestureMap.tool()
+        rule.toolID = "ink.undo"
+        rule.sequence = [MotionSequenceStep(), MotionSequenceStep()]
+        rule.sequence[0].kind = .gesture
+        rule.sequence[0].gesture = .fist
+        rule.sequence[0].dwell = 0.04
+        rule.sequence[1].kind = .gesture
+        rule.sequence[1].gesture = .pinch
+        rule.sequence[1].dwell = 0.04
+        let detection = hand(.openPalm, side: .left)
+        func fire(_ pose: HandGesture?, _ time: Double) -> [String] {
+            recognizer.update(rules: [rule], detection: detection,
+                gestures: pose.map { [.left: $0] } ?? [:], minimumConfidence: 0.25, now: time)
+        }
+        XCTAssertTrue(fire(.pinch, 0).isEmpty)
+        XCTAssertTrue(fire(.fist, 0.1).isEmpty)
+        XCTAssertTrue(fire(.fist, 0.16).isEmpty)
+        XCTAssertTrue(fire(.pinch, 0.2).isEmpty)
+        XCTAssertEqual(fire(.pinch, 0.26), ["ink.undo"])
+        XCTAssertTrue(fire(.pinch, 0.3).isEmpty)
+        XCTAssertTrue(fire(.openPalm, 0.4).isEmpty)
+        XCTAssertTrue(fire(.fist, 0.5).isEmpty)
+        XCTAssertTrue(fire(.fist, 0.56).isEmpty)
+        XCTAssertTrue(fire(.pinch, 2.0).isEmpty)
+        XCTAssertTrue(fire(.pinch, 2.1).isEmpty)
+    }
+
+    func testAngleSequenceStepUsesThreeTrackedPoints() {
+        let recognizer = MotionSequenceRecognizer()
+        var rule = MotionGestureMap.tool()
+        rule.toolID = "ink.undo"
+        rule.sequence[0].kind = .angle
+        rule.sequence[0].pointA = "L0"
+        rule.sequence[0].pointVertex = "L9"
+        rule.sequence[0].pointB = "L20"
+        rule.sequence[0].minimumAngle = 160
+        rule.sequence[0].maximumAngle = 180
+        rule.sequence[0].dwell = 0.04
+        let detection = hand(.openPalm, side: .left)
+        XCTAssertTrue(recognizer.update(rules: [rule], detection: detection, gestures: [:],
+            minimumConfidence: 0.25, now: 0).isEmpty)
+        XCTAssertEqual(recognizer.update(rules: [rule], detection: detection, gestures: [:],
+            minimumConfidence: 0.25, now: 0.05), ["ink.undo"])
+    }
 }

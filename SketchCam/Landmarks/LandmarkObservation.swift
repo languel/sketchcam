@@ -84,6 +84,9 @@ struct LandmarkDetection {
     var detectionID: UInt64
     /// Pixel size of the frame the normalized coordinates refer to.
     var sourceSize: CGSize
+    /// The real observation behind a predicted frame. Recognition dwell must
+    /// not treat repeated extrapolations as fresh camera observations.
+    var observationID: UInt64? = nil
 }
 
 import SketchCamCore

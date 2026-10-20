@@ -212,6 +212,8 @@ final class SketchCamViewModel: ObservableObject {
     private var activeFrameSource = FrameSource.camera
     private var latestCameraFrame: CVPixelBuffer?
     private var latestMovieFrame: CVPixelBuffer?
+    private var latestMotionNose: CGPoint?
+    private var latestMotionNoseAt: TimeInterval = 0
     private let sourcePreviewLock = NSLock()
     private var sourcePreviewActive: Set<FrameSource> = []
     private var lastSourcePreviewTime: [FrameSource: CFAbsoluteTime] = [:]
@@ -246,6 +248,14 @@ final class SketchCamViewModel: ObservableObject {
         isRestoringSession = true
         restoreSession()
         isRestoringSession = false
+        canvasActions.configureUndoHistory(
+            enabled: UserDefaults.standard.object(forKey: CanvasUndoPreferences.enabledKey) == nil
+                ? CanvasUndoPreferences.defaultEnabled
+                : UserDefaults.standard.bool(forKey: CanvasUndoPreferences.enabledKey),
+            maximumDepth: UserDefaults.standard.object(forKey: CanvasUndoPreferences.depthKey) == nil
+                ? CanvasUndoPreferences.defaultDepth
+                : UserDefaults.standard.integer(forKey: CanvasUndoPreferences.depthKey)
+        )
         store.settings = settings
         store.outputFormat = outputFormat
 
@@ -281,6 +291,9 @@ final class SketchCamViewModel: ObservableObject {
         }
         systemPointer.onCanvasPaint = { [weak self] command in
             self?.handleMotionPaint(command)
+        }
+        systemPointer.onArmToggleRequested = { [weak self] in
+            self?.toggleMotionControl()
         }
 
         captureService.onConfigurationChanged = { [weak self] size in
@@ -608,6 +621,16 @@ final class SketchCamViewModel: ObservableObject {
     func endInkLiveStroke() { inkLiveStroke.end() }
     func cancelInkLiveStroke() { inkLiveStroke.cancel() }
 
+    func toggleMotionControl() {
+        if systemPointer.isArmed {
+            systemPointer.disarm()
+        } else if systemPointer.mapping.destination == .canvas && !prepareMotionCanvas() {
+            systemPointer.showCanvasUnavailable()
+        } else {
+            _ = systemPointer.arm()
+        }
+    }
+
     func prepareMotionCanvas() -> Bool {
         var graph = (settings.layerGraph ?? .defaultGraph(from: settings)).reconciled(with: settings)
         if inkLayerEntries(graph: graph).isEmpty {
@@ -629,6 +652,38 @@ final class SketchCamViewModel: ObservableObject {
         workspace.selectedFrameIDs = [frame.id]
         settings.workspace = workspace
         return true
+    }
+
+    /// Samples the live camera/movie pixel beneath the tracked nose. Called
+    /// by the shared command registry, so the same command works via MCP or a
+    /// pinky-to-nose sequence. Vision and Core Image both use bottom-left image
+    /// coordinates here; the preview mirror is deliberately not applied twice.
+    func sampleInkColorAtTrackedNose() -> RGBAColor? {
+        let sample = sourceFrameLock.withLock { () -> (CVPixelBuffer, CGPoint)? in
+            guard ProcessInfo.processInfo.systemUptime - latestMotionNoseAt < 0.7,
+                  let nose = latestMotionNose,
+                  let frame = activeFrameSource == .camera ? latestCameraFrame : latestMovieFrame else { return nil }
+            return (frame, nose)
+        }
+        guard let (frame, nose) = sample else { return nil }
+        let width = CVPixelBufferGetWidth(frame), height = CVPixelBufferGetHeight(frame)
+        guard width > 0, height > 0 else { return nil }
+        let x = min(width - 1, max(0, Int(nose.x * CGFloat(width))))
+        let y = min(height - 1, max(0, Int(nose.y * CGFloat(height))))
+        let sampleWidth = min(5, width), sampleHeight = min(5, height)
+        let originX = min(width - sampleWidth, max(0, x - sampleWidth / 2))
+        let originY = min(height - sampleHeight, max(0, y - sampleHeight / 2))
+        var pixels = [UInt8](repeating: 0, count: sampleWidth * sampleHeight * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            Self.sharedCIContext.render(CIImage(cvPixelBuffer: frame), toBitmap: bytes.baseAddress!,
+                rowBytes: sampleWidth * 4,
+                bounds: CGRect(x: originX, y: originY, width: sampleWidth, height: sampleHeight),
+                format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        }
+        let count = Float(sampleWidth * sampleHeight) * 255
+        return RGBAColor(red: Float(stride(from: 0, to: pixels.count, by: 4).reduce(0) { $0 + Int(pixels[$1]) }) / count,
+                         green: Float(stride(from: 1, to: pixels.count, by: 4).reduce(0) { $0 + Int(pixels[$1]) }) / count,
+                         blue: Float(stride(from: 2, to: pixels.count, by: 4).reduce(0) { $0 + Int(pixels[$1]) }) / count)
     }
 
     /// Main-thread adapter from normalized hand motion to the existing Ink
@@ -777,6 +832,11 @@ final class SketchCamViewModel: ObservableObject {
 
     var canUndoCanvasAction: Bool { canvasActions.canUndo() }
     var canRedoCanvasAction: Bool { canvasActions.canRedo() }
+
+    func configureCanvasUndoHistory(enabled: Bool, maximumDepth: Int) {
+        canvasActions.configureUndoHistory(enabled: enabled, maximumDepth: maximumDepth)
+        canvasHistoryRevision &+= 1
+    }
 
     @discardableResult
     func undoCanvasAction() -> CanvasStrokeAction? {
@@ -1320,15 +1380,19 @@ final class SketchCamViewModel: ObservableObject {
                 }()
                 let pointerArmed = self.systemPointer.isRuntimeArmed
                 var pointerSettings = settings
-                pointerSettings.landmarks.enabled = pointerArmed
+                pointerSettings.landmarks.enabled = self.systemPointer.needsHandTracking
                 pointerSettings.landmarks.sourceMode = .camera
                 pointerSettings.landmarks.trackJaw = false
-                pointerSettings.landmarks.trackNose = false
-                pointerSettings.landmarks.trackMouth = false
+                // Face points are needed by cross-body sequence rules (for
+                // example left pinky touching the nose), independently of
+                // whether Portrait's visible face overlay is enabled.
+                let sequenceFaceTargets = pointerArmed ? self.systemPointer.sequenceFaceTargets : []
+                pointerSettings.landmarks.trackNose = sequenceFaceTargets.contains("nose")
+                pointerSettings.landmarks.trackMouth = sequenceFaceTargets.contains("mouth")
                 pointerSettings.landmarks.trackLeftBrow = false
                 pointerSettings.landmarks.trackRightBrow = false
-                pointerSettings.landmarks.trackLeftEye = false
-                pointerSettings.landmarks.trackRightEye = false
+                pointerSettings.landmarks.trackLeftEye = sequenceFaceTargets.contains("leftEye")
+                pointerSettings.landmarks.trackRightEye = sequenceFaceTargets.contains("rightEye")
                 pointerSettings.landmarks.trackHead = false
                 pointerSettings.landmarks.trackTorso = false
                 pointerSettings.landmarks.trackLeftArm = false
@@ -1343,6 +1407,16 @@ final class SketchCamViewModel: ObservableObject {
                     settings: pointerSettings,
                     frameIndex: frameIndex
                 )
+                let nosePoints = pointerDetection?.groups.first(where: { $0.region == .nose })?.points ?? []
+                if !nosePoints.isEmpty {
+                    let count = CGFloat(nosePoints.count)
+                    let nose = CGPoint(x: nosePoints.reduce(0) { $0 + $1.point.x } / count,
+                                        y: nosePoints.reduce(0) { $0 + $1.point.y } / count)
+                    self.sourceFrameLock.withLock {
+                        self.latestMotionNose = nose
+                        self.latestMotionNoseAt = ProcessInfo.processInfo.systemUptime
+                    }
+                }
                 self.systemPointer.update(
                     detection: pointerDetection,
                     mirrored: settings.mirror
