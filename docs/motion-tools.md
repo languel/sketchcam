@@ -65,7 +65,7 @@ server. Configure a client to launch:
 ```json
 {
   "command": "python3",
-  "args": ["/Users/liuboto/dev/sketchcam/script/sketchcam_mcp.py"]
+  "args": ["/absolute/path/to/sketchcam/script/sketchcam_mcp.py"]
 }
 ```
 

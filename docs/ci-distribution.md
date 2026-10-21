@@ -11,9 +11,9 @@ PRs and other branches never receive distribution credentials through this job.
 
 ## One-time setup
 
-The repository had no Actions signing secrets when this workflow was added.
-Keep `MACOS_DISTRIBUTION_ENABLED` unset until the assets below are configured.
-Missing assets mean signing/notarization cannot be verified end to end.
+Signing and notarization are configured for this repository. The following
+steps document how to replace credentials or configure another checkout/fork.
+Keep `MACOS_DISTRIBUTION_ENABLED` unset until the required assets are configured.
 
 Open repository **Settings → Secrets and variables → Actions**, or use
 `gh secret set`. Add these repository secrets:
@@ -37,7 +37,9 @@ API key is needed when the existing app-specific password is usable.
 
 Use team `K39T7B8529`. Profiles must include the relevant app-group and
 system-extension capabilities from this project's entitlements, match the
-exported certificate, and be current. Development/App Store profiles cannot
+exported certificate, and be current. Use manually managed Developer ID profiles;
+Xcode-managed Mac Team Direct profiles cannot be used by this manual export.
+Development/App Store profiles cannot
 replace Developer ID profiles. A certificate without its private key cannot
 sign. The CI pipeline does not create certificates/profiles or register devices.
 
@@ -102,9 +104,12 @@ Only the final ZIP/checksum are uploaded, never signing files or the archive.
 
 If tests fail, the distribution job waits/skips. If credentials, profiles,
 signing, notarization, stapling or Gatekeeper assessment fail, it uploads no app.
-Check the failed job log. Once fixed, rerun the workflow on `main`. The initial
-workflow changes were checked for YAML/shell syntax and whitespace; a real
-signed/notarized CI artifact remains unverified until credentials are supplied.
+Check the failed job log. Once fixed, rerun the workflow on `main`.
+
+The complete pipeline passed in [run 39512257080](https://github.com/languel/sketchcam/actions/runs/39512257080),
+and the downloaded app was manually tested by the maintainer. Every new
+release still requires its own successful run and artifact checks. See
+[publishing a release](releasing.md) for the publication procedure.
 
 References: [GitHub's certificate and profile setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications),
 [Apple's distribution signing guidance](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/),

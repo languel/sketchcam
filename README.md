@@ -1,176 +1,46 @@
+<img src="SketchCam/Resources/Assets.xcassets/AppIcon.appiconset/icon_128.png" width="96" height="96" alt="SketchCam icon">
+
 # SketchCam
 
-SketchCam is an open programmable virtual camera host for interactive art teaching, live performance, and local computer-vision experiments.
+A programmable camera and canvas for live drawing, reactive typography and
+performance. Turn your webcam into procedural portraits, paint with gestures,
+combine video and text, and send the result to other apps as a virtual camera.
 
-A macOS app captures a webcam, runs a GPU compositing pipeline, previews it, and publishes the result as a Core Media I/O virtual camera named **SketchCam** that any camera consumer (QuickTime, Zoom, OBS, TouchDesigner, browsers) can select.
+## Get SketchCam
 
-## Features
+**[Download the prerelease](https://github.com/languel/sketchcam/releases)** ·
+macOS 26 or newer · [MIT license](LICENSE)
 
-- **Sources**: any camera, or a looping movie file / http(s) stream with 0–2x playback speed (0 = pause) for deterministic testing; freeze-frame on any source (⌘F); export the current published frame as PNG with alpha (⌘E).
-- **Audio and text**: Microphone and Audio File sources share PCM, loudness, pitch and spectrum features. Text layers consume scripts or on-device WhisperKit speech, with subtitle cues, N words, building/type-on captions and fading words. Customize fonts/layout, save Text presets, choose timed fades or hold-until-replaced cards, and smooth voice-driven scaling. Optional filler filtering and hidden recognition annotations keep captions clean; named annotation/voice events can advance scripts, while custom voice phrases invoke registered actions or Text looks. Audio and model loading require explicit starts. See [`docs/audio-text-streams.md`](docs/audio-text-streams.md) for setup, manual checks and limits.
-- **Effects**: order-sensitive per-layer chains with Threshold, Outline, Blur, Invert, Mirror, Person Key, Optical Flow visualization, and Levels. Effects operate on the output of the preceding effect and can also feed Ink as a processed material/motion source.
-- **Layers**: camera, movie, solid, paper, drawing, ink, acrylic, and web sources with opacity, blend modes, masks, routing, and reusable effect chains. Each workspace frame can independently participate in the program output and the secondary **Presentation** output. A fresh state starts with Camera → Threshold only. Published BGRA frames carry real alpha for downstream compositing.
-- **Person keying**: Vision person segmentation (fast/balanced/accurate) masks the layer stack to the person — Cutout or flat-color Silhouette mode, invertible (the outline always stays on the subject).
-- **Marks** (raw landmark data): Apple Vision backend (synthetic source for tuning), tracked as fine-grained regions — face split into Jaw / Nose / Mouth / L+R Brow / L+R Eye, body into Head / Torso / L+R Arm / L+R Leg, plus Hands and a silhouette Contour — each independently toggleable with its own color + size. Rendered as dots and/or a MediaPipe-style stick figure (eye shapes, articulated fingers, body skeleton); stable IDs with adjustable color-matched labels (hands use MediaPipe 0–20 indices), detection rate 1–15 Hz. Jitter-stable: canonical joint ordering, chirality-locked hands, identity-keyed smoothing with dropout carry-over. The **Contour** follows the silhouette boundary (Moore tracing) with an adjustable Detail (granularity) so it hugs concavities.
-- **Drawing** (art from the landmark data): modular algorithms that each toggle independently and **layer** on the canvas, with their own style and stroke controls. Add independent **Drawing passes** (Portrait, Yarn, Wrap, or Line walk) from Layers; each pass has its own landmark-category selection, so different regions can use different algorithms. Seeded algorithms remain deterministic so their shapes stay stable under motion.
-  - **Yarn** — seeded woven tangle per feature; Weave (waviness), coil/loop Noise (linear × circular) and Winding.
-  - **Wrap** — a continuous yarn-wire that winds through the *inside* of the person (Gormley-style): heavy interior sampling, proximity-ordered, with LineWalk-style Wildness/Scale and coil/winding Loops.
-  - **Line walk** — "taking a line for a walk": one or more continuous lines planned through the semantic features. Continuity (one unicursal line → separate paths → fragments), Density, a Curve picker (Polyline / Spline / Hobby / Bezier), a 2-D Wildness pad (along-path × orthogonal), Scale (local↔global).
-  - **Portrait** — the original landmark itineraries remain available, alongside a **Gesture** approach that traces live eye, brow, lip, nose, and jaw features, and invents a rotating scalp, neck, and shoulders around them. Abstraction, Expression, and seeded Shape variation tune likeness and character while preserving the pen route. See [`docs/portrait-drawing.md`](docs/portrait-drawing.md).
-  - All algorithms render as smooth variable-width **ribbons** (calligraphic taper/swell) with an optional glow **Halo**; an optional **GPU (Metal)** path tessellates every enabled algorithm in one pass.
-  - The original merged Drawing producer remains available. It and independent Drawing passes can use live Landmarks or the shared Mouse/canvas stroke stream. Committed strokes and the active stroke are routed without consuming Ink's own live samples.
-- **Motion Control**: a homunculus-style hand map selects a pointer landmark. Canvas can use an ordered custom stack of per-hand paint actions plus passive joint-distance/angle controls for Ink parameters; the simple gesture presets remain available. Computer presets move/click/drag, right-click, scroll, send a small set of shortcuts, or disarm. Computer control requires Accessibility approval and explicit arming each launch; Canvas does not. See [`notes/input-mapping.md`](notes/input-mapping.md).
-- **Ink**: a full-canvas Metal fluid-simulation inkwash layer (velocity/pressure/vorticity with a persistent wetness gate, chromatic diffusion, fixed pigment, and Beer-Lambert display). Pen and wash have independent sizes; Option-drag sprays water without pigment or displacement; **Wet canvas** and **Motion wetness** prepare regions for routed optical flow to carry pigment. Cached procedural paper supplies both a visible substrate and absorbency/drag/resistance fields. Editable parameter fields accept exact or experimental values, and double-clicking any numeric parameter label restores its factory default. See [`notes/ink-simulation.md`](notes/ink-simulation.md) for the algorithm and control mapping.
-- **Presets**: save the entire app state (effects, threshold, background + the full drawing/detection config) as named, persistent presets; recall either just the render style (Marks/Drawing/Detection) or the whole state.
-- **Session recovery**: the live layer graph, processing choices, source selection, camera preference, movie bookmark/playback rate, output format, and window/output choices are saved and restored on relaunch. Rapid edits such as canvas pan/zoom coalesce their session writes. Camera access is rechecked on launch/app activation; the Camera tab requests permission when needed and reconnects the remembered device when available.
-- **UI**: dockable/floating controls for Settings, Layers, Camera, Movie, Marks, Input Map, Yarn, Wrap, Line walk, Portrait, Ink, Paper, Web, Presets, Keys, Output, History, Timeline, and Debug, with compact one-line style rows. The Output window can show the program viewport or the independently filtered Presentation composite.
-- **Performance controls**: input resolution (352/VGA/720p/native), processing resolution decoupled from output (full/720p/540p), output format, preview on/off, GPU drawing + stroke style toggles (Settings ▸ Rendering), a **Performance** panel (Control–Option–P) with pipeline FPS and per-stage timings, and an Analysis section with independent live-feature and person-matte bypasses. The GPU compositor renders effects at the selected processing resolution and upscales once for the published output; disabled effect chains are true no-ops. See `notes/performance-plan.md` for the audit, filter-only workflow, and measured numbers.
+Unzip the download, move **SketchCam.app** to **Applications**, and open it.
+To use the virtual camera, activate the Camera Extension in SketchCam, approve
+it in System Settings, and restart the app. Then select **SketchCam** as the
+camera in your video app.
 
-## Current Status
+See [Getting started](docs/getting-started.md) for installation and a first session.
 
-- Target platform: current macOS 26.x first.
-- Local toolchain tested here: macOS 26.5.1, Xcode 26.5.
-- Project source of truth: `project.yml` via XcodeGen.
-- License: MIT.
+## What you can make
 
-Older macOS versions are not promised yet.
+- Layer cameras, recorded video, effects, drawings, paper and web content.
+- Draw live portraits with **Portrait**, **Yarn**, **Wrap** and **Line walk**.
+- Paint on an interactive **Ink** canvas, with paper materials and undo/redo.
+- Turn microphone speech or scripts into styled captions and animated text.
+  Save Text looks, fade words, or hold headline cards until new text arrives.
+- Connect loudness, gestures, stroke events and voice commands to creative actions.
+- Share the composition through the virtual camera or a separate output window.
 
-## Build
+Camera/microphone capture, speech model loading and gesture arming use explicit
+controls. The first speech setup may download a model; recognition then runs
+locally. The virtual camera carries video, not audio.
 
-Install XcodeGen once:
+## Learn more
 
-```sh
-brew install xcodegen
-```
+- [Feature reference](docs/features.md)
+- [Audio, text and voice commands](docs/audio-text-streams.md)
+- [Motion controls, gesture sequences and MCP](docs/motion-tools.md)
+- [Portrait drawing](docs/portrait-drawing.md)
+- [Build from source](docs/development.md)
+- [CI builds and releases](docs/ci-distribution.md) · [Release procedure](docs/releasing.md)
 
-Generate the Xcode project:
-
-```sh
-xcodegen generate
-```
-
-Build and run tests without signing:
-
-```sh
-xcodebuild \
-  -project SketchCam.xcodeproj \
-  -scheme SketchCam \
-  -configuration Debug \
-  -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO \
-  test
-```
-
-## Run Locally
-
-Use one stable development loop. The app that receives Accessibility approval
-is always `/Applications/SketchCam.app`; the quick-run helpers no longer guess
-at a newer DerivedData copy.
-
-To rebuild, install in place, and run:
-
-```sh
-./script/build_and_run.sh
-```
-
-For fast iterations without a rebuild:
-
-```sh
-./script/run.sh                 # relaunch the installed app
-./script/run.sh --debug         # debug that same installed app in lldb
-./script/run.sh --logs          # launch + stream app logs
-./script/run.sh --telemetry     # launch + stream SketchCam subsystem logs
-./script/run.sh --verify        # launch + verify the process
-```
-
-`script/rundebug.sh` remains as a compatibility alias for `script/run.sh`.
-Use `SKETCHCAM_SKIP_XCODEGEN=1` when `project.yml` is unchanged and you want to
-skip project regeneration during a build.
-
-The build script updates the existing `/Applications/SketchCam.app` bundle in
-place and uses the same bundle identifier and development signing identity.
-That keeps the Accessibility designated requirement stable across normal
-source rebuilds. macOS still requires a one-time reapproval if the signing
-certificate or team changes. To open the correct pane without rebuilding:
-
-```sh
-./script/run.sh --permissions
-```
-
-Do not launch a DerivedData app for system-pointer testing; it is a different
-runtime identity from the approved `/Applications` bundle.
-
-On a first run on a new Mac, allow Xcode to register the device while creating the development profiles:
-
-```sh
-SKETCHCAM_ALLOW_DEVICE_REGISTRATION=1 ./script/build_and_run.sh
-```
-
-## Release Build (Developer ID, Notarized)
-
-GitHub Actions can also produce a signed, notarized app ZIP after successful
-`main` builds. It requires a one-time signing-secret setup and the repository
-variable `MACOS_DISTRIBUTION_ENABLED=true`; see
-[`docs/ci-distribution.md`](docs/ci-distribution.md). Downloads appear under the
-workflow run's **Artifacts** after notarization and stapling succeed.
-
-On SIP-enabled macOS, the system extension only activates from a notarized Developer ID build. The working pipeline (see `notes/notarization.md` for the full story):
-
-```sh
-./script/release_build.sh        # archive + developer-id export → build/Release-export/SketchCam.app
-./script/notarize.sh             # notarytool submit + staple (keychain profile, see notes)
-./script/install_release.sh     # copy to /Applications + LaunchServices cleanup
-./script/verify_signing.sh      # signatures, entitlements, spctl, systemextensionsctl report
-```
-
-Then launch the app, click **Activate**, approve in System Settings → General → Login Items & Extensions → Camera Extensions, and **restart the app** so it picks up the new CMIO device.
-
-## Signing And Activation
-
-Camera Extension development builds require Apple Development signing and provisioning profiles with the app group and system-extension capabilities. On SIP-enabled macOS 26, development-signed builds cannot activate the extension under normal policy — use the Release pipeline above (or system-extension developer mode from Recovery).
-
-The project is configured for:
-
-- App bundle ID: `io.github.languel.sketchcam`
-- Camera extension bundle ID: `io.github.languel.sketchcam.camera-extension`
-- App group: `$(TeamIdentifierPrefix)io.github.languel.sketchcam`
-- Team: `K39T7B8529`
-
-If CLI signing reports `No Account for Team "K39T7B8529"`, open Xcode, add the Apple Developer account in Settings, then let automatic signing create/update the profiles.
-
-If activation fails with `Extension not found in App bundle`, check `notes/troubleshooting.md` — the known causes are the extension bundle not being named after its bundle identifier, missing version keys in its Info.plist, or stale LaunchServices registrations.
-
-To activate the virtual camera:
-
-1. Run SketchCam from `/Applications/SketchCam.app`.
-2. Click **Activate** in the Camera Extension section.
-3. Open System Settings when prompted and approve the extension.
-4. Check activation:
-
-```sh
-systemextensionsctl list
-```
-
-## Test Clients
-
-Required Phase 1 manual checks:
-
-- QuickTime Player: New Movie Recording, camera menu, select SketchCam.
-- FaceTime: video menu/camera picker, select SketchCam.
-- Chrome: open a site with camera permissions, select SketchCam in site/browser camera settings.
-
-Best-effort checks:
-
-- OBS
-- Zoom
-
-If no host frames are arriving, the extension should keep outputting its generated fallback pattern instead of freezing.
-
-## Development Notes
-
-- App-side product logic lives in `SketchCam` and `SketchCamCore`.
-- The camera extension stays thin: it consumes app-provided frames on a CMIO sink stream, republishes them on a CMIO source stream, and generates fallback frames.
-- The default output preset is 1920x1080 at 30 FPS; 1280x720 and 640x360 are also exposed.
-- Core Image is the first processor backend; the `FrameProcessor` boundary allows Metal or other renderers. The Drawing overlay already has a Metal path (`StrokeTessellator` → `MetalLineRenderer`, tessellated ribbons into an IOSurface) opt-in via Settings ▸ Rendering ▸ GPU drawing. The Ink layer is generated by a separate Metal feedback engine and handed back to the compositor as a materialized image, avoiding persistent Core Image feedback graphs.
-
-See `notes/architecture.md`, `notes/input-mapping.md`, `notes/ink-simulation.md`, and `notes/troubleshooting.md` for more detail.
+This is an early prerelease for experimentation and feedback.
+[Report an issue](https://github.com/languel/sketchcam/issues) with your macOS
+version, SketchCam version and steps to reproduce the problem.

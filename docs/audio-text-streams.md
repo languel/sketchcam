@@ -6,12 +6,12 @@ concurrently, and publish the same packet and analysis contract. Script is a
 shared authored text source. Text is a pixel-producing drawing node, with its
 own content selection, appearance and playback cursor.
 
-## First manual pass
+## Try the text system
 
-Build/run the app in Xcode when ready. The generated project now references the
+Use a downloaded app or build from source (see [development](development.md)).
+The generated project references the
 MIT-licensed WhisperKit product from Argmax OSS Swift, pinned to 1.1.1. Xcode
-uses the committed `Package.resolved` to resolve its dependencies. The latest
-agent pass did not run a build, automated tests, app launch or model download.
+uses the committed `Package.resolved` to resolve its dependencies.
 
 For sustained headline cards: apply **Justified headline**, select **Paced**,
 and choose **Word envelope → Lifetime → Hold until replaced**. Set Fade in and
@@ -158,7 +158,7 @@ stay literal. With microphone and speech running, enable listening, say
 repeat it twice with separate pauses, then disarm and verify it stops advancing.
 Play a recording of commands: it should only caption, not execute. Try a custom
 action mapping and confirm its normal keyboard action has the same result.
-Build/tests/live microphone checks were not run in this pass.
+See Verification status below for automated coverage and manual limitations.
 
 ## Recognition annotations as events
 
@@ -262,9 +262,8 @@ Fade out=0, and Lifetime=Hold until replaced. Speak numbered words across severa
 cue boundaries, then remain silent: the last card should stay visible. Continue
 speaking: each new cue should begin with its first received word. Set a short
 Hold and positive Fade out in Timed mode to compare automatic fading. Repeat
-with filler removal enabled. Tests for history, partial-word separators, prefix
-deletions and sustained captions were authored but not run; build/live checks
-remain manual under the repository instructions.
+with filler removal enabled. Regression coverage includes history, partial-word separators, prefix
+deletions and sustained captions. Live microphone checks remain manual.
 
 **Motion response** is independent of those opacity envelopes:
 
@@ -351,8 +350,7 @@ reload it, export it, import it under a new name, then relaunch and verify the
 saved looks remain. Check that content/audio bindings and other layers survive
 every preset application. Test Type-on with Left/Fixed/Pop=0/Voice scale=0 to
 confirm stable placement, and try Bulgarian/Chinese glyph fallback after changing
-fonts. Project generation and static checks only were executed; the new
-regression cases have not been run.
+fonts. See Verification status below for automated coverage and manual limitations.
 
 ## Stream contract
 
@@ -434,13 +432,12 @@ PCM, speech results, event history and playback cursors are transient.
 
 ## Verification status
 
-XcodeGen project generation, plist validation and whitespace/diff checks are the
-only checks executed by the agent. Authored regression coverage includes typed
-routes, older settings, bounded/non-consuming streams/events, audio analysis,
-multilingual segmentation, stroke/voice/annotation-driven scripts, preset
-round-tripping, layout stability, word envelopes, voice inertia, silence/filler
-filtering, command arming/deduplication and paced-queue revision/history handling.
-These tests have not been run in this pass. The user has reported live progress
-and caption issues during manual iterations; the latest queue and sustained-card
-changes still need a manual build/run. No performance or virtual-camera output
-claim has been verified by the agent.
+The app and automated test suite passed in [CI run 39512257080](https://github.com/languel/sketchcam/actions/runs/39512257080).
+The maintainer also downloaded and tested that signed/notarized app. Regression
+coverage includes typed routes, older settings, bounded/non-consuming streams,
+audio analysis, multilingual segmentation, event-driven scripts, presets, layout,
+word envelopes, voice inertia, filtering, command arming and paced queues.
+
+Automated checks do not replace live microphone, gesture, multilingual model or
+virtual-camera testing. The manual exercises above remain useful when changing
+these paths. No end-to-end latency benchmark is claimed.
